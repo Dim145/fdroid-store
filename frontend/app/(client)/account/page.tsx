@@ -1,14 +1,16 @@
 "use client";
 
-import { Key, Trash2, User as UserIcon } from "lucide-react";
+import { Check, Copy, Key, Trash2, User as UserIcon, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AuthGuard } from "@/components/auth-guard";
+import { RepoQrCode } from "@/components/repo-qr-code";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type ApiKey } from "@/lib/api";
+import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { useAuth } from "@/lib/auth-store";
 import { formatDate } from "@/lib/utils";
 
@@ -131,14 +133,11 @@ function AccountInner() {
         subtitle="Use them as the Basic-auth password in your F-Droid client to access private apps."
       >
         {newlyCreated && (
-          <div className="mb-4 rounded-2xl border border-primary bg-primary-container p-4">
-            <div className="text-xs font-semibold uppercase tracking-wider text-primary-on-container/80">
-              Copy now — shown once
-            </div>
-            <code className="mt-2 block break-all rounded-xl border border-outline-soft bg-surface p-3 font-mono text-xs">
-              {newlyCreated}
-            </code>
-          </div>
+          <NewKeyCelebration
+            secret={newlyCreated}
+            username={user.username}
+            onDismiss={() => setNewlyCreated(null)}
+          />
         )}
         <form onSubmit={createKey} className="grid gap-3 md:grid-cols-[2fr_1fr_auto]">
           <Field label="Label" htmlFor="kn">
@@ -195,6 +194,152 @@ function AccountInner() {
           ))}
         </ul>
       </Section>
+    </div>
+  );
+}
+
+/* The "you just created an API key" celebration block.
+ *
+ * Renders once, only when the parent stores the fresh secret. Shows the QR
+ * code with credentials embedded so users can subscribe from their phone in
+ * one scan, plus a copy-friendly text fallback. Dismissing the block is
+ * intentionally explicit (X button) so users don't lose the key by
+ * accidentally clicking away. */
+function NewKeyCelebration({
+  secret,
+  username,
+  onDismiss,
+}: {
+  secret: string;
+  username: string;
+  onDismiss: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyKey() {
+    try {
+      await navigator.clipboard.writeText(secret);
+      setCopied(true);
+    } catch {/* clipboard blocked */}
+  }
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1800);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  // The Basic-auth URL the QR encodes — same scheme the QR uses, so
+  // copy/paste from this field matches scanning. Pulled from the live repo
+  // config so the username:password@host part reflects the current admin
+  // settings.
+  const repo = useRepoInfo();
+  const authUrl = fdroidDeepLink(repo.url, {
+    credentials: { username, secret },
+    fingerprint: repo.fingerprint,
+  });
+
+  return (
+    <div className="surface relative mb-4 overflow-hidden p-5 animate-fade-up">
+      {/* Soft success tint */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(60% 80% at 100% 0%, rgb(var(--primary) / 0.10), transparent 70%)",
+        }}
+      />
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-pill text-ink-mute transition-colors hover:bg-surface-2 hover:text-ink"
+      >
+        <X className="h-4 w-4" />
+      </button>
+
+      <div className="relative flex flex-col gap-2">
+        <div className="inline-flex w-fit items-center gap-2 rounded-pill bg-primary-container px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-primary-on-container">
+          ★ New API key — shown once
+        </div>
+        <h3 className="text-xl font-bold tracking-tight text-ink">
+          Add this repo to your F-Droid client now.
+        </h3>
+        <p className="text-sm text-ink-soft">
+          Scan the QR with your phone — credentials are embedded so private
+          apps are unlocked automatically. The key won&apos;t be shown again.
+        </p>
+      </div>
+
+      <div className="relative mt-5 grid items-center gap-6 md:grid-cols-[auto_1fr]">
+        <RepoQrCode
+          credentials={{ username, secret }}
+          size={208}
+          showCaption
+          className="mx-auto md:mx-0"
+        />
+
+        <div className="space-y-3 text-sm">
+          <Credential label="Full key" value={secret} mono onCopy={copyKey} copied={copied} />
+          <Credential label="Username" value={username} mono />
+          <Credential label="Encoded URL" value={authUrl} mono small />
+          <p className="text-xs text-ink-mute">
+            In F-Droid the username can be anything; this one matches your
+            account so revoking it is easier to track.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Credential({
+  label,
+  value,
+  mono,
+  small,
+  onCopy,
+  copied,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  small?: boolean;
+  onCopy?: () => void;
+  copied?: boolean;
+}) {
+  const [localCopied, setLocalCopied] = useState(false);
+  async function fallbackCopy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setLocalCopied(true);
+      setTimeout(() => setLocalCopied(false), 1800);
+    } catch {/* ignore */}
+  }
+  const visibleCopied = onCopy ? !!copied : localCopied;
+
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-ink-mute">{label}</div>
+      <div className="mt-0.5 flex items-center gap-2">
+        <code
+          className={
+            "min-w-0 flex-1 select-all break-all rounded-xl border border-outline-soft bg-surface px-3 py-2 " +
+            (mono ? "font-mono " : "") +
+            (small ? "text-[10px]" : "text-xs")
+          }
+        >
+          {value}
+        </code>
+        <Button
+          type="button"
+          variant="tonal"
+          size="icon-sm"
+          onClick={onCopy ?? fallbackCopy}
+          aria-label={`Copy ${label}`}
+        >
+          {visibleCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </Button>
+      </div>
     </div>
   );
 }

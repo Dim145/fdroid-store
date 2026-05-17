@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 
-import { REPO_URL } from "@/lib/api";
+import { useRepoInfo } from "@/lib/repo-store";
 
 export function SiteFooter() {
+  const repo = useRepoInfo();
   return (
     <footer className="mt-20 border-t border-outline-soft">
       <div className="container py-10">
@@ -32,7 +33,7 @@ export function SiteFooter() {
           <div>
             <div className="eyebrow">Repo URL</div>
             <code className="mt-3 inline-block max-w-full select-all break-all rounded-xl border border-outline-soft bg-surface-2 px-3 py-1.5 font-mono text-xs text-ink">
-              {REPO_URL}
+              {repo.url}
             </code>
             <p className="mt-2 text-xs text-ink-mute">
               Paste this in your F-Droid client to subscribe.

@@ -10,7 +10,8 @@ import { AppPermissions } from "@/components/app-permissions";
 import { InstallPill } from "@/components/install-pill";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, mediaUrl, REPO_URL, type AppDetail } from "@/lib/api";
+import { api, mediaUrl, type AppDetail } from "@/lib/api";
+import { useRepoInfo } from "@/lib/repo-store";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 
 /* ============================================================================
@@ -20,6 +21,7 @@ import { cn, formatBytes, formatDate } from "@/lib/utils";
  * ============================================================================ */
 export default function AppDetailPage() {
   const { package: pkg } = useParams<{ package: string }>();
+  const repo = useRepoInfo();
   const [app, setApp] = useState<AppDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandDesc, setExpandDesc] = useState(false);
@@ -284,7 +286,7 @@ export default function AppDetailPage() {
                     )}
                   </div>
                   <Button asChild variant={i === 0 ? "filled" : "outlined"} size="md">
-                    <a href={`${REPO_URL}/${apk.file_name}`} download>
+                    <a href={`${repo.url}/${apk.file_name}`} download>
                       .apk
                     </a>
                   </Button>

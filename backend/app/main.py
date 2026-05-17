@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import __version__
-from app.api.fdroid import router as fdroid_router
+from app.api.fdroid import router as fdroid_router, token_router as fdroid_token_router
 from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
@@ -54,6 +54,8 @@ def create_app() -> FastAPI:
 
     # F-Droid repo path (consumed by F-Droid Android clients)
     app.include_router(fdroid_router, prefix="/fdroid/repo")
+    # Alternate path-based token path. See app/api/fdroid.py for the rationale.
+    app.include_router(fdroid_token_router, prefix="/r")
 
     return app
 

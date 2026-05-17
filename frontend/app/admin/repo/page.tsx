@@ -8,8 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, REPO_URL, type KeystoreInfo, type RepoConfigInfo } from "@/lib/api";
+import { useRepoStore } from "@/lib/repo-store";
 
 export default function AdminRepoPage() {
+  const refreshGlobalRepo = useRepoStore((s) => s.refresh);
   const [repo, setRepo] = useState<RepoConfigInfo | null>(null);
   const [keystore, setKeystore] = useState<KeystoreInfo | null>(null);
   const [name, setName] = useState("");
@@ -34,7 +36,8 @@ export default function AdminRepoPage() {
     try {
       await api.admin.updateRepo({ name, description: desc, address: addr });
       setMsg("Saved. Reindex queued.");
-      await refresh();
+      // Propagate to every other page using the live URL (QR codes, footer…).
+      await Promise.all([refresh(), refreshGlobalRepo()]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed");
     }
@@ -52,7 +55,11 @@ export default function AdminRepoPage() {
     if (!repo?.icon_path) return null;
     const basename = repo.icon_path.split("/").pop();
     if (!basename) return null;
-    return `${REPO_URL}/icons/${basename}?v=${repo.last_index_version}`;
+    // Use the configured public address so the preview always reflects what
+    // F-Droid clients will fetch. Falls back to the build-time env if the
+    // saved address isn't loaded yet.
+    const base = (repo.address || REPO_URL).replace(/\/$/, "");
+    return `${base}/icons/${basename}?v=${repo.last_index_version}`;
   }
 
   if (!repo) {

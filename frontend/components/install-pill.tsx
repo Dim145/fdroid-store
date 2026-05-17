@@ -4,7 +4,7 @@ import { Download } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { REPO_URL } from "@/lib/api";
+import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -15,14 +15,14 @@ type Props = {
   className?: string;
 };
 
-/* The signature CTA — the green "Install" pill that anchors any app page.
- * Two stacked actions:
- *   1. fdroidrepos:// deep link to add this repo + the app to F-Droid
- *   2. a smaller "Direct .apk" link for desktop browsers / sideload */
+/* Signature install CTA. The deep-link scheme matches the configured repo
+ * URL (fdroidrepo:// for HTTP, fdroidrepos:// for HTTPS) so we never hand
+ * F-Droid a URL on the wrong port. */
 export function InstallPill({ apkFileName, size = "lg", className }: Props) {
+  const repo = useRepoInfo();
   const [hover, setHover] = useState(false);
-  const fdLink = `fdroidrepos://${REPO_URL.replace(/^https?:\/\//, "")}`;
-  const apkLink = apkFileName ? `${REPO_URL}/${apkFileName}` : null;
+  const fdLink = fdroidDeepLink(repo.url, { fingerprint: repo.fingerprint });
+  const apkLink = apkFileName ? `${repo.url}/${apkFileName}` : null;
 
   return (
     <div className={cn("flex flex-col items-stretch gap-2", className)}>

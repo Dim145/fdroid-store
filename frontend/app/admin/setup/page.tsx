@@ -6,13 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, REPO_URL } from "@/lib/api";
+import { useRepoInfo } from "@/lib/repo-store";
 import { cn } from "@/lib/utils";
 
 export default function SetupWizardPage() {
+  const repo = useRepoInfo();
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [repoName, setRepoName] = useState("My F-Droid Repo");
   const [repoDesc, setRepoDesc] = useState("");
   const [repoAddr, setRepoAddr] = useState(REPO_URL);
+  const [addrTouched, setAddrTouched] = useState(false);
   const [mode, setMode] = useState<"generate" | "import">("generate");
   const [ksPwd, setKsPwd] = useState("");
   const [keyAlias, setKeyAlias] = useState("repokey");
@@ -22,6 +25,15 @@ export default function SetupWizardPage() {
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Once the live config arrives, hydrate the form with the current values
+  // (admin re-running the wizard expects to see the existing settings).
+  useEffect(() => {
+    if (!repo.loaded) return;
+    if (repo.name) setRepoName((cur) => (cur === "My F-Droid Repo" ? repo.name! : cur));
+    if (repo.description) setRepoDesc((cur) => cur || repo.description!);
+    if (repo.url && !addrTouched) setRepoAddr(repo.url);
+  }, [repo.loaded, repo.name, repo.description, repo.url, addrTouched]);
 
   async function refresh() {
     try { const s = await api.setup.status(); setSetupComplete(s.setup_complete); }
@@ -63,7 +75,10 @@ export default function SetupWizardPage() {
         keystore_b64: keystoreB64,
       });
       setMsg("Setup complete. The repo index will be generated on the next reindex.");
-      await refresh();
+      // Re-pull both the local setup state and the global repo info so any
+      // QR codes / install links elsewhere in the app pick up the new
+      // address + fingerprint immediately.
+      await Promise.all([refresh(), repo.refresh()]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Setup failed");
     } finally { setSubmitting(false); }
@@ -95,7 +110,12 @@ export default function SetupWizardPage() {
               <Input id="rd" value={repoDesc} onChange={(e) => setRepoDesc(e.target.value)} />
             </Field>
             <Field label="Public address" htmlFor="ra" className="md:col-span-2">
-              <Input id="ra" required value={repoAddr} onChange={(e) => setRepoAddr(e.target.value)} />
+              <Input
+                id="ra"
+                required
+                value={repoAddr}
+                onChange={(e) => { setRepoAddr(e.target.value); setAddrTouched(true); }}
+              />
             </Field>
           </div>
         </section>

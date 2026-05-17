@@ -330,6 +330,7 @@ export type SetupStatusResponse = {
   repo_description: string | null;
   repo_address: string | null;
   repo_icon_path: string | null;
+  repo_fingerprint: string | null;
 };
 
 // ---------------------------------------------------------------------------

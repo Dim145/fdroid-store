@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_api_key_from_basic_auth
+from app.core.security import parse_api_key, verify_api_key_secret
 from app.fdroid.repo_builder import REPO_PRIVATE_PREFIX, REPO_PUBLIC_PREFIX
 from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
@@ -27,7 +28,24 @@ from app.storage import get_storage
 from app.storage.local import LocalStorage
 from app.storage.s3 import S3Storage
 
+# Public + Basic-auth endpoints. Mounted at /fdroid/repo in main.py.
 router = APIRouter()
+
+# Path-based token endpoints. Mounted at /r in main.py.
+#
+# Why we need a parallel scheme: the F-Droid Android client supports HTTP
+# Basic auth in repo URLs (RepoUriGetter.kt extracts user:pass@host), but the
+# `Uri.Builder.authority(value)` call it uses to rebuild the URL after
+# stripping userinfo *percent-encodes* the host. That re-encodes the `:`
+# of the port (`host:port` → `host%3Aport`), which then makes F-Droid try
+# to connect to a port-less host. The bug surfaces only when both userinfo
+# AND a port are present in the URL.
+#
+# By embedding the API key in the URL *path* instead of the userinfo, we
+# never trigger that code path. F-Droid sees a normal URL ending in
+# /fdroid/repo, the token is just opaque to it, and the server treats the
+# token segment as authentication.
+token_router = APIRouter()
 
 
 # Files we expect at the root of /fdroid/repo/
@@ -66,6 +84,20 @@ async def _stream_or_redirect(storage_key: str, *, content_type: str) -> Respons
     return StreamingResponse(stream, media_type=content_type)
 
 
+async def _dispatch_root(
+    filename: str,
+    request: Request,
+    db,
+    api_key: ApiKey | None,
+) -> Response:
+    """Shared dispatcher for both Basic-auth and path-token routes."""
+    if filename in _INDEX_FILES:
+        return await _serve_index(filename, api_key)
+    if filename.lower().endswith(".apk"):
+        return await _serve_apk(filename, request=request, db=db, api_key=api_key)
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 @router.get("/{filename}")
 async def serve(
     filename: str,
@@ -73,18 +105,8 @@ async def serve(
     db: DbSession,
     api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
 ) -> Response:
-    """Catch-all under ``/fdroid/repo/``.
-
-    Dispatches by file kind:
-      * ``index-v1.jar`` / ``index-v2.json`` / ``entry.jar``  -> repo index
-      * ``*.apk``                                             -> APK binary
-      * anything else stored as a static asset (icons live in their own path)
-    """
-    if filename in _INDEX_FILES:
-        return await _serve_index(filename, api_key)
-    if filename.lower().endswith(".apk"):
-        return await _serve_apk(filename, request=request, db=db, api_key=api_key)
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    """Catch-all under ``/fdroid/repo/`` — anonymous + Basic-auth path."""
+    return await _dispatch_root(filename, request, db, api_key)
 
 
 @router.get("/icons/{filename}")
@@ -134,6 +156,70 @@ def _content_type_for(filename: str) -> str:
         "jpg": "image/jpeg",
         "jpeg": "image/jpeg",
     }.get(ext, "application/octet-stream")
+
+
+# --------------------------------------------------------------------------
+# Path-token routes (/r/{token}/fdroid/repo/...)
+# --------------------------------------------------------------------------
+async def _api_key_from_token_path(token: str, db) -> ApiKey:
+    """Resolve a URL-path token to an active ApiKey.
+
+    Tokens that don't parse, don't match, or aren't active all return 404 (not
+    401) so we don't leak information about which prefixes exist.
+    """
+    parts = parse_api_key(token)
+    if parts is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    prefix, secret = parts
+    key = (
+        await db.execute(select(ApiKey).where(ApiKey.prefix == prefix))
+    ).scalar_one_or_none()
+    if key is None or not key.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not verify_api_key_secret(secret, key.hashed_secret):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    key.last_used_at = datetime.now(UTC)
+    await db.flush()
+    return key
+
+
+@token_router.get("/{token}/fdroid/repo/{filename}")
+async def serve_token_root(
+    token: str,
+    filename: str,
+    request: Request,
+    db: DbSession,
+) -> Response:
+    """Root file via a path-token URL.
+
+    Mirrors ``serve()`` but resolves auth from the URL path, so F-Droid clients
+    that mishandle userinfo+port URLs (Basic auth) can still reach private apps.
+    """
+    api_key = await _api_key_from_token_path(token, db)
+    return await _dispatch_root(filename, request, db, api_key)
+
+
+@token_router.get("/{token}/fdroid/repo/icons/{filename}")
+async def serve_token_icon(
+    token: str,
+    filename: str,
+    db: DbSession,
+) -> Response:
+    await _api_key_from_token_path(token, db)
+    return await serve_icon(filename)
+
+
+@token_router.get("/{token}/fdroid/repo/{package}/{locale}/{kind}/{filename}")
+async def serve_token_media(
+    token: str,
+    package: str,
+    locale: str,
+    kind: str,
+    filename: str,
+    db: DbSession,
+) -> Response:
+    await _api_key_from_token_path(token, db)
+    return await serve_media(package, locale, kind, filename)
 
 
 # --------------------------------------------------------------------------

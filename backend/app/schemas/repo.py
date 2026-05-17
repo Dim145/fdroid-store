@@ -38,6 +38,10 @@ class SetupStatus(BaseModel):
     repo_description: str | None = None
     repo_address: str | None = None
     repo_icon_path: str | None = None
+    # SHA-256 fingerprint of the repo signing cert. Safe to expose publicly:
+    # it's the value F-Droid clients use to verify the repo signature, so
+    # putting it in a QR code is its intended use.
+    repo_fingerprint: str | None = None
 
 
 class SetupWizardRequest(BaseModel):

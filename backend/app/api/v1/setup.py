@@ -38,6 +38,7 @@ async def setup_status(db: DbSession) -> SetupStatus:
         repo_description=config.description if config else None,
         repo_address=config.address if config else None,
         repo_icon_path=config.icon_path if config else None,
+        repo_fingerprint=config.keystore_fingerprint_sha256 if config else None,
     )
 
 
