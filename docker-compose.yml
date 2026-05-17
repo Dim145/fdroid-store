@@ -37,6 +37,19 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
       REDIS_URL: redis://redis:6379/0
+    # Lock the image down at runtime. ``read_only`` makes the entire root
+    # filesystem immutable; the few paths the app legitimately writes to
+    # are explicitly enumerated below as tmpfs (ephemeral, sized) or named
+    # volumes (persisted). ``no-new-privileges`` blocks any setuid escape
+    # from inside the container.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,size=512m,mode=1777
+      - /home/fdroid:rw,size=64m,uid=1001,gid=1001,mode=0700
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,6 +76,14 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
       REDIS_URL: redis://redis:6379/0
     command: ["python", "-m", "arq", "app.workers.tasks.WorkerSettings"]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,size=512m,mode=1777
+      - /home/fdroid:rw,size=64m,uid=1001,gid=1001,mode=0700
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +104,20 @@ services:
     restart: unless-stopped
     environment:
       UPSTREAM_BACKEND: backend:8000
+    # Same lockdown as the backend. nginx writes its pid to /tmp (the
+    # unprivileged base image already moved it there), and the official
+    # entrypoint expands /etc/nginx/templates → /etc/nginx/conf.d at start,
+    # which needs a writable conf.d. Both are sized tmpfs so a crash loop
+    # can't fill the host's RAM.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,size=32m,mode=1777
+      - /var/cache/nginx:rw,size=64m,uid=101,gid=101,mode=0700
+      - /etc/nginx/conf.d:rw,size=4m,uid=101,gid=101,mode=0755
     ports:
       - "8080:8080"
     volumes:
