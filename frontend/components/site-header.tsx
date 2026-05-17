@@ -25,8 +25,8 @@ export function SiteHeader() {
               <Link href="/my-apps" className="text-muted-foreground hover:text-foreground">
                 My apps
               </Link>
-              <Link href="/api-keys" className="text-muted-foreground hover:text-foreground">
-                API keys
+              <Link href="/history" className="text-muted-foreground hover:text-foreground">
+                History
               </Link>
               <Link href="/account" className="text-muted-foreground hover:text-foreground">
                 Account

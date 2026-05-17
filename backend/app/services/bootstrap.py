@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
 from app.core.logging import get_logger
 from app.core.security import hash_password
+from app.fdroid.default_icon import generate_default_repo_icon
 from app.models import (  # noqa: F401 — ensure all models register with Base.metadata
     Apk,
     ApiKey,
@@ -22,8 +23,11 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     User,
 )
 from app.models.user import AuthProvider, UserRole
+from app.storage import get_storage
 
 log = get_logger(__name__)
+
+DEFAULT_REPO_ICON_KEY = "icons/fdroid-icon.png"
 
 
 async def _create_tables_if_needed() -> None:
@@ -34,6 +38,18 @@ async def _create_tables_if_needed() -> None:
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Idempotent column additions for upgrades that don't justify a full
+        # migration yet. Each statement is its own savepoint so a partial
+        # failure (e.g. column already exists on a different type) does not
+        # poison the others.
+        from sqlalchemy import text
+        for stmt in (
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS icon_is_custom BOOLEAN NOT NULL DEFAULT FALSE",
+        ):
+            try:
+                await conn.execute(text(stmt))
+            except Exception as exc:  # noqa: BLE001
+                log.info("skipping migration step", stmt=stmt, error=str(exc))
 
 
 # Mirrors F-Droid's default category list (subset, can be edited by admin)
@@ -109,12 +125,30 @@ async def bootstrap_first_run() -> None:
                     RepoConfig(
                         name=settings.repo_name,
                         description=settings.repo_description,
-                        icon_path=settings.repo_icon,
+                        icon_path=DEFAULT_REPO_ICON_KEY,
                         address=settings.public_repo_url,
                         setup_complete=False,
                     )
                 )
                 await db.commit()
+            elif not repo.icon_path or "/" not in repo.icon_path:
+                # Older rows (or environment-seeded ones) may have just a
+                # filename instead of a full storage key. Normalize.
+                repo.icon_path = DEFAULT_REPO_ICON_KEY
+                await db.commit()
         except Exception as exc:  # noqa: BLE001
             await db.rollback()
             log.info("repo config seed skipped", reason=str(exc))
+
+    # ---- Default repo icon -------------------------------------------------
+    try:
+        storage = get_storage()
+        if not await storage.exists(DEFAULT_REPO_ICON_KEY):
+            log.info("seeding default repo icon", key=DEFAULT_REPO_ICON_KEY)
+            await storage.put(
+                DEFAULT_REPO_ICON_KEY,
+                generate_default_repo_icon(),
+                content_type="image/png",
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not seed default repo icon", error=str(exc))

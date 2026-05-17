@@ -3,11 +3,12 @@
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { AppIcon } from "@/components/app-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api, type AppDetail } from "@/lib/api";
+import { api, mediaUrl, type AppDetail } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/utils";
 
 export default function AppDetailPage() {
@@ -31,17 +32,23 @@ export default function AppDetailPage() {
     return `${repo}/${filename}`;
   };
 
+  const screenshots = [...app.screenshots].sort((a, b) => a.display_order - b.display_order);
+
   return (
     <div className="space-y-6">
-      <header className="space-y-2">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight">{app.name}</h1>
-          <Badge variant={app.visibility === "private" ? "secondary" : "default"}>
-            {app.visibility}
-          </Badge>
-          <Badge variant="outline">{app.status}</Badge>
+      <header className="flex items-start gap-4">
+        <AppIcon iconPath={app.icon_path} name={app.name} size={88} version={app.updated_at} />
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-3xl font-bold tracking-tight">{app.name}</h1>
+            <Badge variant={app.visibility === "private" ? "secondary" : "default"}>
+              {app.visibility}
+            </Badge>
+            <Badge variant="outline">{app.status}</Badge>
+          </div>
+          <p className="font-mono text-sm text-muted-foreground">{app.package_name}</p>
+          {app.summary && <p className="text-base">{app.summary}</p>}
         </div>
-        <p className="font-mono text-sm text-muted-foreground">{app.package_name}</p>
       </header>
 
       <Card>
@@ -49,7 +56,6 @@ export default function AppDetailPage() {
           <CardTitle className="text-base">About</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <p>{app.summary}</p>
           {app.description && <p className="whitespace-pre-wrap text-muted-foreground">{app.description}</p>}
           <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
             <dt className="text-muted-foreground">License</dt>
@@ -67,6 +73,33 @@ export default function AppDetailPage() {
           </dl>
         </CardContent>
       </Card>
+
+      {screenshots.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Screenshots</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-3 overflow-x-auto pb-2">
+              {screenshots.map((s) => {
+                const url = mediaUrl(s.storage_key);
+                if (!url) return null;
+                return (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <a key={s.id} href={url} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                    <img
+                      src={url}
+                      alt={`Screenshot of ${app.name}`}
+                      loading="lazy"
+                      className="h-72 w-auto rounded border bg-muted object-contain"
+                    />
+                  </a>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

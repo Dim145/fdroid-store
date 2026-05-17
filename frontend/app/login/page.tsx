@@ -25,13 +25,20 @@ function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next") || "/apps";
-  const { login } = useAuth();
+  const { user, login, fetchMe } = useAuth();
 
   const [methods, setMethods] = useState<AuthMethodsInfo | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => { fetchMe(); }, [fetchMe]);
+
+  // Already authenticated? Bounce immediately.
+  useEffect(() => {
+    if (user) router.replace(next);
+  }, [user, router, next]);
 
   useEffect(() => {
     api.authMethods().then(setMethods).catch(() => setMethods({
@@ -44,7 +51,20 @@ function LoginForm() {
     setError(null);
     setSubmitting(true);
     try {
-      await login(email, password);
+      const me = await login(email, password);
+      // If the admin lands here while setup is still pending, take them to
+      // the wizard regardless of ?next.
+      if (me.role === "admin") {
+        try {
+          const status = await api.setup.status();
+          if (!status.setup_complete) {
+            router.replace("/admin/setup");
+            return;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       router.replace(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

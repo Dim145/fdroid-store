@@ -12,16 +12,185 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user
 from app.core.logging import get_logger
-from app.fdroid.apk_parser import ApkParseError, parse_apk
+from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus
 from app.models.user import User, UserRole
-from app.schemas.app import ApkRead
+from app.schemas.app import ApkInspect, ApkRead
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
 
 router = APIRouter()
 log = get_logger(__name__)
+
+
+# --------------------------------------------------------------------------
+# Helpers (also used by /apps/with-apk)
+# --------------------------------------------------------------------------
+async def save_upload_to_temp(upload: UploadFile) -> Path:
+    """Stream an UploadFile to a NamedTemporaryFile. Caller cleans up."""
+    if not upload.filename or not upload.filename.lower().endswith(".apk"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected an .apk file",
+        )
+    with tempfile.NamedTemporaryFile(suffix=".apk", delete=False) as tmp:
+        path = Path(tmp.name)
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+    return path
+
+
+async def parse_or_400(path: Path) -> ApkMetadata:
+    try:
+        return await parse_apk(path)
+    except ApkParseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid APK: {exc}",
+        ) from exc
+
+
+async def attach_apk_to_app(
+    db,
+    *,
+    app: App,
+    tmp_path: Path,
+    meta: ApkMetadata,
+    uploader: User,
+) -> Apk:
+    """Validate + persist a parsed APK against an existing App."""
+    if meta.package_name != app.package_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"APK package {meta.package_name!r} does not match app "
+                f"{app.package_name!r}"
+            ),
+        )
+    if app.locked_signer_sha256 and app.locked_signer_sha256 != meta.signer_sha256:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="APK signer does not match the signer of previously published APKs",
+        )
+    dup = (await db.execute(select(Apk).where(Apk.sha256 == meta.sha256))).scalar_one_or_none()
+    if dup is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This APK is already uploaded (id={dup.id})",
+        )
+    if any(a.version_code == meta.version_code for a in app.apks):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"versionCode {meta.version_code} already exists for this app",
+        )
+
+    storage = get_storage()
+    target_name = f"{app.package_name}_{meta.version_code}.apk"
+    storage_key = f"apks/{app.package_name}/{target_name}"
+    with tmp_path.open("rb") as fh:
+        await storage.put(
+            storage_key, fh, content_type="application/vnd.android.package-archive"
+        )
+
+    # Auto-extract icon from the APK (unless the admin set a custom one).
+    # We always store the latest extracted icon at icons/<pkg>.png so the
+    # index always references a fresh hash for each version.
+    if meta.icon_data and not app.icon_is_custom:
+        try:
+            import io as _io
+            from PIL import Image as _Image
+            with _Image.open(_io.BytesIO(meta.icon_data)) as raw:
+                img = raw.convert("RGBA")
+                img.thumbnail((512, 512), _Image.LANCZOS)
+                buf = _io.BytesIO()
+                img.save(buf, format="PNG", optimize=True)
+                png_bytes = buf.getvalue()
+            icon_key = f"icons/{app.package_name}.png"
+            await storage.put(icon_key, png_bytes, content_type="image/png")
+            app.icon_path = icon_key
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not store extracted icon", app=app.package_name, error=str(exc))
+
+    # Admin uploads auto-publish; regular user uploads await review.
+    initial_status = (
+        ApkStatus.PUBLISHED if uploader.role == UserRole.ADMIN else ApkStatus.PENDING_REVIEW
+    )
+    apk = Apk(
+        app_id=app.id,
+        storage_key=storage_key,
+        file_name=target_name,
+        size_bytes=meta.size_bytes,
+        sha256=meta.sha256,
+        version_code=meta.version_code,
+        version_name=meta.version_name,
+        min_sdk=meta.min_sdk,
+        target_sdk=meta.target_sdk,
+        max_sdk=meta.max_sdk,
+        signer_sha256=meta.signer_sha256,
+        permissions=meta.permissions,
+        features=meta.features,
+        native_code=meta.native_code,
+        locales=meta.locales,
+        status=initial_status,
+        uploaded_by_id=uploader.id,
+        published_at=datetime.now(UTC) if initial_status == ApkStatus.PUBLISHED else None,
+    )
+    db.add(apk)
+    if initial_status == ApkStatus.PUBLISHED:
+        if app.locked_signer_sha256 is None:
+            app.locked_signer_sha256 = meta.signer_sha256
+        app.suggested_version_code = max(app.suggested_version_code or 0, meta.version_code)
+        app.suggested_version_name = meta.version_name
+        app.status = AppStatus.PUBLISHED
+        app.last_published_at = datetime.now(UTC)
+
+    await db.flush()
+    log.info(
+        "apk attached",
+        apk_id=str(apk.id),
+        app=app.package_name,
+        version_code=apk.version_code,
+        status=apk.status.value,
+    )
+    return apk
+
+
+# --------------------------------------------------------------------------
+# Routes
+# --------------------------------------------------------------------------
+@router.post("/inspect", response_model=ApkInspect)
+async def inspect_apk(
+    user: Annotated[User, Depends(get_current_user)],
+    file: UploadFile = File(...),
+) -> ApkInspect:
+    """Parse an APK and return its metadata without persisting anything.
+
+    Intended to power the "auto-fill the new-app form when an APK is picked"
+    UX flow. Authenticated callers only — APK parsing isn't free.
+    """
+    tmp_path = await save_upload_to_temp(file)
+    try:
+        meta = await parse_or_400(tmp_path)
+        return ApkInspect(
+            package_name=meta.package_name,
+            app_name=meta.app_name,
+            version_code=meta.version_code,
+            version_name=meta.version_name,
+            min_sdk=meta.min_sdk,
+            target_sdk=meta.target_sdk,
+            sha256=meta.sha256,
+            size_bytes=meta.size_bytes,
+            signer_sha256=meta.signer_sha256,
+            permissions=meta.permissions,
+            native_code=meta.native_code,
+            has_icon=bool(meta.icon_data),
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @router.post("/upload/{app_id}", response_model=ApkRead, status_code=status.HTTP_201_CREATED)
@@ -31,14 +200,7 @@ async def upload_apk(
     user: Annotated[User, Depends(get_current_user)],
     file: UploadFile = File(...),
 ) -> ApkRead:
-    """Upload a new APK for an app.
-
-    The file is parsed inline (small overhead) so we can return a useful error
-    immediately. Reindex is queued to the worker.
-    """
-    if not file.filename or not file.filename.lower().endswith(".apk"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Expected an .apk file")
-
+    """Upload a new APK for an existing app (e.g. publishing a new version)."""
     app = (
         await db.execute(
             select(App)
@@ -51,122 +213,25 @@ async def upload_apk(
     if app.owner_id != user.id and user.role != UserRole.ADMIN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    # ---- Persist upload to a temp file so we can parse it -----------------
-    with tempfile.NamedTemporaryFile(suffix=".apk", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            tmp.write(chunk)
-
+    tmp_path = await save_upload_to_temp(file)
     try:
-        try:
-            meta = await parse_apk(tmp_path)
-        except ApkParseError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid APK: {exc}",
-            ) from exc
-
-        if meta.package_name != app.package_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"APK package {meta.package_name!r} does not match app "
-                    f"{app.package_name!r}"
-                ),
-            )
-
-        # Lock signer on first publish; reject mismatches afterwards
-        if app.locked_signer_sha256 and app.locked_signer_sha256 != meta.signer_sha256:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="APK signer does not match the signer of previously published APKs",
-            )
-
-        # Reject duplicates by content hash
-        dup = (
-            await db.execute(select(Apk).where(Apk.sha256 == meta.sha256))
-        ).scalar_one_or_none()
-        if dup is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"This APK is already uploaded (id={dup.id})",
-            )
-
-        # Reject duplicate versionCode for the same app
-        if any(a.version_code == meta.version_code for a in app.apks):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"versionCode {meta.version_code} already exists for this app",
-            )
-
-        # ---- Push to storage ----------------------------------------------
-        storage = get_storage()
-        target_name = f"{app.package_name}_{meta.version_code}.apk"
-        storage_key = f"apks/{app.package_name}/{target_name}"
-        with tmp_path.open("rb") as fh:
-            await storage.put(storage_key, fh, content_type="application/vnd.android.package-archive")
-
-        # Optional: persist the embedded icon for the index
-        if meta.icon_data and meta.icon_extension and app.icon_path is None:
-            icon_key = f"icons/{app.package_name}.{meta.version_code}.{meta.icon_extension}"
-            await storage.put(icon_key, meta.icon_data, content_type=f"image/{meta.icon_extension}")
-            app.icon_path = icon_key
-
-        # ---- DB row -------------------------------------------------------
-        is_admin_or_owner_admin = user.role == UserRole.ADMIN
-        # Admin uploads auto-publish; regular user uploads await review.
-        initial_status = ApkStatus.PUBLISHED if is_admin_or_owner_admin else ApkStatus.PENDING_REVIEW
-        apk = Apk(
-            app_id=app.id,
-            storage_key=storage_key,
-            file_name=target_name,
-            size_bytes=meta.size_bytes,
-            sha256=meta.sha256,
-            version_code=meta.version_code,
-            version_name=meta.version_name,
-            min_sdk=meta.min_sdk,
-            target_sdk=meta.target_sdk,
-            max_sdk=meta.max_sdk,
-            signer_sha256=meta.signer_sha256,
-            permissions=meta.permissions,
-            features=meta.features,
-            native_code=meta.native_code,
-            locales=meta.locales,
-            status=initial_status,
-            uploaded_by_id=user.id,
-            published_at=datetime.now(UTC) if initial_status == ApkStatus.PUBLISHED else None,
+        meta = await parse_or_400(tmp_path)
+        apk = await attach_apk_to_app(
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
         )
-        db.add(apk)
-
-        if initial_status == ApkStatus.PUBLISHED:
-            if app.locked_signer_sha256 is None:
-                app.locked_signer_sha256 = meta.signer_sha256
-            app.suggested_version_code = meta.version_code
-            app.suggested_version_name = meta.version_name
-            app.status = AppStatus.PUBLISHED
-            app.last_published_at = datetime.now(UTC)
-
-        await db.flush()
-        log.info(
-            "apk uploaded",
-            apk_id=str(apk.id),
-            app=app.package_name,
-            version_code=apk.version_code,
-            status=apk.status.value,
-        )
-
-        if initial_status == ApkStatus.PUBLISHED:
+        if apk.status == ApkStatus.PUBLISHED:
             await enqueue_reindex()
-
         return ApkRead.model_validate(apk)
     finally:
         tmp_path.unlink(missing_ok=True)
 
 
-@router.delete("/{apk_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, response_class=Response)
+@router.delete(
+    "/{apk_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
 async def delete_apk(
     apk_id: uuid.UUID,
     db: DbSession,

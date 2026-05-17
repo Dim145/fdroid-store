@@ -12,10 +12,12 @@ under separate storage prefixes (``repo/public/`` vs ``repo/private/``).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +55,7 @@ async def _load_apps(db: AsyncSession, *, include_private: bool) -> list[App]:
             selectinload(App.apks),
             selectinload(App.categories),
             selectinload(App.localizations),
+            selectinload(App.screenshots),
         )
         .where(App.status == "published")
     )
@@ -91,6 +94,48 @@ async def _write_bytes(storage: Storage, key: str, data: bytes, *, content_type:
     await storage.put(key, data, content_type=content_type)
 
 
+async def _collect_file_meta(
+    storage: Storage,
+    *,
+    repo_config: RepoConfig,
+    apps: list[App],
+) -> dict[str, dict[str, Any]]:
+    """Hash + size every static file referenced by the index.
+
+    Covers the repo icon, per-app icons, and every screenshot. Screenshot
+    rows already carry their hash + size from upload time so we don't re-hash
+    them. Icons are hashed fresh because an APK upload can overwrite the
+    bytes at ``icons/<package>.png`` without touching the App row.
+    """
+    meta: dict[str, dict[str, Any]] = {}
+
+    # screenshots — trust the row's columns
+    for app in apps:
+        for s in app.screenshots:
+            meta[s.storage_key] = {"sha256": s.sha256, "size": s.size_bytes}
+
+    # icons — re-hash from storage so we pick up overwrites
+    icon_keys: set[str] = set()
+    if repo_config.icon_path:
+        icon_keys.add(repo_config.icon_path)
+    for app in apps:
+        if app.icon_path:
+            icon_keys.add(app.icon_path)
+    for key in icon_keys:
+        try:
+            if not await storage.exists(key):
+                continue
+            data = await storage.get_bytes(key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not read icon for index", key=key, error=str(exc))
+            continue
+        meta[key] = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+        }
+    return meta
+
+
 async def _build_one(
     storage: Storage,
     *,
@@ -98,6 +143,8 @@ async def _build_one(
     apps: list[App],
     prefix: str,
 ) -> None:
+    file_meta = await _collect_file_meta(storage, repo_config=repo_config, apps=apps)
+
     # index-v1.jar (contains index-v1.json, signed)
     v1_bytes = build_index_v1(repo_config=repo_config, apps=apps)
     await _write_jar(
@@ -107,7 +154,7 @@ async def _build_one(
     )
 
     # index-v2.json (plaintext) + entry.jar (signed, contains entry.json)
-    v2_bytes = build_index_v2(repo_config=repo_config, apps=apps)
+    v2_bytes = build_index_v2(repo_config=repo_config, apps=apps, file_meta=file_meta)
     await _write_bytes(
         storage,
         f"{prefix}/index-v2.json",

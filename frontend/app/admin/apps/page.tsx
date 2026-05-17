@@ -13,6 +13,9 @@ export default function AdminAppsPage() {
   const [apps, setApps] = useState<AppSummary[]>([]);
   const [filter, setFilter] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [pendingApks, setPendingApks] = useState<Array<{ appId: string; apkId: string; vc: number; vn: string }>>([]);
 
   async function refresh() {
@@ -48,27 +51,64 @@ export default function AdminAppsPage() {
     await refresh();
   }
 
+  async function rescanApp(appId: string, appName: string) {
+    setError(null); setMsg(null); setBusyId(appId);
+    try {
+      const r = await api.admin.rescanApp(appId);
+      const msgs = [`${appName}: ${r.rescanned_apks} APK rescanned, ${r.icons_refreshed} icon refreshed`];
+      if (r.failed.length) msgs.push(`${r.failed.length} error(s): ${r.failed.join(", ")}`);
+      setMsg(msgs.join(" — "));
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Rescan failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function rescanAll() {
+    if (!confirm("Rescan every published APK? Can take a while on a large repo.")) return;
+    setError(null); setMsg(null); setBulkBusy(true);
+    try {
+      const r = await api.admin.rescanAll();
+      const msgs = [`${r.rescanned_apks} APK rescanned, ${r.icons_refreshed} icon refreshed`];
+      if (r.failed.length) msgs.push(`${r.failed.length} error(s): ${r.failed.join(", ")}`);
+      setMsg(msgs.join(" — "));
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Rescan failed");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <header className="flex items-end justify-between">
+      <header className="flex items-end justify-between gap-3">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Apps & APKs</h1>
           <p className="text-muted-foreground">Moderate and publish.</p>
         </div>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-        >
-          <option value="">All statuses</option>
-          <option value="draft">Draft</option>
-          <option value="pending_review">Pending review</option>
-          <option value="published">Published</option>
-          <option value="rejected">Rejected</option>
-          <option value="archived">Archived</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={rescanAll} disabled={bulkBusy}>
+            {bulkBusy ? "Rescanning…" : "Rescan all"}
+          </Button>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="pending_review">Pending review</option>
+            <option value="published">Published</option>
+            <option value="rejected">Rejected</option>
+            <option value="archived">Archived</option>
+          </select>
+        </div>
       </header>
 
+      {msg && <p className="text-sm text-emerald-600">{msg}</p>}
       {error && <p className="text-destructive">{error}</p>}
 
       {pendingApks.length > 0 && (
@@ -129,6 +169,18 @@ export default function AdminAppsPage() {
                   <TableCell><Badge variant={app.status === "published" ? "success" : "outline"}>{app.status}</Badge></TableCell>
                   <TableCell className="text-xs">{new Date(app.updated_at).toLocaleString()}</TableCell>
                   <TableCell className="space-x-2 text-right">
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/my-apps/${app.id}`}>Edit</Link>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => rescanApp(app.id, app.name)}
+                      disabled={busyId === app.id || bulkBusy}
+                      title="Re-parse APKs and re-extract icon"
+                    >
+                      {busyId === app.id ? "…" : "Rescan"}
+                    </Button>
                     {app.status !== "published" && (
                       <Button size="sm" onClick={() => setStatus(app.id, "published")}>Publish</Button>
                     )}

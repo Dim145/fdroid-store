@@ -28,20 +28,68 @@ def _ts_ms(value: datetime | None) -> int:
     return int(value.timestamp() * 1000)
 
 
-def _localized(value: str | None) -> dict[str, str]:
-    return {DEFAULT_LOCALE: value or ""}
+def _localized(value: str | None) -> dict[str, str] | None:
+    """Wrap a string into the default locale, or return None when empty.
+
+    fdroidserver omits localizable fields when the source value is empty
+    rather than emitting ``{"en-US": ""}``; some clients then refuse
+    zero-length localized entries.
+    """
+    if value is None or value == "":
+        return None
+    return {DEFAULT_LOCALE: value}
 
 
-def _build_package(app: App, apks: list[Apk]) -> dict[str, Any]:
+def _file_entry(
+    storage_key: str | None,
+    file_meta: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Build a v2 File object ``{name, sha256, size}`` from a storage key.
+
+    The storage key is reused verbatim as the URL path (prefixed with ``/``),
+    so callers MUST store assets at the path the F-Droid client expects:
+      * icons:       ``icons/<file>``
+      * screenshots: ``<package>/<locale>/phoneScreenshots/<file>``
+    ``file_meta`` maps each referenced storage key to its precomputed
+    ``{sha256, size}``; the caller hashes files once before generating the
+    index. Returns ``None`` if the metadata is missing, so the index omits
+    the field rather than emit a malformed entry.
+    """
+    if not storage_key or not file_meta:
+        return None
+    info = file_meta.get(storage_key)
+    if info is None:
+        return None
+    return {
+        "name": f"/{storage_key}",
+        "sha256": info["sha256"],
+        "size": info["size"],
+    }
+
+
+def _build_package(
+    app: App,
+    apks: list[Apk],
+    file_meta: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "added": _ts_ms(app.created_at),
         "lastUpdated": _ts_ms(app.last_published_at or app.updated_at),
-        "license": app.license or "Unknown",
-        "categories": [c.name for c in app.categories] or ["Misc"],
-        "name": _localized(app.name),
-        "summary": _localized(app.summary),
-        "description": _localized(app.description),
     }
+    # fdroidserver omits "Unknown" license rather than emitting it
+    if app.license and app.license != "Unknown":
+        metadata["license"] = app.license
+    cats = [c.name for c in app.categories]
+    if cats:
+        metadata["categories"] = cats
+    for src_value, dst_key in (
+        (app.name, "name"),
+        (app.summary, "summary"),
+        (app.description, "description"),
+    ):
+        loc = _localized(src_value)
+        if loc is not None:
+            metadata[dst_key] = loc
     if app.author_name:
         metadata["authorName"] = app.author_name
     if app.website:
@@ -50,13 +98,24 @@ def _build_package(app: App, apks: list[Apk]) -> dict[str, Any]:
         metadata["sourceCode"] = app.source_code
     if app.issue_tracker:
         metadata["issueTracker"] = app.issue_tracker
-    if app.icon_path:
-        # In v2, icons live under each app's localized block
-        metadata["icon"] = {
-            DEFAULT_LOCALE: {
-                "name": f"/icons/{app.icon_path.split('/')[-1]}",
-            }
-        }
+    icon_entry = _file_entry(app.icon_path, file_meta)
+    if icon_entry is not None:
+        metadata["icon"] = {DEFAULT_LOCALE: icon_entry}
+
+    # Screenshots — v2 nests them as ``screenshots.<deviceType>.<locale>[]``.
+    # We currently only emit the "phone" device type.
+    shots_by_locale: dict[str, list[dict[str, Any]]] = {}
+    for s in sorted(app.screenshots, key=lambda x: x.display_order):
+        entry = _file_entry(s.storage_key, file_meta)
+        if entry is None:
+            continue
+        shots_by_locale.setdefault(s.locale, []).append(entry)
+    if shots_by_locale:
+        metadata["screenshots"] = {"phone": shots_by_locale}
+
+    # Most-recent signer wins (matches fdroidserver's behavior)
+    if apks:
+        metadata["preferredSigner"] = apks[0].signer_sha256
 
     versions: dict[str, Any] = {}
     for apk in apks:
@@ -66,9 +125,14 @@ def _build_package(app: App, apks: list[Apk]) -> dict[str, Any]:
             "signer": {"sha256": [apk.signer_sha256]},
         }
         if apk.min_sdk:
-            manifest["usesSdk"] = {"minSdkVersion": apk.min_sdk}
-            if apk.target_sdk:
-                manifest["usesSdk"]["targetSdkVersion"] = apk.target_sdk
+            # targetSdkVersion defaults to minSdkVersion when not declared
+            # (matches the Android manifest semantics + fdroidserver)
+            manifest["usesSdk"] = {
+                "minSdkVersion": apk.min_sdk,
+                "targetSdkVersion": apk.target_sdk or apk.min_sdk,
+            }
+        if apk.max_sdk:
+            manifest["maxSdkVersion"] = apk.max_sdk
         if apk.permissions:
             manifest["usesPermission"] = [{"name": p} for p in apk.permissions]
         if apk.features:
@@ -94,7 +158,12 @@ def build_index_v2(
     repo_config: RepoConfig,
     apps: Iterable[App],
     mirrors: list[str] | None = None,
+    file_meta: dict[str, dict[str, Any]] | None = None,
 ) -> bytes:
+    """``file_meta`` maps each referenced icon storage key to its content
+    hash + size. The F-Droid v2 client rejects icon entries that don't carry
+    these, so the caller is responsible for hashing icons before calling.
+    """
     now_ms = int(datetime.now().timestamp() * 1000)
     packages: dict[str, Any] = {}
     categories_seen: set[str] = set()
@@ -102,27 +171,31 @@ def build_index_v2(
         published = [a for a in app.apks if a.status.value == "published"]
         if not published:
             continue
-        packages[app.package_name] = _build_package(app, published)
+        # apks come ordered version_code desc, so [0] is the latest
+        published.sort(key=lambda a: a.version_code, reverse=True)
+        packages[app.package_name] = _build_package(app, published, file_meta)
         for c in app.categories:
             categories_seen.add(c.name)
 
-    payload: dict[str, Any] = {
-        "repo": {
-            "name": _localized(repo_config.name),
-            "description": _localized(repo_config.description or ""),
-            "address": repo_config.address,
-            "mirrors": [{"url": m} for m in (mirrors or [])],
-            "timestamp": now_ms,
-            "categories": {c: {"name": _localized(c)} for c in sorted(categories_seen)},
-            "antiFeatures": {},
-            "releaseChannels": {},
-        },
-        "packages": packages,
+    repo_block: dict[str, Any] = {
+        "name": _localized(repo_config.name) or {DEFAULT_LOCALE: "Repository"},
+        "address": repo_config.address,
+        "timestamp": now_ms,
     }
-    if repo_config.icon_path:
-        payload["repo"]["icon"] = {
-            DEFAULT_LOCALE: {"name": f"/icons/{repo_config.icon_path.split('/')[-1]}"}
+    desc = _localized(repo_config.description)
+    if desc is not None:
+        repo_block["description"] = desc
+    repo_icon = _file_entry(repo_config.icon_path, file_meta)
+    if repo_icon is not None:
+        repo_block["icon"] = {DEFAULT_LOCALE: repo_icon}
+    if mirrors:
+        repo_block["mirrors"] = [{"url": m} for m in mirrors]
+    if categories_seen:
+        repo_block["categories"] = {
+            c: {"name": {DEFAULT_LOCALE: c}} for c in sorted(categories_seen)
         }
+
+    payload: dict[str, Any] = {"repo": repo_block, "packages": packages}
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 

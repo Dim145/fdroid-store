@@ -128,24 +128,64 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
                 out.append(str(v))
         return sorted(set(out))
 
+    # F-Droid uses ``features`` to compute device compatibility: any entry it
+    # finds is treated as REQUIRED. So we must only include features that
+    # the manifest actually marks as required (or doesn't qualify, since
+    # ``android:required`` defaults to "true"). Optional features like
+    # ``android.hardware.camera2`` with ``required="false"`` MUST be left
+    # out, otherwise phones without that hardware are flagged incompatible.
+    required_features: set[str] = set()
+    try:
+        manifest_xml = apk.get_android_manifest_xml()
+        root = manifest_xml if hasattr(manifest_xml, "iter") else manifest_xml.getroot()
+        android_name = "{http://schemas.android.com/apk/res/android}name"
+        android_required = "{http://schemas.android.com/apk/res/android}required"
+        for elt in root.iter("uses-feature"):
+            name = elt.get(android_name)
+            if not name:
+                continue
+            required_attr = (elt.get(android_required) or "true").strip().lower()
+            if required_attr != "false":
+                required_features.add(name)
+    except Exception as exc:  # noqa: BLE001
+        # Worst case (parsing breaks): keep nothing rather than mark every
+        # feature required and break compatibility for all users.
+        required_features = set()
+
     icon_data: bytes | None = None
     icon_ext: str | None = None
+
+    # androguard returns whatever resource it finds first; on modern apps that
+    # is usually mipmap-anydpi-v26 → an XML adaptive icon, which is useless
+    # to us. We walk the standard density ladder from highest to lowest and
+    # grab the first raster (PNG/WebP/JPEG) we hit.
+    _RASTER_EXT = {"png": "png", "webp": "webp", "jpg": "jpg", "jpeg": "jpg"}
+    _DENSITY_LADDER = [640, 480, 320, 240, 160, 120]
     try:
-        icon_name = apk.get_app_icon()
-        if icon_name:
+        candidates: list[str] = []
+        # Default call first (cheap, usually wins for legacy apps)
+        primary = apk.get_app_icon()
+        if primary:
+            candidates.append(primary)
+        for dpi in _DENSITY_LADDER:
+            try:
+                got = apk.get_app_icon(max_dpi=dpi)
+            except Exception:  # noqa: BLE001
+                continue
+            if got and got not in candidates:
+                candidates.append(got)
+
+        for icon_name in candidates:
+            lower = icon_name.lower()
+            ext_name = lower.rsplit(".", 1)[-1] if "." in lower else ""
+            ext = _RASTER_EXT.get(ext_name)
+            if ext is None:
+                continue  # XML adaptive icons & friends — try next density
             raw = apk.get_file(icon_name)
             if raw:
                 icon_data = raw
-                lower = icon_name.lower()
-                if lower.endswith(".png"):
-                    icon_ext = "png"
-                elif lower.endswith(".webp"):
-                    icon_ext = "webp"
-                elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
-                    icon_ext = "jpg"
-                elif lower.endswith(".xml"):
-                    # adaptive icon (vector). We skip it; admin can upload one.
-                    icon_data = None
+                icon_ext = ext
+                break
     except Exception:  # noqa: BLE001
         icon_data = None
 
@@ -164,7 +204,7 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
         target_sdk=_safe_int(apk.get_target_sdk_version()),
         max_sdk=_safe_int(apk.get_max_sdk_version()),
         permissions=_flatten_names(apk.get_permissions()),
-        features=_flatten_names(apk.get_features()),
+        features=sorted(required_features),
         native_code=sorted(abis),
         locales=locales,
         signer_sha256=signer_sha,

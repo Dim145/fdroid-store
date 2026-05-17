@@ -93,9 +93,47 @@ async def serve_icon(filename: str) -> Response:
     key = f"icons/{filename}"
     if not await storage.exists(key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
+    return await _stream_or_redirect(key, content_type=_content_type_for(filename))
+
+
+# Screenshots and other localized media: served from
+# ``<package>/<locale>/<kind>/<filename>``. The path on disk matches the URL
+# layout the F-Droid client expects. We restrict ``kind`` to known shapes to
+# avoid being a generic static-file server.
+_ALLOWED_MEDIA_KINDS = {
+    "phoneScreenshots",
+    "sevenInchScreenshots",
+    "tenInchScreenshots",
+    "wearScreenshots",
+    "tvScreenshots",
+}
+
+
+@router.get("/{package}/{locale}/{kind}/{filename}")
+async def serve_media(
+    package: str, locale: str, kind: str, filename: str
+) -> Response:
+    if kind not in _ALLOWED_MEDIA_KINDS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    # Defensive: refuse traversal-y components
+    for seg in (package, locale, kind, filename):
+        if not seg or "/" in seg or seg.startswith("."):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    key = f"{package}/{locale}/{kind}/{filename}"
+    storage = get_storage()
+    if not await storage.exists(key):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return await _stream_or_redirect(key, content_type=_content_type_for(filename))
+
+
+def _content_type_for(filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower()
-    content_type = {"png": "image/png", "webp": "image/webp", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, "application/octet-stream")
-    return await _stream_or_redirect(key, content_type=content_type)
+    return {
+        "png": "image/png",
+        "webp": "image/webp",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+    }.get(ext, "application/octet-stream")
 
 
 # --------------------------------------------------------------------------

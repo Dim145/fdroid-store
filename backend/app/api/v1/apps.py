@@ -3,14 +3,21 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, get_current_user_optional
+from app.api.v1.apks import (
+    attach_apk_to_app,
+    parse_or_400,
+    save_upload_to_temp,
+)
 from app.models.app import App, AppStatus, AppVisibility, Category
+from app.models.apk import ApkStatus
 from app.models.user import User, UserRole
 from app.schemas.app import AppCreate, AppDetail, AppRead, AppUpdate
+from app.services.queue import enqueue_reindex
 
 router = APIRouter()
 
@@ -58,6 +65,104 @@ async def list_apps(
     stmt = stmt.limit(min(limit, 200)).offset(offset)
     rows = (await db.execute(stmt)).scalars().unique().all()
     return [AppRead.model_validate(a) for a in rows]
+
+
+@router.post("/with-apk", response_model=AppDetail, status_code=status.HTTP_201_CREATED)
+async def create_app_with_apk(
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    package_name: str | None = Form(None),
+    summary: str | None = Form(None),
+    description: str | None = Form(None),
+    license: str | None = Form(None),
+    website: str | None = Form(None),
+    source_code: str | None = Form(None),
+    issue_tracker: str | None = Form(None),
+    author_name: str | None = Form(None),
+    visibility: str = Form("public"),
+) -> AppDetail:
+    """Create an App + attach an APK in one multipart request.
+
+    If ``package_name`` is empty, it is taken from the APK manifest. If it is
+    provided, it must match. The visibility string is validated against
+    AppVisibility.
+    """
+    try:
+        visibility_enum = AppVisibility(visibility)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="visibility must be 'public' or 'private'",
+        ) from exc
+
+    tmp_path = await save_upload_to_temp(file)
+    try:
+        meta = await parse_or_400(tmp_path)
+        pkg = (package_name or meta.package_name).strip()
+        if pkg != meta.package_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"package_name {pkg!r} does not match the APK manifest "
+                    f"({meta.package_name!r})"
+                ),
+            )
+        if (
+            await db.execute(select(App).where(App.package_name == pkg))
+        ).scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Package {pkg} already exists",
+            )
+
+        app = App(
+            package_name=pkg,
+            name=name,
+            summary=summary,
+            description=description,
+            license=license,
+            website=website,
+            source_code=source_code,
+            issue_tracker=issue_tracker,
+            author_name=author_name,
+            visibility=visibility_enum,
+            status=AppStatus.DRAFT,
+            owner_id=user.id,
+            apks=[],
+            screenshots=[],  # initialise to avoid lazy-load during index build
+        )
+        db.add(app)
+        await db.flush()
+
+        apk = await attach_apk_to_app(
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+        )
+        if apk.status == ApkStatus.PUBLISHED:
+            await enqueue_reindex()
+
+        # Reload with eager relationships for the response.
+        # populate_existing forces SQLAlchemy to overwrite the identity-map
+        # cache so the just-added APK shows up in app.apks.
+        result = (
+            await db.execute(
+                select(App)
+                .execution_options(populate_existing=True)
+                .options(
+                    selectinload(App.categories),
+                    selectinload(App.apks),
+                    selectinload(App.owner),
+                    selectinload(App.screenshots),
+                )
+                .where(App.id == app.id)
+            )
+        ).scalar_one()
+        payload = AppDetail.model_validate(result)
+        payload.owner_username = result.owner.username if result.owner else None
+        return payload
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @router.post("", response_model=AppRead, status_code=status.HTTP_201_CREATED)
@@ -108,6 +213,7 @@ async def _load_app_or_404(db, app_id_or_pkg: str) -> App:
         selectinload(App.categories),
         selectinload(App.apks),
         selectinload(App.owner),
+        selectinload(App.screenshots),
     )
     try:
         pk = uuid.UUID(app_id_or_pkg)

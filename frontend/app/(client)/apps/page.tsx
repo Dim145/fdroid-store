@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { AppIcon } from "@/components/app-icon";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -63,10 +64,16 @@ export default function AppsBrowsePage() {
             <Link key={app.id} href={`/apps/${app.package_name}`}>
               <Card className="h-full transition-shadow hover:shadow-md">
                 <CardHeader>
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <CardTitle>{app.name}</CardTitle>
-                      <CardDescription className="font-mono text-xs">
+                  <div className="flex items-start gap-3">
+                    <AppIcon
+                      iconPath={app.icon_path}
+                      name={app.name}
+                      size={56}
+                      version={app.updated_at}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <CardTitle className="truncate">{app.name}</CardTitle>
+                      <CardDescription className="truncate font-mono text-xs">
                         {app.package_name}
                       </CardDescription>
                     </div>

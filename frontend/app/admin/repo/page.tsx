@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type KeystoreInfo, type RepoConfigInfo } from "@/lib/api";
 
+const REPO_URL = process.env.NEXT_PUBLIC_REPO_URL || "http://localhost:8080/fdroid/repo";
+
 export default function AdminRepoPage() {
   const [repo, setRepo] = useState<RepoConfigInfo | null>(null);
   const [keystore, setKeystore] = useState<KeystoreInfo | null>(null);
@@ -16,6 +18,7 @@ export default function AdminRepoPage() {
   const [addr, setAddr] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [uploadingIcon, setUploadingIcon] = useState(false);
 
   async function refresh() {
     try {
@@ -41,6 +44,26 @@ export default function AdminRepoPage() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed");
     }
+  }
+
+  async function uploadIcon(file: File) {
+    setErr(null); setMsg(null); setUploadingIcon(true);
+    try {
+      await api.admin.uploadRepoIcon(file);
+      setMsg("Icon uploaded. Reindex queued.");
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Icon upload failed");
+    } finally {
+      setUploadingIcon(false);
+    }
+  }
+
+  function iconUrl(): string | null {
+    if (!repo?.icon_path) return null;
+    const basename = repo.icon_path.split("/").pop();
+    if (!basename) return null;
+    return `${REPO_URL}/icons/${basename}?v=${repo.last_index_version}`;
   }
 
   if (!repo) return <p className="text-muted-foreground">Loading…</p>;
@@ -78,6 +101,38 @@ export default function AdminRepoPage() {
               <Button type="submit">Save</Button>
             </div>
           </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Repository icon</CardTitle>
+          <CardDescription>
+            Shown by F-Droid clients. PNG, JPEG or WebP, resized to 512×512 max.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-4">
+            {iconUrl() && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={iconUrl()!} alt="repo icon" className="h-16 w-16 rounded border bg-muted" />
+            )}
+            <div className="flex-1">
+              <Input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={uploadingIcon}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) uploadIcon(f);
+                  e.target.value = "";
+                }}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Current key: <code className="font-mono">{repo.icon_path || "—"}</code>
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

@@ -4,7 +4,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+import io
+from datetime import datetime as _dt
+
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from PIL import Image
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import selectinload
 
@@ -280,6 +284,93 @@ async def trigger_reindex(
 ) -> dict:
     await enqueue_reindex()
     return {"queued": True}
+
+
+@router.post("/apks/rescan", response_model=dict)
+async def rescan_all_apks(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+) -> dict:
+    """Re-parse every stored APK and refresh extracted metadata + icons.
+
+    Useful after a parser bugfix. For each app, the icon is also
+    re-extracted from the latest published APK — unless the app already
+    has a custom icon, which is preserved.
+    """
+    from app.services.rescan_service import rescan_all_apps
+
+    result = await rescan_all_apps(db)
+    await enqueue_reindex()
+    return {
+        "rescanned_apks": result.rescanned_apks,
+        "icons_refreshed": result.icons_refreshed,
+        "failed": result.failed,
+    }
+
+
+@router.post("/apps/{app_id}/rescan", response_model=dict)
+async def rescan_one_app(
+    app_id: uuid.UUID,
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+) -> dict:
+    """Rescan one app's APKs and refresh its icon. Same semantics as the
+    global rescan but limited to a single app — used by the admin UI's
+    per-row button."""
+    from app.services.rescan_service import rescan_app
+
+    target = (
+        await db.execute(
+            select(App).options(selectinload(App.apks)).where(App.id == app_id)
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+
+    result = await rescan_app(db, target)
+    await enqueue_reindex()
+    return {
+        "rescanned_apks": result.rescanned_apks,
+        "icons_refreshed": result.icons_refreshed,
+        "failed": result.failed,
+    }
+
+
+@router.post("/repo/icon", response_model=RepoConfigRead)
+async def upload_repo_icon(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+    file: UploadFile = File(...),
+) -> RepoConfigRead:
+    """Upload a custom repo icon. PNG output, max 512×512."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    try:
+        with Image.open(io.BytesIO(raw)) as probe:
+            probe.verify()
+        img = Image.open(io.BytesIO(raw))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is not a valid image",
+        ) from exc
+
+    img = img.convert("RGBA")
+    img.thumbnail((512, 512), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+
+    storage = get_storage()
+    ts = int(_dt.now().timestamp())
+    key = f"icons/repo-icon-{ts}.png"
+    await storage.put(key, buf.getvalue(), content_type="image/png")
+
+    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one()
+    config.icon_path = key
+    await db.flush()
+    await enqueue_reindex()
+    return RepoConfigRead.model_validate(config)
 
 
 # --------------------------------------------------------------------------

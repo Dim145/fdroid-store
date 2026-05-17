@@ -5,7 +5,7 @@ ensures every model is registered against the declarative metadata, which is
 required for ``alembic --autogenerate`` and for ``Base.metadata.create_all``.
 """
 from app.models.api_key import ApiKey
-from app.models.app import App, AppCategory, Category, Localization
+from app.models.app import App, AppCategory, AppScreenshot, Category, Localization
 from app.models.apk import Apk
 from app.models.audit import DownloadEvent
 from app.models.repo_config import RepoConfig
@@ -16,6 +16,7 @@ __all__ = [
     "ApiKey",
     "App",
     "AppCategory",
+    "AppScreenshot",
     "Category",
     "DownloadEvent",
     "Localization",

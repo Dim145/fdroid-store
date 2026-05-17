@@ -64,6 +64,9 @@ class App(Base, IdMixin, TimestampMixin):
     author_email: Mapped[str | None] = mapped_column(String(255))
 
     icon_path: Mapped[str | None] = mapped_column(String(512))  # storage key
+    # True when the admin uploaded a custom icon: subsequent APK uploads
+    # MUST NOT overwrite the icon. Cleared when the admin reverts to auto.
+    icon_is_custom: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     feature_graphic_path: Mapped[str | None] = mapped_column(String(512))
 
     visibility: Mapped[AppVisibility] = mapped_column(
@@ -102,6 +105,12 @@ class App(Base, IdMixin, TimestampMixin):
     )
     categories = relationship("Category", secondary=app_categories_table, back_populates="apps")
     localizations = relationship("Localization", back_populates="app", cascade="all, delete-orphan")
+    screenshots = relationship(
+        "AppScreenshot",
+        back_populates="app",
+        cascade="all, delete-orphan",
+        order_by="AppScreenshot.display_order",
+    )
 
 
 class Category(Base, IdMixin, TimestampMixin):
@@ -139,3 +148,25 @@ class Localization(Base, IdMixin, TimestampMixin):
     video: Mapped[str | None] = mapped_column(String(512))
 
     app = relationship("App", back_populates="localizations")
+
+
+class AppScreenshot(Base, IdMixin, TimestampMixin):
+    """A promotional image (screenshot) for an app.
+
+    Stored at ``<package>/<locale>/phoneScreenshots/<id>.png`` so the F-Droid
+    client can fetch it directly via its expected path layout.
+    """
+    __tablename__ = "app_screenshots"
+
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("apps.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    locale: Mapped[str] = mapped_column(String(16), default="en-US", nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(nullable=False)
+    width: Mapped[int | None] = mapped_column()
+    height: Mapped[int | None] = mapped_column()
+    display_order: Mapped[int] = mapped_column(default=0, nullable=False)
+
+    app = relationship("App", back_populates="screenshots")

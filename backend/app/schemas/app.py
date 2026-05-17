@@ -42,6 +42,35 @@ class ApkRead(BaseModel):
     created_at: datetime
 
 
+class ApkInspect(BaseModel):
+    """Returned by ``POST /apks/inspect`` — parsed metadata without DB writes."""
+    package_name: str
+    app_name: str | None
+    version_code: int
+    version_name: str
+    min_sdk: int | None
+    target_sdk: int | None
+    sha256: str
+    size_bytes: int
+    signer_sha256: str
+    permissions: list[str]
+    native_code: list[str]
+    has_icon: bool
+
+
+class ScreenshotRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    storage_key: str
+    sha256: str
+    size_bytes: int
+    width: int | None
+    height: int | None
+    locale: str
+    display_order: int
+
+
 class AppCreate(BaseModel):
     package_name: str = Field(min_length=3, max_length=255, pattern=r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
     name: str = Field(min_length=1, max_length=255)
@@ -88,6 +117,7 @@ class AppRead(BaseModel):
     issue_tracker: str | None
     author_name: str | None
     icon_path: str | None
+    icon_is_custom: bool = False
     visibility: AppVisibility
     status: AppStatus
     suggested_version_code: int | None
@@ -100,4 +130,5 @@ class AppRead(BaseModel):
 
 class AppDetail(AppRead):
     apks: list[ApkRead] = Field(default_factory=list)
+    screenshots: list["ScreenshotRead"] = Field(default_factory=list)
     owner_username: str | None = None

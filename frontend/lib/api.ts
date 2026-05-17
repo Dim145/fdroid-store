@@ -8,6 +8,20 @@
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
+export const REPO_URL =
+  process.env.NEXT_PUBLIC_REPO_URL?.replace(/\/$/, "") ||
+  "http://localhost:8080/fdroid/repo";
+
+/** Build a full URL for a storage key served under the F-Droid repo path.
+ *  Storage keys mirror the repo URL layout (icons/foo.png →
+ *  /fdroid/repo/icons/foo.png). Versioning via a query param helps browsers
+ *  pick up icon swaps without a hard refresh. */
+export function mediaUrl(storageKey: string | null | undefined, version?: number | string): string | null {
+  if (!storageKey) return null;
+  const v = version != null ? `?v=${encodeURIComponent(String(version))}` : "";
+  return `${REPO_URL}/${storageKey}${v}`;
+}
+
 const ACCESS_TOKEN_KEY = "fdroid.access";
 const REFRESH_TOKEN_KEY = "fdroid.refresh";
 
@@ -188,7 +202,22 @@ export const api = {
       }),
     create: (payload: AppCreate) =>
       apiFetch<AppSummary>("/api/v1/apps", { method: "POST", body: JSON.stringify(payload) }),
-    update: (id: string, payload: Partial<AppCreate>) =>
+    createWithApk: (payload: AppCreateWithApk) => {
+      const fd = new FormData();
+      fd.append("file", payload.file);
+      fd.append("name", payload.name);
+      if (payload.package_name) fd.append("package_name", payload.package_name);
+      if (payload.summary) fd.append("summary", payload.summary);
+      if (payload.description) fd.append("description", payload.description);
+      if (payload.license) fd.append("license", payload.license);
+      if (payload.website) fd.append("website", payload.website);
+      if (payload.source_code) fd.append("source_code", payload.source_code);
+      if (payload.issue_tracker) fd.append("issue_tracker", payload.issue_tracker);
+      if (payload.author_name) fd.append("author_name", payload.author_name);
+      if (payload.visibility) fd.append("visibility", payload.visibility);
+      return apiFetch<AppDetail>("/api/v1/apps/with-apk", { method: "POST", body: fd });
+    },
+    update: (id: string, payload: AppUpdatePayload) =>
       apiFetch<AppSummary>(`/api/v1/apps/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
     remove: (id: string) => apiFetch<void>(`/api/v1/apps/${id}`, { method: "DELETE" }),
     uploadApk: (appId: string, file: File) => {
@@ -196,7 +225,40 @@ export const api = {
       fd.append("file", file);
       return apiFetch<Apk>(`/api/v1/apks/upload/${appId}`, { method: "POST", body: fd });
     },
+    inspectApk: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch<ApkInspect>("/api/v1/apks/inspect", { method: "POST", body: fd });
+    },
+    deleteApk: (apkId: string) =>
+      apiFetch<void>(`/api/v1/apks/${apkId}`, { method: "DELETE" }),
     myApps: () => apiFetch<Array<AppSummary>>("/api/v1/me/apps"),
+    uploadIcon: (appId: string, file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch<{ icon_path: string; icon_is_custom: boolean }>(
+        `/api/v1/apps/${appId}/icon`,
+        { method: "POST", body: fd },
+      );
+    },
+    revertIcon: (appId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/icon`, { method: "DELETE" }),
+    listScreenshots: (appId: string) =>
+      apiFetch<Screenshot[]>(`/api/v1/apps/${appId}/screenshots`, {
+        anonymous: !getAccessToken(),
+      }),
+    uploadScreenshots: (appId: string, files: File[]) => {
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      return apiFetch<Screenshot[]>(`/api/v1/apps/${appId}/screenshots`, {
+        method: "POST",
+        body: fd,
+      });
+    },
+    deleteScreenshot: (appId: string, screenshotId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/screenshots/${screenshotId}`, {
+        method: "DELETE",
+      }),
   },
 
   categories: {
@@ -234,9 +296,24 @@ export const api = {
     updateRepo: (payload: Partial<RepoConfigInfo>) =>
       apiFetch<RepoConfigInfo>("/api/v1/admin/repo", { method: "PATCH", body: JSON.stringify(payload) }),
     reindex: () => apiFetch<{ queued: boolean }>("/api/v1/admin/repo/reindex", { method: "POST" }),
+    rescanAll: () =>
+      apiFetch<RescanResult>("/api/v1/admin/apks/rescan", { method: "POST" }),
+    rescanApp: (appId: string) =>
+      apiFetch<RescanResult>(`/api/v1/admin/apps/${appId}/rescan`, { method: "POST" }),
+    uploadRepoIcon: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch<RepoConfigInfo>("/api/v1/admin/repo/icon", { method: "POST", body: fd });
+    },
     stats: () =>
       apiFetch<AdminStats>("/api/v1/admin/stats"),
   },
+};
+
+export type RescanResult = {
+  rescanned_apks: number;
+  icons_refreshed: number;
+  failed: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -275,6 +352,7 @@ export type AppSummary = {
   issue_tracker: string | null;
   author_name: string | null;
   icon_path: string | null;
+  icon_is_custom: boolean;
   visibility: "public" | "private";
   status: "draft" | "pending_review" | "published" | "rejected" | "archived";
   suggested_version_code: number | null;
@@ -283,6 +361,17 @@ export type AppSummary = {
   created_at: string;
   updated_at: string;
   categories: Category[];
+};
+
+export type Screenshot = {
+  id: string;
+  storage_key: string;
+  sha256: string;
+  size_bytes: number;
+  width: number | null;
+  height: number | null;
+  locale: string;
+  display_order: number;
 };
 
 export type Apk = {
@@ -304,7 +393,11 @@ export type Apk = {
   created_at: string;
 };
 
-export type AppDetail = AppSummary & { apks: Apk[]; owner_username: string | null };
+export type AppDetail = AppSummary & {
+  apks: Apk[];
+  screenshots: Screenshot[];
+  owner_username: string | null;
+};
 export type AppCreate = {
   package_name: string;
   name: string;
@@ -317,6 +410,26 @@ export type AppCreate = {
   author_name?: string;
   visibility?: "public" | "private";
   category_ids?: string[];
+};
+export type AppCreateWithApk = Omit<AppCreate, "package_name" | "category_ids"> & {
+  package_name?: string;
+  file: File;
+};
+export type AppUpdatePayload = Partial<Omit<AppCreate, "package_name">>;
+
+export type ApkInspect = {
+  package_name: string;
+  app_name: string | null;
+  version_code: number;
+  version_name: string;
+  min_sdk: number | null;
+  target_sdk: number | null;
+  sha256: string;
+  size_bytes: number;
+  signer_sha256: string;
+  permissions: string[];
+  native_code: string[];
+  has_icon: boolean;
 };
 
 export type AdminCreateUser = {
