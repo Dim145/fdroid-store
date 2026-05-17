@@ -17,6 +17,10 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "passlib[bcrypt]>=1.7",
+    # passlib 1.7.4's bcrypt wrapper breaks against bcrypt 5.x (the new
+    # ``__about__`` attribute was removed). Cap at 4.x until passlib ships
+    # a fix.
+    "bcrypt<5",
     "python-jose[cryptography]>=3.3",
     "python-multipart>=0.0.20",
     "authlib>=1.3",

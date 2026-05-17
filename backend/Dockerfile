@@ -17,33 +17,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
+# Copy only the project metadata first so the dependency install layer is
+# cached as long as pyproject.toml doesn't change. We need a minimal package
+# tree for ``pip install .`` to succeed without copying the whole app.
 COPY pyproject.toml ./
+RUN mkdir -p app && touch app/__init__.py
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip wheel setuptools && \
-    /opt/venv/bin/pip install \
-        "fastapi[standard]==0.115.6" \
-        "uvicorn[standard]==0.32.1" \
-        "sqlalchemy[asyncio]==2.0.36" \
-        "alembic==1.14.0" \
-        "asyncpg==0.30.0" \
-        "psycopg2-binary==2.9.10" \
-        "pydantic==2.10.3" \
-        "pydantic-settings==2.7.0" \
-        "passlib==1.7.4" \
-        "bcrypt==4.2.1" \
-        "python-jose[cryptography]==3.3.0" \
-        "python-multipart==0.0.20" \
-        "authlib==1.3.2" \
-        "httpx==0.28.1" \
-        "arq==0.26.3" \
-        "redis==5.2.1" \
-        "androguard==4.1.2" \
-        "Pillow==11.0.0" \
-        "aiofiles==24.1.0" \
-        "aioboto3==13.3.0" \
-        "email-validator==2.2.0" \
-        "structlog==24.4.0" \
-        "itsdangerous==2.2.0"
+    /opt/venv/bin/pip install .
 
 # ============================================================================
 # Runtime image
