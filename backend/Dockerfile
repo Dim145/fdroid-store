@@ -1,0 +1,82 @@
+# syntax=docker/dockerfile:1.6
+# ============================================================================
+# Builder: install Python deps in a venv we can copy later.
+# ============================================================================
+FROM python:3.12-slim-bookworm AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY pyproject.toml ./
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip wheel setuptools && \
+    /opt/venv/bin/pip install \
+        "fastapi[standard]==0.115.6" \
+        "uvicorn[standard]==0.32.1" \
+        "sqlalchemy[asyncio]==2.0.36" \
+        "alembic==1.14.0" \
+        "asyncpg==0.30.0" \
+        "psycopg2-binary==2.9.10" \
+        "pydantic==2.10.3" \
+        "pydantic-settings==2.7.0" \
+        "passlib==1.7.4" \
+        "bcrypt==4.2.1" \
+        "python-jose[cryptography]==3.3.0" \
+        "python-multipart==0.0.20" \
+        "authlib==1.3.2" \
+        "httpx==0.28.1" \
+        "arq==0.26.3" \
+        "redis==5.2.1" \
+        "androguard==4.1.2" \
+        "Pillow==11.0.0" \
+        "aiofiles==24.1.0" \
+        "aioboto3==13.3.0" \
+        "email-validator==2.2.0" \
+        "structlog==24.4.0" \
+        "itsdangerous==2.2.0"
+
+# ============================================================================
+# Runtime image
+# ============================================================================
+FROM python:3.12-slim-bookworm AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    ANDROID_BUILD_TOOLS_VERSION=34.0.0
+
+# Java for jarsigner / keytool; Android build-tools for apksigner.
+# We install only the minimal set (build-tools + platform-tools) via the
+# command-line tools, keeping the image as small as we can.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jdk-headless \
+        ca-certificates \
+        curl \
+        unzip \
+        libpq5 \
+        libjpeg62-turbo \
+        zlib1g \
+        apksigner \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /app
+COPY . /app
+
+# Pre-create data dirs (volumes will mount over them in compose)
+RUN mkdir -p /data/storage /data/keystores
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,106 @@
+name: fdroid-store
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fdroid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-fdroid}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fdroid}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - storage_data:/data/storage
+      - keystore_data:/data/keystores
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "arq", "app.workers.tasks.WorkerSettings"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - storage_data:/data/storage
+      - keystore_data:/data/keystores
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_REPO_URL: ${PUBLIC_REPO_URL:-http://localhost:8080/fdroid/repo}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_REPO_URL: ${PUBLIC_REPO_URL:-http://localhost:8080/fdroid/repo}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - storage_data:/data/storage:ro
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  storage_data:
+  keystore_data:
