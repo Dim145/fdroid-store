@@ -394,11 +394,18 @@ async def admin_stats(
     ).scalar_one()
     total_api_keys = (await db.execute(select(func.count(ApiKey.id)))).scalar_one()
 
+    # Join with App + User so the admin UI can render names instead of UUIDs.
+    # Both joins are left-outer because anon downloads and deleted apps/users
+    # still belong in the history.
     recent_downloads = (
         await db.execute(
-            select(DownloadEvent).order_by(desc(DownloadEvent.created_at)).limit(20)
+            select(DownloadEvent, App.name, User.username)
+            .join(App, DownloadEvent.app_id == App.id, isouter=True)
+            .join(User, DownloadEvent.user_id == User.id, isouter=True)
+            .order_by(desc(DownloadEvent.created_at))
+            .limit(20)
         )
-    ).scalars().all()
+    ).all()
 
     return {
         "total_users": total_users,
@@ -409,12 +416,14 @@ async def admin_stats(
         "total_api_keys": total_api_keys,
         "recent_downloads": [
             {
-                "id": str(r.id),
-                "apk_id": str(r.apk_id),
-                "app_id": str(r.app_id),
-                "user_id": str(r.user_id) if r.user_id else None,
-                "created_at": r.created_at.isoformat(),
+                "id": str(ev.id),
+                "apk_id": str(ev.apk_id),
+                "app_id": str(ev.app_id),
+                "app_name": app_name,
+                "user_id": str(ev.user_id) if ev.user_id else None,
+                "username": username,
+                "created_at": ev.created_at.isoformat(),
             }
-            for r in recent_downloads
+            for ev, app_name, username in recent_downloads
         ],
     }

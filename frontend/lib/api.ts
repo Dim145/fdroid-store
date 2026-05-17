@@ -505,7 +505,9 @@ export type AdminStats = {
     id: string;
     apk_id: string;
     app_id: string;
+    app_name: string | null;
     user_id: string | null;
+    username: string | null;
     created_at: string;
   }>;
 };

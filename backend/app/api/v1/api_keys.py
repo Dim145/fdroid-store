@@ -15,12 +15,34 @@ from app.schemas.api_key import ApiKeyCreate, ApiKeyCreated, ApiKeyRead
 
 router = APIRouter()
 
+# Number of revoked keys to retain per user. Keeping a couple around is useful
+# for audit ("when did I revoke that key?"); past that the list just clutters
+# the account page.
+_REVOKED_HISTORY_KEEP = 3
+
+
+async def _trim_revoked_keys(db, user_id: uuid.UUID) -> None:
+    """Drop revoked keys for this user beyond the `_REVOKED_HISTORY_KEEP`
+    most recent, so the account page doesn't accumulate stale entries."""
+    revoked = (
+        await db.execute(
+            select(ApiKey)
+            .where(ApiKey.user_id == user_id, ApiKey.revoked_at.is_not(None))
+            .order_by(ApiKey.revoked_at.desc())
+        )
+    ).scalars().all()
+    for stale in revoked[_REVOKED_HISTORY_KEEP:]:
+        await db.delete(stale)
+
 
 @router.get("", response_model=list[ApiKeyRead])
 async def list_api_keys(
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
 ) -> list[ApiKeyRead]:
+    # Opportunistic cleanup so historical pollution disappears on the next
+    # page load, not only after the user revokes another key.
+    await _trim_revoked_keys(db, user.id)
     rows = (
         await db.execute(
             select(ApiKey).where(ApiKey.user_id == user.id).order_by(ApiKey.created_at.desc())
@@ -73,4 +95,6 @@ async def revoke_api_key(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
     if key.revoked_at is None:
         key.revoked_at = datetime.now(UTC)
+    await db.flush()
+    await _trim_revoked_keys(db, user.id)
     await db.flush()

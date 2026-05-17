@@ -57,10 +57,10 @@ export default function AdminDashboardPage() {
           {stats?.recent_downloads.map((d) => (
             <li key={d.id} className="flex items-center justify-between gap-3 py-2.5 text-xs">
               <span className="font-mono text-ink-soft">{new Date(d.created_at).toLocaleString()}</span>
-              <span className="font-mono text-ink-mute">
-                app <span className="text-ink">{d.app_id.slice(0, 8)}</span>
-                {" · "}
-                user <span className="text-ink">{d.user_id?.slice(0, 8) ?? "anon"}</span>
+              <span className="text-ink-mute">
+                <span className="text-ink">{d.app_name ?? "deleted app"}</span>
+                <span className="font-mono"> · </span>
+                <span className="text-ink">{d.username ?? (d.user_id ? "deleted user" : "anon")}</span>
               </span>
             </li>
           ))}
