@@ -1,6 +1,10 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind v4 entrypoint. The three legacy ``@tailwind base/components/
+ * utilities;`` directives are replaced by this single import. The JS theme
+ * config is kept verbatim — pointing at it via ``@config`` avoids rewriting
+ * the Material-3 colour scheme into CSS-first ``@theme`` syntax just for the
+ * upgrade. The v4 engine reads the file the same way v3 did. */
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
 /* ============================================================================
    Material 3-flavored design tokens

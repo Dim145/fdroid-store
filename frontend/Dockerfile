@@ -2,7 +2,7 @@
 # ============================================================================
 # Build stage — Next.js produces a static export under ``out/``.
 # ============================================================================
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 
 # Install deps first so this layer caches as long as the manifest doesn't
@@ -28,7 +28,7 @@ RUN npm run build
 # hosts. The base image runs as a non-root user and binds to 8080 so it
 # slots into restricted environments (no CAP_NET_BIND_SERVICE needed).
 # ============================================================================
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner
+FROM nginxinc/nginx-unprivileged:1.29-alpine AS runner
 
 # Static bundle.
 COPY --from=builder /app/out /usr/share/nginx/html
