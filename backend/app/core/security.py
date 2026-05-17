@@ -6,22 +6,48 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+import jwt as _jwt
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
 
 from app.core.config import settings
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Re-exported so other modules can ``except security.JWTError`` without
+# pulling PyJWT directly. Its hierarchy: InvalidTokenError covers expired,
+# bad-signature, decode-failure, … so it's the right catch-all here.
+JWTError = _jwt.InvalidTokenError
+
+# ``Argon2Hasher`` is listed first so new hashes use argon2 (memory-hard,
+# stronger by today's standard); ``BcryptHasher`` stays in the tuple so
+# rows hashed with the old passlib+bcrypt setup keep verifying. pwdlib
+# dispatches by hash prefix, so the upgrade is transparent to callers.
+_password_hash = PasswordHash((Argon2Hasher(), BcryptHasher()))
+
 
 # --------------------------------------------------------------------------
 # Passwords
 # --------------------------------------------------------------------------
+def _bcrypt_safe(password: str) -> str:
+    """bcrypt 5 raises ``ValueError`` on inputs > 72 bytes (it used to
+    silently truncate). Argon2 has no such limit, but for legacy hashes
+    verified via the bcrypt path we still need to cap. Truncating on the
+    bytes boundary (and dropping a stray UTF-8 continuation) matches what
+    passlib effectively did for the original hash, so old rows verify
+    identically.
+    """
+    encoded = password.encode("utf-8")
+    if len(encoded) <= 72:
+        return password
+    return encoded[:72].decode("utf-8", errors="ignore")
+
+
 def hash_password(password: str) -> str:
-    return _pwd_context.hash(password)
+    return _password_hash.hash(_bcrypt_safe(password))
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    return _pwd_context.verify(password, hashed)
+    return _password_hash.verify(_bcrypt_safe(password), hashed)
 
 
 # --------------------------------------------------------------------------
@@ -37,7 +63,7 @@ def _create_token(subject: str, expires_delta: timedelta, token_type: str, extra
     }
     if extra:
         payload.update(extra)
-    return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+    return _jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
 
 
 def create_access_token(subject: str, extra: dict[str, Any] | None = None) -> str:
@@ -59,7 +85,7 @@ def create_refresh_token(subject: str) -> str:
 
 def decode_token(token: str) -> dict[str, Any]:
     """Decode + validate a JWT. Raises ``JWTError`` on failure."""
-    return jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+    return _jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
 
 
 # --------------------------------------------------------------------------
