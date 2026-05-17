@@ -15,10 +15,7 @@ export function AuthGuard({ children, requireAdmin = false }: Props) {
   const { user, loading, fetchMe } = useAuth();
 
   useEffect(() => {
-    if (user === null && !loading) {
-      // Either we have never loaded, or we lost the session. Try to (re)hydrate.
-      fetchMe();
-    }
+    if (user === null && !loading) fetchMe();
   }, [user, loading, fetchMe]);
 
   useEffect(() => {
@@ -35,13 +32,21 @@ export function AuthGuard({ children, requireAdmin = false }: Props) {
 
   if (loading || !user) {
     return (
-      <div className="flex h-32 items-center justify-center text-muted-foreground">
-        Loading…
+      <div className="flex h-40 items-center justify-center">
+        <Spinner />
       </div>
     );
   }
-  if (requireAdmin && user.role !== "admin") {
-    return null;
-  }
+  if (requireAdmin && user.role !== "admin") return null;
   return <>{children}</>;
+}
+
+function Spinner() {
+  return (
+    <div
+      className="h-6 w-6 animate-spin rounded-full border-2 border-outline-soft border-t-primary"
+      role="status"
+      aria-label="Loading"
+    />
+  );
 }

@@ -10,15 +10,30 @@ type Props = {
   name: string;
   size?: number;
   className?: string;
-  /** Cache-buster — bump when the underlying icon may have changed. */
+  /** Bump to bust the browser cache when the bytes behind a key may have changed. */
   version?: string | number;
+  /** Play Store-ish rounded corners by default. */
+  shape?: "rounded" | "square" | "circle";
 };
 
-/** Square app icon with a deterministic monogram fallback if the image fails
- *  to load (or is missing). Renders an <img> so it works without next/image. */
-export function AppIcon({ iconPath, name, size = 48, className, version }: Props) {
+/* App icon with a deterministic gradient fallback. We deliberately don't use
+ * next/image so this can be rendered without a configured loader and survives
+ * being pulled from a sibling origin. Failed loads gracefully degrade to a
+ * letter-monogram on a hue picked from the package/app name. */
+export function AppIcon({
+  iconPath,
+  name,
+  size = 56,
+  className,
+  version,
+  shape = "rounded",
+}: Props) {
   const [failed, setFailed] = useState(false);
   const url = mediaUrl(iconPath, version);
+
+  // 22% radius matches Material You / Play Store app icon styling at any size.
+  const radius =
+    shape === "circle" ? "9999px" : shape === "square" ? "6px" : "22%";
 
   if (url && !failed) {
     return (
@@ -29,15 +44,16 @@ export function AppIcon({ iconPath, name, size = 48, className, version }: Props
         width={size}
         height={size}
         loading="lazy"
+        decoding="async"
         onError={() => setFailed(true)}
-        className={cn("rounded-md bg-muted object-cover", className)}
-        style={{ width: size, height: size }}
+        className={cn("bg-surface-2 object-cover", className)}
+        style={{ width: size, height: size, borderRadius: radius }}
       />
     );
   }
 
-  // Deterministic background colour from the name so the placeholder is stable
-  // per app instead of jumping around on each render.
+  // Same hash → same hue per app, gives a stable fallback that doesn't jump
+  // around on rerenders.
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   const hue = Math.abs(h) % 360;
@@ -46,14 +62,16 @@ export function AppIcon({ iconPath, name, size = 48, className, version }: Props
   return (
     <div
       className={cn(
-        "flex items-center justify-center rounded-md font-semibold text-white",
+        "flex items-center justify-center font-semibold text-white",
         className,
       )}
       style={{
         width: size,
         height: size,
-        backgroundColor: `hsl(${hue}, 55%, 45%)`,
-        fontSize: size * 0.45,
+        borderRadius: radius,
+        background: `linear-gradient(135deg, hsl(${hue}, 60%, 45%), hsl(${(hue + 35) % 360}, 70%, 35%))`,
+        fontSize: size * 0.42,
+        letterSpacing: "-0.03em",
       }}
       aria-label={`${name} icon`}
     >

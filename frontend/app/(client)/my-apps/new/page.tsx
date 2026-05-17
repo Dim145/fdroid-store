@@ -1,5 +1,6 @@
 "use client";
 
+import { Upload, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -7,7 +8,6 @@ import { useState } from "react";
 import { AuthGuard } from "@/components/auth-guard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type ApkInspect } from "@/lib/api";
@@ -20,7 +20,6 @@ function NewAppInner() {
   const [inspecting, setInspecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // form state — pre-filled from APK when available
   const [name, setName] = useState("");
   const [packageName, setPackageName] = useState("");
   const [summary, setSummary] = useState("");
@@ -41,7 +40,6 @@ function NewAppInner() {
     try {
       const info = await api.apps.inspectApk(picked);
       setInspect(info);
-      // pre-fill from manifest, but don't overwrite anything the user typed
       if (!packageName) setPackageName(info.package_name);
       if (!name && info.app_name) setName(info.app_name);
     } catch (e) {
@@ -55,11 +53,10 @@ function NewAppInner() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!file || !inspect) {
-      setError("Please pick an APK first");
+      setError("Drop an APK first.");
       return;
     }
-    setError(null);
-    setSubmitting(true);
+    setError(null); setSubmitting(true);
     try {
       const created = await api.apps.createWithApk({
         file,
@@ -83,172 +80,184 @@ function NewAppInner() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div>
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">New app</h1>
-          <p className="text-muted-foreground">
-            Pick an APK file — most fields will be filled in for you.
-          </p>
+          <Link
+            href="/my-apps"
+            className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-ink-soft hover:text-ink"
+          >
+            <ArrowLeft className="h-4 w-4" /> My apps
+          </Link>
+          <h1 className="text-3xl font-bold tracking-tight text-ink md:text-4xl">New release</h1>
+          <p className="mt-1 text-ink-soft">Drop an APK and we&apos;ll pre-fill what we can.</p>
         </div>
-        <Button asChild variant="ghost">
-          <Link href="/my-apps">← Back</Link>
-        </Button>
-      </div>
+      </header>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <p className="mb-4 rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
+      )}
 
       <form onSubmit={onSubmit} className="space-y-6">
-        {/* ----- APK -------------------------------------------------- */}
-        <Card>
-          <CardHeader>
-            <CardTitle>APK</CardTitle>
-            <CardDescription>
-              Drop the .apk for the version you want to publish first.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Input
+        {/* Step 1 — drop zone */}
+        <section className="surface p-6">
+          <Step num="01" title="Pick the APK" />
+          <label className="mt-4 block">
+            <div className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-outline px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5">
+              <div className="flex h-12 w-12 items-center justify-center rounded-pill bg-primary-container text-primary-on-container">
+                <Upload className="h-5 w-5" strokeWidth={2.2} />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-ink">
+                  {file ? file.name : "Click to choose an APK"}
+                </div>
+                <div className="text-xs text-ink-mute">
+                  {file ? formatBytes(file.size) : ".apk · drag & drop supported"}
+                </div>
+              </div>
+            </div>
+            <input
               type="file"
               accept=".apk,application/vnd.android.package-archive"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) onPickFile(f);
               }}
+              className="sr-only"
             />
-            {inspecting && (
-              <p className="text-sm text-muted-foreground">Parsing APK…</p>
-            )}
-            {inspect && (
-              <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge>{inspect.package_name}</Badge>
-                  <Badge variant="outline">
-                    v{inspect.version_name} ({inspect.version_code})
-                  </Badge>
-                  <Badge variant="outline">{formatBytes(inspect.size_bytes)}</Badge>
-                  <Badge variant="outline">
-                    SDK {inspect.min_sdk}–{inspect.target_sdk}
-                  </Badge>
-                </div>
-                <div className="font-mono text-[10px] text-muted-foreground">
-                  signer: {inspect.signer_sha256}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {inspect.permissions.length} permission{inspect.permissions.length === 1 ? "" : "s"} ·{" "}
-                  {inspect.native_code.join(", ") || "no native code"}
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+          </label>
 
-        {/* ----- Required fields ------------------------------------- */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Listing</CardTitle>
-            <CardDescription>What users see in the store.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="name">Name *</Label>
-              <Input
-                id="name"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="My great app"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pkg">Package name *</Label>
-              <Input
-                id="pkg"
-                required
-                value={packageName}
-                onChange={(e) => setPackageName(e.target.value)}
-                placeholder="com.example.myapp"
-                className="font-mono text-xs"
-              />
-              <p className="text-xs text-muted-foreground">
-                Must match the APK manifest. Pre-filled.
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="vis">Visibility</Label>
+          {inspecting && (
+            <p className="mt-3 inline-flex items-center gap-2 text-sm text-ink-mute">
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-outline-soft border-t-primary" />
+              Parsing manifest…
+            </p>
+          )}
+
+          {inspect && (
+            <dl className="mt-5 grid gap-3 rounded-xl bg-surface-2 p-4 md:grid-cols-3">
+              <Spec label="Package" value={inspect.package_name} mono />
+              <Spec label="Version" value={`${inspect.version_name} (${inspect.version_code})`} mono />
+              <Spec label="Size" value={formatBytes(inspect.size_bytes)} mono />
+              <Spec label="SDK" value={`${inspect.min_sdk}–${inspect.target_sdk}`} mono />
+              <Spec label="ABIs" value={inspect.native_code.join(", ") || "—"} mono />
+              <Spec label="Permissions" value={String(inspect.permissions.length)} mono />
+            </dl>
+          )}
+        </section>
+
+        {/* Step 2 — listing */}
+        <section className="surface p-6">
+          <Step num="02" title="Listing" />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Field label="Title *" htmlFor="name">
+              <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field label="Package name *" htmlFor="pkg">
+              <Input id="pkg" required value={packageName} onChange={(e) => setPackageName(e.target.value)} className="font-mono text-xs" />
+            </Field>
+            <Field label="Visibility" htmlFor="vis">
               <select
                 id="vis"
                 value={visibility}
                 onChange={(e) => setVisibility(e.target.value as "public" | "private")}
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                className="h-12 w-full rounded-xl border border-outline bg-surface px-3 text-sm focus:border-primary focus:outline-none"
               >
-                <option value="public">Public — in the public repo</option>
-                <option value="private">Private — only via API key</option>
+                <option value="public">Public · open catalogue</option>
+                <option value="private">Private · API key required</option>
               </select>
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="sum">Summary</Label>
-              <Input
-                id="sum"
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                placeholder="Brief one-liner"
-                maxLength={255}
-              />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="desc">Description</Label>
+            </Field>
+            <Field label="Summary" htmlFor="sum">
+              <Input id="sum" value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={255} placeholder="One-liner" />
+            </Field>
+            <Field label="Description" htmlFor="desc" className="md:col-span-2">
               <textarea
                 id="desc"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={6}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                placeholder="Markdown supported by the F-Droid client."
+                className="w-full rounded-xl border border-outline bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
+                placeholder="What does it do? Highlights, screenshots context, etc."
               />
-            </div>
-          </CardContent>
-        </Card>
+            </Field>
+          </div>
+        </section>
 
-        {/* ----- About (optional) ------------------------------------ */}
-        <Card>
-          <CardHeader>
-            <CardTitle>About (optional)</CardTitle>
-            <CardDescription>Links and author information.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="author">Author</Label>
+        {/* Step 3 — about */}
+        <section className="surface p-6">
+          <Step num="03" title="Links & credits (optional)" />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Field label="Author" htmlFor="author">
               <Input id="author" value={authorName} onChange={(e) => setAuthorName(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="lic">License</Label>
+            </Field>
+            <Field label="License" htmlFor="lic">
               <Input id="lic" value={license} onChange={(e) => setLicense(e.target.value)} placeholder="GPL-3.0-only" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="web">Website</Label>
+            </Field>
+            <Field label="Website" htmlFor="web">
               <Input id="web" type="url" value={website} onChange={(e) => setWebsite(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="src">Source code</Label>
+            </Field>
+            <Field label="Source code" htmlFor="src">
               <Input id="src" type="url" value={sourceCode} onChange={(e) => setSourceCode(e.target.value)} />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="issue">Issue tracker</Label>
+            </Field>
+            <Field label="Issue tracker" htmlFor="issue" className="md:col-span-2">
               <Input id="issue" type="url" value={issueTracker} onChange={(e) => setIssueTracker(e.target.value)} />
-            </div>
-          </CardContent>
-        </Card>
+            </Field>
+          </div>
+        </section>
 
-        <div className="flex items-center justify-end gap-2">
-          <Button asChild variant="ghost" type="button">
-            <Link href="/my-apps">Cancel</Link>
-          </Button>
-          <Button type="submit" disabled={!inspect || submitting}>
-            {submitting ? "Creating…" : "Create app"}
-          </Button>
+        <div className="sticky bottom-4 flex items-center justify-between gap-3 rounded-2xl border border-outline-soft bg-surface/90 p-3 shadow-e3 backdrop-blur">
+          <p className="text-sm text-ink-soft">
+            {inspect ? "Ready when you are." : "Step 1: pick an APK to continue."}
+          </p>
+          <div className="flex gap-2">
+            <Button asChild variant="text" type="button">
+              <Link href="/my-apps">Cancel</Link>
+            </Button>
+            <Button type="submit" variant="filled" size="lg" disabled={!inspect || submitting}>
+              {submitting ? "Publishing…" : "Publish release"}
+            </Button>
+          </div>
         </div>
       </form>
+    </div>
+  );
+}
+
+function Step({ num, title }: { num: string; title: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex h-9 w-9 items-center justify-center rounded-pill bg-primary-container font-mono text-sm font-bold text-primary-on-container">
+        {num}
+      </span>
+      <h2 className="text-xl font-bold tracking-tight text-ink">{title}</h2>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  htmlFor,
+  className,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`space-y-1.5 ${className || ""}`}>
+      <Label htmlFor={htmlFor} className="text-sm font-medium text-ink-soft">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function Spec({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-ink-mute">{label}</div>
+      <div className={mono ? "font-mono text-xs text-ink" : "text-sm text-ink"}>{value}</div>
     </div>
   );
 }
@@ -260,3 +269,6 @@ export default function NewAppPage() {
     </AuthGuard>
   );
 }
+
+// silence import-only guard
+void Badge;

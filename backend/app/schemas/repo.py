@@ -32,6 +32,12 @@ class SetupStatus(BaseModel):
     setup_complete: bool
     keystore_present: bool
     has_users: bool
+    # Public-safe repo metadata exposed alongside setup state so anonymous
+    # visitors can render the masthead without a separate request.
+    repo_name: str | None = None
+    repo_description: str | None = None
+    repo_address: str | None = None
+    repo_icon_path: str | None = None
 
 
 class SetupWizardRequest(BaseModel):

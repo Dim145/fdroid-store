@@ -1,60 +1,218 @@
 "use client";
 
+import { Search, Sparkles, LayoutGrid, User as UserIcon, ShieldCheck, LogOut, Menu, X } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-store";
+import { cn } from "@/lib/utils";
 
+const PRIMARY_NAV = [
+  { href: "/apps", label: "Apps", icon: Sparkles, authOnly: false },
+  { href: "/my-apps", label: "My apps", icon: LayoutGrid, authOnly: true },
+];
+
+/* M3 top app bar — sticky, surface-tinted, hosts brand + nav + search +
+ * theme toggle + auth. Mobile collapses the secondary actions into a
+ * slide-down sheet. */
 export function SiteHeader() {
   const router = useRouter();
+  const pathname = usePathname() || "/";
   const { user, logout } = useAuth();
+  const [searchValue, setSearchValue] = useState("");
+  const [drawer, setDrawer] = useState(false);
+
+  function isActive(href: string) {
+    if (href === "/") return pathname === "/";
+    return pathname === href || pathname.startsWith(`${href}/`);
+  }
+
+  function submitSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const q = searchValue.trim();
+    router.push(q ? `/apps?q=${encodeURIComponent(q)}` : "/apps");
+  }
+
   return (
-    <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur">
-      <div className="container flex h-14 items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 font-semibold">
-          <span className="rounded bg-primary px-2 py-0.5 text-xs text-primary-foreground">F</span>
-          fdroid-store
+    <header className="sticky top-0 z-40 border-b border-outline-soft bg-bg/85 backdrop-blur-md">
+      <div className="container flex h-16 items-center gap-4">
+        {/* Brand */}
+        <Link
+          href="/"
+          className="flex shrink-0 items-center gap-2.5"
+          aria-label="fdroid-store home"
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-fg shadow-e1">
+            <span className="text-sm font-bold tracking-tight">fS</span>
+          </span>
+          <span className="hidden text-base font-bold tracking-tight text-ink sm:inline">
+            fdroid-store
+          </span>
         </Link>
-        <nav className="flex items-center gap-3 text-sm">
-          <Link href="/apps" className="text-muted-foreground hover:text-foreground">
-            Apps
-          </Link>
-          {user && (
-            <>
-              <Link href="/my-apps" className="text-muted-foreground hover:text-foreground">
-                My apps
-              </Link>
-              <Link href="/history" className="text-muted-foreground hover:text-foreground">
-                History
-              </Link>
-              <Link href="/account" className="text-muted-foreground hover:text-foreground">
-                Account
-              </Link>
-              {user.role === "admin" && (
-                <Link href="/admin" className="text-muted-foreground hover:text-foreground">
-                  Admin
-                </Link>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  logout();
-                  router.replace("/");
-                }}
+
+        {/* Primary nav (desktop) */}
+        <nav className="hidden items-center gap-1 md:flex">
+          {PRIMARY_NAV.filter((n) => !n.authOnly || user).map((item) => {
+            const active = isActive(item.href);
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-pill px-3.5 py-2 text-sm font-medium transition-colors",
+                  active
+                    ? "bg-primary-container text-primary-on-container"
+                    : "text-ink-soft hover:bg-surface-2 hover:text-ink",
+                )}
               >
-                Sign out
-              </Button>
-            </>
+                <Icon className="h-4 w-4" strokeWidth={2.2} />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Search (grows) */}
+        <form onSubmit={submitSearch} className="ml-auto hidden flex-1 max-w-md md:flex">
+          <label className="group flex w-full items-center gap-2 rounded-pill border border-outline-soft bg-surface-2 px-4 py-2 transition-colors focus-within:border-primary focus-within:bg-surface">
+            <Search className="h-4 w-4 text-ink-mute" strokeWidth={2.2} />
+            <input
+              type="search"
+              placeholder="Search apps, packages…"
+              value={searchValue}
+              onChange={(e) => setSearchValue(e.target.value)}
+              className="w-full bg-transparent text-sm outline-none placeholder:text-ink-mute"
+            />
+          </label>
+        </form>
+
+        {/* Right side */}
+        <div className="ml-auto flex items-center gap-2 md:ml-0">
+          <ThemeToggle />
+          {user?.role === "admin" && (
+            <Link
+              href="/admin"
+              className={cn(
+                "hidden items-center gap-1.5 rounded-pill border border-outline-soft px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:bg-surface-2 sm:inline-flex",
+                pathname?.startsWith("/admin") && "border-primary bg-primary-container text-primary-on-container",
+              )}
+            >
+              <ShieldCheck className="h-3.5 w-3.5" strokeWidth={2.4} />
+              Admin
+            </Link>
           )}
-          {!user && (
-            <Button asChild size="sm">
+          {user ? (
+            <div className="hidden items-center gap-2 md:flex">
+              <Link
+                href="/account"
+                className="flex h-10 w-10 items-center justify-center rounded-pill bg-surface-2 text-ink-soft transition-colors hover:bg-surface-3 hover:text-ink"
+                aria-label="Account"
+              >
+                <UserIcon className="h-4 w-4" strokeWidth={2.2} />
+              </Link>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => { logout(); router.replace("/"); }}
+                aria-label="Sign out"
+              >
+                <LogOut className="h-4 w-4" strokeWidth={2.2} />
+              </Button>
+            </div>
+          ) : (
+            <Button asChild size="md" variant="filled" className="hidden md:inline-flex">
               <Link href="/login">Sign in</Link>
             </Button>
           )}
-        </nav>
+
+          <button
+            type="button"
+            onClick={() => setDrawer((s) => !s)}
+            aria-label="Menu"
+            aria-expanded={drawer}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-pill hover:bg-surface-2 md:hidden"
+          >
+            {drawer ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+        </div>
       </div>
+
+      {/* Mobile drawer */}
+      {drawer && (
+        <div className="animate-slide-down md:hidden">
+          <div className="container space-y-2 pb-4 pt-1">
+            <form onSubmit={submitSearch}>
+              <label className="flex w-full items-center gap-2 rounded-pill border border-outline-soft bg-surface-2 px-4 py-2 focus-within:border-primary">
+                <Search className="h-4 w-4 text-ink-mute" />
+                <input
+                  type="search"
+                  placeholder="Search…"
+                  value={searchValue}
+                  onChange={(e) => setSearchValue(e.target.value)}
+                  className="w-full bg-transparent text-sm outline-none placeholder:text-ink-mute"
+                />
+              </label>
+            </form>
+            <nav className="grid gap-1">
+              {PRIMARY_NAV.filter((n) => !n.authOnly || user).map((item) => {
+                const Icon = item.icon;
+                const active = isActive(item.href);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setDrawer(false)}
+                    className={cn(
+                      "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm",
+                      active
+                        ? "bg-primary-container text-primary-on-container"
+                        : "text-ink-soft hover:bg-surface-2",
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {item.label}
+                  </Link>
+                );
+              })}
+              {user && (
+                <>
+                  <Link
+                    href="/account"
+                    onClick={() => setDrawer(false)}
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
+                  >
+                    <UserIcon className="h-4 w-4" /> Account
+                  </Link>
+                  {user.role === "admin" && (
+                    <Link
+                      href="/admin"
+                      onClick={() => setDrawer(false)}
+                      className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
+                    >
+                      <ShieldCheck className="h-4 w-4" /> Admin
+                    </Link>
+                  )}
+                  <button
+                    onClick={() => { setDrawer(false); logout(); router.replace("/"); }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
+                  >
+                    <LogOut className="h-4 w-4" /> Sign out
+                  </button>
+                </>
+              )}
+              {!user && (
+                <Button asChild size="md" variant="filled" className="mt-2 w-full">
+                  <Link href="/login" onClick={() => setDrawer(false)}>Sign in</Link>
+                </Button>
+              )}
+            </nav>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

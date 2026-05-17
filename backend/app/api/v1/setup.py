@@ -34,6 +34,10 @@ async def setup_status(db: DbSession) -> SetupStatus:
         setup_complete=bool(config and config.setup_complete),
         keystore_present=keystore_present,
         has_users=has_users,
+        repo_name=config.name if config else None,
+        repo_description=config.description if config else None,
+        repo_address=config.address if config else None,
+        repo_icon_path=config.icon_path if config else None,
     )
 
 

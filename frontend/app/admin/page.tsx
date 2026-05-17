@@ -1,9 +1,9 @@
 "use client";
 
+import { Activity, Download, Package, RefreshCw, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { api, type AdminStats } from "@/lib/api";
 
 export default function AdminDashboardPage() {
@@ -12,78 +12,77 @@ export default function AdminDashboardPage() {
   const [reindexing, setReindexing] = useState(false);
 
   async function refresh() {
-    try {
-      setStats(await api.admin.stats());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed");
-    }
+    try { setStats(await api.admin.stats()); }
+    catch (e) { setError(e instanceof Error ? e.message : "Failed"); }
   }
   useEffect(() => { refresh(); }, []);
 
   async function reindex() {
     setReindexing(true);
-    try {
-      await api.admin.reindex();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Reindex failed");
-    } finally {
-      setReindexing(false);
-      setTimeout(refresh, 1500);
-    }
+    try { await api.admin.reindex(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Reindex failed"); }
+    finally { setReindexing(false); setTimeout(refresh, 1500); }
   }
 
   return (
     <div className="space-y-6">
-      <header className="flex items-end justify-between">
+      <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground">Overview of the repository.</p>
+          <div className="eyebrow">Admin · overview</div>
+          <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">Dashboard</h1>
         </div>
-        <Button onClick={reindex} disabled={reindexing}>
-          {reindexing ? "Queuing…" : "Trigger reindex"}
+        <Button onClick={reindex} variant="filled" size="lg" disabled={reindexing}>
+          <RefreshCw className={reindexing ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Trigger reindex
         </Button>
       </header>
 
-      {error && <p className="text-destructive">{error}</p>}
+      {error && <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>}
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard label="Users" value={stats?.total_users} />
-        <StatCard label="Apps" value={stats?.total_apps} hint={stats ? `${stats.published_apps} published` : undefined} />
-        <StatCard label="Pending APKs" value={stats?.pending_apks} />
-        <StatCard label="Downloads" value={stats?.total_downloads} />
-      </div>
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Stat icon={<Users className="h-5 w-5" />} label="Users" value={stats?.total_users} />
+        <Stat icon={<Package className="h-5 w-5" />} label="Apps" value={stats?.total_apps} hint={stats ? `${stats.published_apps} published` : undefined} />
+        <Stat icon={<Activity className="h-5 w-5" />} label="Pending APKs" value={stats?.pending_apks} highlight={Boolean(stats?.pending_apks)} />
+        <Stat icon={<Download className="h-5 w-5" />} label="Downloads" value={stats?.total_downloads} />
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent downloads</CardTitle>
-          <CardDescription>Last 20 download events.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-1 font-mono text-xs">
+      <section className="surface p-6">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold tracking-tight text-ink">Recent downloads</h2>
+          <span className="text-xs text-ink-mute">Last 20 events</span>
+        </div>
+        <ul className="divide-y divide-outline-soft">
           {stats?.recent_downloads.length === 0 && (
-            <p className="text-muted-foreground">No downloads yet.</p>
+            <li className="py-6 italic text-ink-mute">No downloads yet.</li>
           )}
           {stats?.recent_downloads.map((d) => (
-            <div key={d.id} className="flex justify-between">
-              <span>{new Date(d.created_at).toLocaleString()}</span>
-              <span className="text-muted-foreground">
-                app {d.app_id.slice(0, 8)} · user {d.user_id?.slice(0, 8) ?? "anon"}
+            <li key={d.id} className="flex items-center justify-between gap-3 py-2.5 text-xs">
+              <span className="font-mono text-ink-soft">{new Date(d.created_at).toLocaleString()}</span>
+              <span className="font-mono text-ink-mute">
+                app <span className="text-ink">{d.app_id.slice(0, 8)}</span>
+                {" · "}
+                user <span className="text-ink">{d.user_id?.slice(0, 8) ?? "anon"}</span>
               </span>
-            </div>
+            </li>
           ))}
-        </CardContent>
-      </Card>
+        </ul>
+      </section>
     </div>
   );
 }
 
-function StatCard({ label, value, hint }: { label: string; value: number | undefined; hint?: string }) {
+function Stat({
+  icon, label, value, hint, highlight,
+}: { icon: React.ReactNode; label: string; value: number | undefined; hint?: string; highlight?: boolean }) {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-3xl">{value ?? "—"}</CardTitle>
-      </CardHeader>
-      {hint && <CardContent className="text-xs text-muted-foreground">{hint}</CardContent>}
-    </Card>
+    <div className={`surface p-5 ${highlight ? "ring-2 ring-accent" : ""}`}>
+      <div className="flex items-center gap-2 text-ink-mute">
+        {icon}
+        <span className="text-[11px] uppercase tracking-wider">{label}</span>
+      </div>
+      <div className="mt-3 text-4xl font-bold tracking-tight text-ink">
+        {value !== undefined ? value : "—"}
+      </div>
+      {hint && <div className="mt-1 text-xs text-ink-mute">{hint}</div>}
+    </div>
   );
 }

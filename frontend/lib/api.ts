@@ -271,7 +271,8 @@ export const api = {
   },
 
   setup: {
-    status: () => apiFetch<{ setup_complete: boolean; keystore_present: boolean; has_users: boolean }>("/api/v1/setup/status", { anonymous: true }),
+    status: () =>
+      apiFetch<SetupStatusResponse>("/api/v1/setup/status", { anonymous: true }),
     wizard: (payload: SetupWizardPayload) =>
       apiFetch<RepoConfigInfo>("/api/v1/setup/wizard", { method: "POST", body: JSON.stringify(payload) }),
     keystoreInfo: () => apiFetch<KeystoreInfo>("/api/v1/setup/keystore"),
@@ -319,6 +320,16 @@ export type RescanResult = {
   rescanned_apks: number;
   icons_refreshed: number;
   failed: string[];
+};
+
+export type SetupStatusResponse = {
+  setup_complete: boolean;
+  keystore_present: boolean;
+  has_users: boolean;
+  repo_name: string | null;
+  repo_description: string | null;
+  repo_address: string | null;
+  repo_icon_path: string | null;
 };
 
 // ---------------------------------------------------------------------------

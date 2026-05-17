@@ -3,18 +3,16 @@
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
+import { api, REPO_URL } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 export default function SetupWizardPage() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [repoName, setRepoName] = useState("My F-Droid Repo");
   const [repoDesc, setRepoDesc] = useState("");
-  const [repoAddr, setRepoAddr] = useState(
-    process.env.NEXT_PUBLIC_REPO_URL || "http://localhost:8080/fdroid/repo"
-  );
+  const [repoAddr, setRepoAddr] = useState(REPO_URL);
   const [mode, setMode] = useState<"generate" | "import">("generate");
   const [ksPwd, setKsPwd] = useState("");
   const [keyAlias, setKeyAlias] = useState("repokey");
@@ -26,12 +24,8 @@ export default function SetupWizardPage() {
   const [submitting, setSubmitting] = useState(false);
 
   async function refresh() {
-    try {
-      const s = await api.setup.status();
-      setSetupComplete(s.setup_complete);
-    } catch {
-      setSetupComplete(false);
-    }
+    try { const s = await api.setup.status(); setSetupComplete(s.setup_complete); }
+    catch { setSetupComplete(false); }
   }
   useEffect(() => { refresh(); }, []);
 
@@ -72,99 +66,116 @@ export default function SetupWizardPage() {
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Setup failed");
-    } finally {
-      setSubmitting(false);
-    }
+    } finally { setSubmitting(false); }
   }
 
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Setup wizard</h1>
-        <p className="text-muted-foreground">
+        <div className="eyebrow">Admin</div>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">Setup wizard</h1>
+        <p className="mt-1 text-ink-soft">
           {setupComplete
-            ? "Setup is already complete. You can re-run the wizard to rotate the signing key."
-            : "Finish the one-time setup of your F-Droid repository."}
+            ? "Setup is complete. Re-run to rotate the signing key."
+            : "Finish the one-time configuration to start serving the catalogue."}
         </p>
       </header>
 
-      {msg && <p className="text-sm text-emerald-600">{msg}</p>}
-      {err && <p className="text-sm text-destructive">{err}</p>}
+      {msg && <p className="rounded-xl border border-primary bg-primary-container px-3 py-2 text-sm text-primary-on-container">{msg}</p>}
+      {err && <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{err}</p>}
 
       <form onSubmit={submit} className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Repository</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="rn">Repo name</Label>
+        <section className="surface p-6">
+          <Step num="01" title="Repository" />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Field label="Repo name" htmlFor="rn" className="md:col-span-2">
               <Input id="rn" required value={repoName} onChange={(e) => setRepoName(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rd">Description</Label>
+            </Field>
+            <Field label="Description" htmlFor="rd" className="md:col-span-2">
               <Input id="rd" value={repoDesc} onChange={(e) => setRepoDesc(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ra">Public address</Label>
+            </Field>
+            <Field label="Public address" htmlFor="ra" className="md:col-span-2">
               <Input id="ra" required value={repoAddr} onChange={(e) => setRepoAddr(e.target.value)} />
-            </div>
-          </CardContent>
-        </Card>
+            </Field>
+          </div>
+        </section>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Signing key</CardTitle>
-            <CardDescription>
-              Generate a new keystore, or import an existing PKCS#12 / JKS file.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex gap-3">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="radio" checked={mode === "generate"} onChange={() => setMode("generate")} />
-                Generate
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="radio" checked={mode === "import"} onChange={() => setMode("import")} />
-                Import existing
-              </label>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="ksp">Keystore password</Label>
+        <section className="surface p-6">
+          <Step num="02" title="Signing key" />
+          <div className="mt-4 mb-4 flex gap-2">
+            <ModeChip active={mode === "generate"} onClick={() => setMode("generate")}>Generate</ModeChip>
+            <ModeChip active={mode === "import"} onClick={() => setMode("import")}>Import existing</ModeChip>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Keystore password" htmlFor="ksp" className="md:col-span-2">
               <Input id="ksp" type="password" required value={ksPwd} onChange={(e) => setKsPwd(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ka">Key alias</Label>
+            </Field>
+            <Field label="Key alias" htmlFor="ka">
               <Input id="ka" value={keyAlias} onChange={(e) => setKeyAlias(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="kp">Key password (optional, defaults to keystore password)</Label>
+            </Field>
+            <Field label="Key password (optional)" htmlFor="kp">
               <Input id="kp" type="password" value={keyPwd} onChange={(e) => setKeyPwd(e.target.value)} />
-            </div>
-
+            </Field>
             {mode === "generate" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="dn">Distinguished name</Label>
+              <Field label="Distinguished name" htmlFor="dn" className="md:col-span-2">
                 <Input id="dn" value={dname} onChange={(e) => setDname(e.target.value)} />
-              </div>
+              </Field>
             )}
             {mode === "import" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="kf">Keystore file (.p12 / .jks)</Label>
+              <Field label="Keystore file (.p12 / .jks)" htmlFor="kf" className="md:col-span-2">
                 <Input id="kf" type="file" accept=".p12,.jks,.pkcs12" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-              </div>
+              </Field>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
         <div className="flex justify-end">
-          <Button type="submit" disabled={submitting}>
+          <Button type="submit" variant="filled" size="xl" disabled={submitting}>
             {submitting ? "Setting up…" : "Run setup"}
           </Button>
         </div>
       </form>
     </div>
+  );
+}
+
+function Step({ num, title }: { num: string; title: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex h-9 w-9 items-center justify-center rounded-pill bg-primary-container font-mono text-sm font-bold text-primary-on-container">
+        {num}
+      </span>
+      <h2 className="text-xl font-bold tracking-tight text-ink">{title}</h2>
+    </div>
+  );
+}
+
+function Field({
+  label, htmlFor, className, children,
+}: { label: string; htmlFor?: string; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={`space-y-1.5 ${className || ""}`}>
+      <Label htmlFor={htmlFor} className="text-sm font-medium text-ink-soft">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function ModeChip({
+  active, onClick, children,
+}: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "h-9 rounded-pill px-4 text-sm font-semibold transition-colors",
+        active
+          ? "bg-primary text-primary-fg"
+          : "bg-surface-2 text-ink-soft hover:bg-surface-3 hover:text-ink",
+      )}
+    >
+      {children}
+    </button>
   );
 }

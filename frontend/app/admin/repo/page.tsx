@@ -1,14 +1,13 @@
 "use client";
 
+import { Image as ImageIcon, KeyRound, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type KeystoreInfo, type RepoConfigInfo } from "@/lib/api";
-
-const REPO_URL = process.env.NEXT_PUBLIC_REPO_URL || "http://localhost:8080/fdroid/repo";
+import { api, REPO_URL, type KeystoreInfo, type RepoConfigInfo } from "@/lib/api";
 
 export default function AdminRepoPage() {
   const [repo, setRepo] = useState<RepoConfigInfo | null>(null);
@@ -23,14 +22,9 @@ export default function AdminRepoPage() {
   async function refresh() {
     try {
       const [r, k] = await Promise.all([api.admin.repo(), api.setup.keystoreInfo()]);
-      setRepo(r);
-      setKeystore(k);
-      setName(r.name);
-      setDesc(r.description || "");
-      setAddr(r.address);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed");
-    }
+      setRepo(r); setKeystore(k);
+      setName(r.name); setDesc(r.description || ""); setAddr(r.address);
+    } catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
   }
   useEffect(() => { refresh(); }, []);
 
@@ -39,26 +33,21 @@ export default function AdminRepoPage() {
     setErr(null); setMsg(null);
     try {
       await api.admin.updateRepo({ name, description: desc, address: addr });
-      setMsg("Saved. A reindex has been queued.");
+      setMsg("Saved. Reindex queued.");
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed");
     }
   }
-
   async function uploadIcon(file: File) {
     setErr(null); setMsg(null); setUploadingIcon(true);
     try {
       await api.admin.uploadRepoIcon(file);
       setMsg("Icon uploaded. Reindex queued.");
       await refresh();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Icon upload failed");
-    } finally {
-      setUploadingIcon(false);
-    }
+    } catch (e) { setErr(e instanceof Error ? e.message : "Icon upload failed"); }
+    finally { setUploadingIcon(false); }
   }
-
   function iconUrl(): string | null {
     if (!repo?.icon_path) return null;
     const basename = repo.icon_path.split("/").pop();
@@ -66,108 +55,115 @@ export default function AdminRepoPage() {
     return `${REPO_URL}/icons/${basename}?v=${repo.last_index_version}`;
   }
 
-  if (!repo) return <p className="text-muted-foreground">Loading…</p>;
+  if (!repo) {
+    return <p className="text-sm text-ink-mute">Loading…</p>;
+  }
 
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Repo configuration</h1>
-        <p className="text-muted-foreground">Edit the public metadata of the F-Droid repository.</p>
+        <div className="eyebrow">Admin</div>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">Repository</h1>
       </header>
 
-      {msg && <p className="text-emerald-600 text-sm">{msg}</p>}
-      {err && <p className="text-destructive text-sm">{err}</p>}
+      {msg && <p className="rounded-xl border border-primary bg-primary-container px-3 py-2 text-sm text-primary-on-container">{msg}</p>}
+      {err && <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{err}</p>}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Repository</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={save} className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="rn">Name</Label>
-              <Input id="rn" required value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rd">Description</Label>
-              <Input id="rd" value={desc} onChange={(e) => setDesc(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ra">Public address</Label>
-              <Input id="ra" required value={addr} onChange={(e) => setAddr(e.target.value)} />
-              <p className="text-xs text-muted-foreground">Must be reachable from Android devices.</p>
-            </div>
-            <div className="flex justify-end">
-              <Button type="submit">Save</Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+      <section className="surface p-6">
+        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">Public metadata</h2>
+        <form onSubmit={save} className="grid gap-4 md:grid-cols-2">
+          <Field label="Repo name" htmlFor="rn" className="md:col-span-2">
+            <Input id="rn" required value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="Description" htmlFor="rd" className="md:col-span-2">
+            <Input id="rd" value={desc} onChange={(e) => setDesc(e.target.value)} />
+          </Field>
+          <Field label="Public address" htmlFor="ra" className="md:col-span-2">
+            <Input id="ra" required value={addr} onChange={(e) => setAddr(e.target.value)} />
+            <p className="text-xs text-ink-mute">Must be reachable from Android devices.</p>
+          </Field>
+          <div className="md:col-span-2 flex justify-end">
+            <Button type="submit" variant="filled">Save & reindex</Button>
+          </div>
+        </form>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Repository icon</CardTitle>
-          <CardDescription>
-            Shown by F-Droid clients. PNG, JPEG or WebP, resized to 512×512 max.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center gap-4">
-            {iconUrl() && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={iconUrl()!} alt="repo icon" className="h-16 w-16 rounded border bg-muted" />
-            )}
-            <div className="flex-1">
-              <Input
+      <section className="surface p-6">
+        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">Icon</h2>
+        <div className="flex flex-wrap items-center gap-5">
+          {iconUrl() && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={iconUrl()!} alt="repo icon" className="h-20 w-20 rounded-2xl bg-surface-2 object-cover shadow-e1" />
+          )}
+          <div className="flex-1">
+            <label className="inline-flex">
+              <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary-container px-4 text-sm font-semibold text-primary-on-container hover:brightness-[1.04]">
+                <ImageIcon className="h-4 w-4" /> Upload icon
+              </span>
+              <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
                 disabled={uploadingIcon}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) uploadIcon(f);
-                  e.target.value = "";
-                }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadIcon(f); e.target.value = ""; }}
+                className="sr-only"
               />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Current key: <code className="font-mono">{repo.icon_path || "—"}</code>
-              </p>
-            </div>
+            </label>
+            <p className="mt-2 font-mono text-[11px] text-ink-mute">{repo.icon_path || "—"}</p>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Signing key</CardTitle>
-          <CardDescription>
-            Used to sign the F-Droid index. Re-running the setup wizard rotates it.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          {keystore?.present ? (
-            <>
-              <div><span className="text-muted-foreground">Alias:</span> {keystore.alias}</div>
-              <div className="font-mono break-all"><span className="text-muted-foreground font-sans">Fingerprint (SHA-256):</span> {keystore.fingerprint_sha256}</div>
-              <div><span className="text-muted-foreground">Valid:</span> {keystore.not_before} → {keystore.not_after}</div>
-            </>
-          ) : (
-            <p className="text-amber-600">No keystore yet — finish the setup wizard.</p>
-          )}
-        </CardContent>
-      </Card>
+      <section className="surface p-6">
+        <h2 className="mb-4 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
+          <KeyRound className="h-5 w-5" /> Signing key
+        </h2>
+        {keystore?.present ? (
+          <dl className="grid gap-3 md:grid-cols-2">
+            <Detail label="Alias" value={keystore.alias} mono />
+            <Detail label="Valid until" value={keystore.not_after} />
+            <div className="md:col-span-2">
+              <div className="text-[10px] uppercase tracking-wider text-ink-mute">Fingerprint SHA-256</div>
+              <code className="mt-1 block break-all font-mono text-[11px] text-ink">{keystore.fingerprint_sha256}</code>
+            </div>
+          </dl>
+        ) : (
+          <p className="text-sm text-danger">No keystore yet — complete the setup wizard.</p>
+        )}
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Index state</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1 text-sm">
-          <div><span className="text-muted-foreground">Last index version:</span> {repo.last_index_version}</div>
-          <div><span className="text-muted-foreground">Last indexed:</span> {repo.last_indexed_at ?? "—"}</div>
-          <Button className="mt-2" onClick={() => api.admin.reindex().then(() => setMsg("Reindex queued."))}>
-            Trigger reindex now
+      <section className="surface p-6">
+        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">Index state</h2>
+        <dl className="grid gap-3 md:grid-cols-2">
+          <Detail label="Last index version" value={String(repo.last_index_version)} mono />
+          <Detail label="Last indexed" value={repo.last_indexed_at} />
+        </dl>
+        <div className="mt-4">
+          <Button variant="outlined" onClick={() => api.admin.reindex().then(() => setMsg("Reindex queued."))}>
+            <RefreshCw className="h-4 w-4" /> Trigger reindex
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Field({
+  label, htmlFor, className, children,
+}: { label: string; htmlFor?: string; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={`space-y-1.5 ${className || ""}`}>
+      <Label htmlFor={htmlFor} className="text-sm font-medium text-ink-soft">{label}</Label>
+      {children}
+    </div>
+  );
+}
+function Detail({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-ink-mute">{label}</div>
+      <div className={`mt-0.5 text-sm ${mono ? "font-mono" : ""}`}>
+        {value || <Badge variant="soft">—</Badge>}
+      </div>
     </div>
   );
 }

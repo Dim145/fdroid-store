@@ -4,20 +4,27 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors",
+  "inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-pill",
   {
     variants: {
       variant: {
-        default: "border-transparent bg-primary text-primary-foreground",
-        secondary: "border-transparent bg-secondary text-secondary-foreground",
-        destructive: "border-transparent bg-destructive text-destructive-foreground",
-        outline: "text-foreground",
-        success: "border-transparent bg-emerald-500 text-white",
-        warning: "border-transparent bg-amber-500 text-white",
+        default:    "bg-primary-container text-primary-on-container",
+        primary:    "bg-primary text-primary-fg",
+        accent:     "bg-accent-container text-accent-on-container",
+        soft:       "bg-surface-2 text-ink-soft",
+        outline:    "bg-transparent text-ink-soft border border-outline",
+        success:    "bg-primary-container text-primary-on-container",
+        warning:    "bg-accent-container text-accent-on-container",
+        destructive:"bg-danger-container text-danger-on-container",
+        secondary:  "bg-surface-2 text-ink-soft",
+        ghost:      "bg-transparent text-ink-mute",
+        lime:       "bg-primary text-primary-fg",
+        orange:     "bg-accent text-accent-fg",
+        gold:       "bg-accent-container text-accent-on-container",
       },
     },
     defaultVariants: { variant: "default" },
-  }
+  },
 );
 
 export interface BadgeProps
