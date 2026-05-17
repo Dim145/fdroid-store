@@ -14,7 +14,16 @@ export default function SetupWizardPage() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [repoName, setRepoName] = useState("My F-Droid Repo");
   const [repoDesc, setRepoDesc] = useState("");
-  const [repoAddr, setRepoAddr] = useState(REPO_URL);
+  // Default to the current origin + /fdroid/repo so the wizard pre-fills a
+  // usable public URL on a fresh install. REPO_URL is now relative ("/fdroid/
+  // repo") for portable image builds, which doesn't make sense in a field
+  // that F-Droid clients fetch from the outside world.
+  const [repoAddr, setRepoAddr] = useState(() => {
+    if (typeof window !== "undefined") {
+      return `${window.location.origin}${REPO_URL.startsWith("/") ? REPO_URL : "/fdroid/repo"}`;
+    }
+    return REPO_URL;
+  });
   const [addrTouched, setAddrTouched] = useState(false);
   const [mode, setMode] = useState<"generate" | "import">("generate");
   const [ksPwd, setKsPwd] = useState("");

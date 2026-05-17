@@ -1,0 +1,96 @@
+# nginx config baked into the frontend image. Processed with envsubst at
+# container start (the official nginx image's docker-entrypoint expands any
+# ``${VAR}`` referenced in NGINX_ENVSUBST_TEMPLATE_SUFFIX files), so this
+# single file works for both the bundled docker-compose deployment and any
+# external host that exports a different ``UPSTREAM_BACKEND``.
+#
+# The image serves three things on the same port:
+#   * static SPA pages from /usr/share/nginx/html (with SPA-style fallback)
+#   * /api/, /fdroid/repo/, /r/ reverse-proxied to the FastAPI backend
+#   * /_protected/ as an internal X-Accel-Redirect target for /data/storage
+#
+# Variables consumed:
+#   UPSTREAM_BACKEND   "host:port" of the backend service. Default in
+#                      docker-compose: ``backend:8000``.
+
+# Docker's embedded DNS — refresh records every 10s so a backend restart
+# doesn't strand a stale IP.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+server {
+    listen 8080;
+    server_name _;
+    client_max_body_size 500m;
+    server_tokens off;
+
+    gzip on;
+    gzip_types text/plain application/json application/javascript text/css application/xml;
+    gzip_min_length 1024;
+
+    # NOTE: don't redefine ``types {}`` here — that would override the
+    # http-level ``include /etc/nginx/mime.types`` and strip text/html,
+    # text/css, … from the response, so browsers would download the SPA
+    # instead of rendering it. The F-Droid-specific types (.apk, .jar)
+    # only matter for the backend-proxied paths, and the backend already
+    # sets the right Content-Type on those responses.
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # ---- Backend reverse proxy -------------------------------------------
+    # ``set`` + a variable in proxy_pass forces nginx to use the resolver
+    # at request time instead of caching the IP at config-load (see comment
+    # at the top of the file).
+    location /api/ {
+        set $upstream_backend ${UPSTREAM_BACKEND};
+        proxy_pass http://$upstream_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300;
+    }
+
+    location /fdroid/ {
+        set $upstream_backend ${UPSTREAM_BACKEND};
+        proxy_pass http://$upstream_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300;
+    }
+
+    location /r/ {
+        set $upstream_backend ${UPSTREAM_BACKEND};
+        proxy_pass http://$upstream_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300;
+    }
+
+    # Internal alias the backend redirects to via ``X-Accel-Redirect`` so
+    # large APK downloads are streamed by nginx, not Python. Requires the
+    # /data/storage volume to be mounted into this container.
+    location /_protected/ {
+        internal;
+        alias /data/storage/;
+    }
+
+    # ---- Static SPA routing ----------------------------------------------
+    # Dynamic segments under /apps/<pkg>/ and /my-apps/<id>/ are pre-rendered
+    # as a single placeholder route at build time; nginx serves that
+    # placeholder for any non-existent path so the client-side router can
+    # take over and read the real segment from ``useParams()``.
+    location /apps/ {
+        try_files $uri $uri/index.html /apps/__dynamic/index.html;
+    }
+    location /my-apps/ {
+        try_files $uri $uri/index.html /my-apps/__dynamic/index.html;
+    }
+
+    # Default: serve the file if it exists, otherwise its index.html, then
+    # fall back to the SPA root.
+    location / {
+        try_files $uri $uri/index.html /index.html;
+    }
+}

@@ -5,12 +5,18 @@
  * transparently refresh the access token once on 401.
  */
 
+// Default to relative URLs so the same static build can be served from any
+// origin — the SPA, the API and the F-Droid repo all live behind a single
+// nginx that routes ``/api/``, ``/fdroid/`` and ``/r/`` to the backend.
+//
+// The env vars are kept as overrides for split deployments (CDN front,
+// distinct API domain, …) but should be left empty for the default
+// single-origin Docker image so the image is reusable across hosts.
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
 
 export const REPO_URL =
-  process.env.NEXT_PUBLIC_REPO_URL?.replace(/\/$/, "") ||
-  "http://localhost:8080/fdroid/repo";
+  process.env.NEXT_PUBLIC_REPO_URL?.replace(/\/$/, "") || "/fdroid/repo";
 
 /** Build a full URL for a storage key served under the F-Droid repo path.
  *  Storage keys mirror the repo URL layout (icons/foo.png →
