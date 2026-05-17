@@ -62,6 +62,14 @@ class App(Base, IdMixin, TimestampMixin):
     issue_tracker: Mapped[str | None] = mapped_column(String(512))
     author_name: Mapped[str | None] = mapped_column(String(255))
     author_email: Mapped[str | None] = mapped_column(String(255))
+    # Per-app funding + contribution URLs, matching the keys F-Droid clients
+    # render as buttons. We don't enforce schemes so users can drop a custom
+    # URL where the protocol differs (e.g. ``bitcoin:`` URIs).
+    donate: Mapped[str | None] = mapped_column(String(512))
+    liberapay: Mapped[str | None] = mapped_column(String(512))
+    bitcoin: Mapped[str | None] = mapped_column(String(512))
+    open_collective: Mapped[str | None] = mapped_column(String(512))
+    translation: Mapped[str | None] = mapped_column(String(512))
 
     icon_path: Mapped[str | None] = mapped_column(String(512))  # storage key
     # True when the admin uploaded a custom icon: subsequent APK uploads

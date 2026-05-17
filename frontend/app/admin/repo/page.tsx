@@ -1,6 +1,6 @@
 "use client";
 
-import { Image as ImageIcon, KeyRound, RefreshCw } from "lucide-react";
+import { Image as ImageIcon, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,8 @@ export default function AdminRepoPage() {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [addr, setAddr] = useState("");
+  const [mirrors, setMirrors] = useState<string[]>([]);
+  const [newMirror, setNewMirror] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [uploadingIcon, setUploadingIcon] = useState(false);
@@ -26,6 +28,7 @@ export default function AdminRepoPage() {
       const [r, k] = await Promise.all([api.admin.repo(), api.setup.keystoreInfo()]);
       setRepo(r); setKeystore(k);
       setName(r.name); setDesc(r.description || ""); setAddr(r.address);
+      setMirrors(r.mirrors || []);
     } catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
   }
   useEffect(() => { refresh(); }, []);
@@ -34,13 +37,24 @@ export default function AdminRepoPage() {
     e.preventDefault();
     setErr(null); setMsg(null);
     try {
-      await api.admin.updateRepo({ name, description: desc, address: addr });
+      await api.admin.updateRepo({ name, description: desc, address: addr, mirrors });
       setMsg("Saved. Reindex queued.");
       // Propagate to every other page using the live URL (QR codes, footer…).
       await Promise.all([refresh(), refreshGlobalRepo()]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed");
     }
+  }
+
+  function addMirror() {
+    const trimmed = newMirror.trim();
+    if (!trimmed) return;
+    if (mirrors.includes(trimmed)) { setNewMirror(""); return; }
+    setMirrors([...mirrors, trimmed]);
+    setNewMirror("");
+  }
+  function removeMirror(url: string) {
+    setMirrors(mirrors.filter((m) => m !== url));
   }
   async function uploadIcon(file: File) {
     setErr(null); setMsg(null); setUploadingIcon(true);
@@ -117,6 +131,40 @@ export default function AdminRepoPage() {
             </label>
             <p className="mt-2 font-mono text-[11px] text-ink-mute">{repo.icon_path || "—"}</p>
           </div>
+        </div>
+      </section>
+
+      <section className="surface p-6">
+        <h2 className="mb-1 text-lg font-bold tracking-tight text-ink">Mirrors</h2>
+        <p className="mb-4 text-sm text-ink-soft">
+          Alternate URLs that serve the same repo. F-Droid clients fall back to
+          a mirror if the primary address is unreachable. Save to apply.
+        </p>
+        <ul className="space-y-2">
+          {mirrors.length === 0 && (
+            <li className="rounded-xl border border-dashed border-outline px-4 py-6 text-center italic text-ink-mute">
+              No mirrors configured.
+            </li>
+          )}
+          {mirrors.map((m) => (
+            <li key={m} className="flex items-center gap-2 rounded-xl border border-outline-soft bg-surface px-3 py-2">
+              <code className="min-w-0 flex-1 select-all truncate font-mono text-xs text-ink">{m}</code>
+              <Button type="button" size="sm" variant="outlined" onClick={() => removeMirror(m)}>
+                <Trash2 className="h-3.5 w-3.5" /> Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto]">
+          <Input
+            placeholder="https://mirror.example.org/fdroid/repo"
+            value={newMirror}
+            onChange={(e) => setNewMirror(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addMirror(); } }}
+          />
+          <Button type="button" variant="tonal" onClick={addMirror}>
+            <Plus className="h-4 w-4" /> Add mirror
+          </Button>
         </div>
       </section>
 

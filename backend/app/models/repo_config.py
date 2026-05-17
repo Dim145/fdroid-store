@@ -50,3 +50,15 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
     # Index versioning
     last_index_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def mirrors(self) -> list[str]:
+        """Decoded view of ``mirrors_json`` for serializers + the index builder."""
+        import json as _json
+        if not self.mirrors_json:
+            return []
+        try:
+            value = _json.loads(self.mirrors_json)
+        except _json.JSONDecodeError:
+            return []
+        return [str(u) for u in value if u] if isinstance(value, list) else []

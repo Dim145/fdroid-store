@@ -141,6 +141,35 @@ _ALLOWED_MEDIA_KINDS = {
 }
 
 
+# Per-app singleton media (featureGraphic, etc.) live one directory shallower
+# than screenshots. F-Droid clients fetch ``<package>/<locale>/featureGraphic.png``
+# directly. We restrict to a known whitelist to stay out of the generic
+# static-server business.
+_ALLOWED_SINGLETON_MEDIA = {
+    "featureGraphic.png",
+    "promoGraphic.png",
+    "tvBanner.png",
+}
+
+
+@router.get("/{package}/{locale}/{filename}")
+async def serve_singleton_media(
+    package: str,
+    locale: str,
+    filename: str,
+) -> Response:
+    if filename not in _ALLOWED_SINGLETON_MEDIA:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    for seg in (package, locale, filename):
+        if not seg or "/" in seg or seg.startswith("."):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    key = f"{package}/{locale}/{filename}"
+    storage = get_storage()
+    if not await storage.exists(key):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return await _stream_or_redirect(key, content_type=_content_type_for(filename))
+
+
 @router.get("/{package}/{locale}/{kind}/{filename}")
 async def serve_media(
     package: str,

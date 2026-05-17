@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Globe, GitBranch, Bug, Calendar } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -140,6 +140,18 @@ export default function AppDetailPage() {
         </div>
       </section>
 
+      {/* ──── Featured graphic ──── */}
+      {app.feature_graphic_path && (
+        <section className="mt-10">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={mediaUrl(app.feature_graphic_path) || ""}
+            alt={`${app.name} feature graphic`}
+            className="w-full rounded-2xl border border-outline-soft bg-surface-2 object-cover shadow-e1"
+          />
+        </section>
+      )}
+
       {/* ──── Screenshots ──── */}
       {screenshots.length > 0 && (
         <section className="mt-10">
@@ -234,9 +246,25 @@ export default function AppDetailPage() {
             <SpecRow icon={<Globe className="h-4 w-4" />} label="Website" value={app.website} link={app.website} />
             <SpecRow icon={<GitBranch className="h-4 w-4" />} label="Source" value={app.source_code} link={app.source_code} />
             <SpecRow icon={<Bug className="h-4 w-4" />} label="Issues" value={app.issue_tracker} link={app.issue_tracker} />
+            <SpecRow icon={<Languages className="h-4 w-4" />} label="Translate" value={app.translation} link={app.translation} />
+            <SpecRow icon={<Mail className="h-4 w-4" />} label="Author" value={app.author_email} link={app.author_email ? `mailto:${app.author_email}` : null} />
             <SpecRow label="License" value={app.license} />
             <SpecRow label="Added" value={formatDate(app.created_at)} />
           </dl>
+          {(app.donate || app.liberapay || app.bitcoin || app.open_collective) && (
+            <div className="surface mt-3 p-5">
+              <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-wider text-ink-mute">
+                <HandHeart className="h-3.5 w-3.5" />
+                Support the developer
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {app.donate && <FundingChip label="Donate" href={app.donate} />}
+                {app.liberapay && <FundingChip label="Liberapay" href={app.liberapay} />}
+                {app.open_collective && <FundingChip label="Open Collective" href={app.open_collective} />}
+                {app.bitcoin && <FundingChip label="Bitcoin" href={app.bitcoin.startsWith("bitcoin:") ? app.bitcoin : `bitcoin:${app.bitcoin}`} />}
+              </div>
+            </div>
+          )}
         </aside>
       </section>
 
@@ -282,6 +310,14 @@ export default function AppDetailPage() {
                     {apk.published_at && (
                       <div className="mt-1 font-mono text-[11px] text-ink-mute">
                         {formatDate(apk.published_at)}
+                      </div>
+                    )}
+                    {apk.anti_features && apk.anti_features.length > 0 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <ShieldAlert className="h-3 w-3 text-accent" />
+                        {apk.anti_features.map((flag) => (
+                          <Badge key={flag} variant="accent">{flag}</Badge>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -363,5 +399,19 @@ function SpecRow({
 function Spinner() {
   return (
     <div className="h-7 w-7 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label="Loading" />
+  );
+}
+
+function FundingChip({ label, href }: { label: string; href: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-pill border border-outline-soft bg-surface px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:border-primary hover:text-primary"
+    >
+      {label}
+      <ExternalLink className="h-3 w-3" strokeWidth={2.4} />
+    </a>
   );
 }

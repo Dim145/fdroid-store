@@ -73,6 +73,12 @@ class Apk(Base, IdMixin, TimestampMixin):
     features: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     native_code: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     locales: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # F-Droid anti-features (NonFreeNet, NonFreeAdd, KnownVuln, Tracking, …).
+    # Surfaced as warnings in F-Droid clients. Edited by admins, not extracted
+    # from the APK itself. Empty list = no flags. We could attach a reason
+    # string per flag (the v2 spec allows it) but admins overwhelmingly leave
+    # those empty in practice, so we keep this simple.
+    anti_features: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
 
     status: Mapped[ApkStatus] = mapped_column(
         Enum(ApkStatus, name="apk_status"),

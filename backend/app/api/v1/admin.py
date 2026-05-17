@@ -153,7 +153,11 @@ async def admin_update_app(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
 
     # Apply user-facing fields
-    for f in ("name", "summary", "description", "license", "author_name"):
+    for f in (
+        "name", "summary", "description", "license",
+        "author_name", "author_email",
+        "donate", "liberapay", "bitcoin", "open_collective", "translation",
+    ):
         v = getattr(payload, f)
         if v is not None:
             setattr(app, f, v)

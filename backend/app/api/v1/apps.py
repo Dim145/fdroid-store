@@ -268,6 +268,18 @@ async def update_app(
         app.issue_tracker = str(payload.issue_tracker)
     if payload.author_name is not None:
         app.author_name = payload.author_name
+    if payload.author_email is not None:
+        app.author_email = payload.author_email
+    if payload.donate is not None:
+        app.donate = payload.donate
+    if payload.liberapay is not None:
+        app.liberapay = payload.liberapay
+    if payload.bitcoin is not None:
+        app.bitcoin = payload.bitcoin
+    if payload.open_collective is not None:
+        app.open_collective = payload.open_collective
+    if payload.translation is not None:
+        app.translation = payload.translation
     if payload.visibility is not None:
         app.visibility = payload.visibility
     if payload.category_ids is not None:

@@ -36,6 +36,7 @@ class ApkRead(BaseModel):
     signer_sha256: str
     permissions: list[str]
     native_code: list[str]
+    anti_features: list[str] = Field(default_factory=list)
     status: ApkStatus
     rejection_reason: str | None
     whats_new: str | None = None
@@ -46,10 +47,12 @@ class ApkRead(BaseModel):
 class ApkUpdate(BaseModel):
     """Fields editable on an existing APK row.
 
-    Only the changelog is mutable today — the rest is extracted from the
-    binary and would be rewritten by a rescan.
+    The changelog and the anti-feature flags are admin-curated metadata; the
+    rest is extracted from the binary and would be rewritten by a rescan.
     """
     whats_new: str | None = Field(default=None, max_length=10_000)
+    # ``None`` = leave as-is. Empty list explicitly clears the flags.
+    anti_features: list[str] | None = Field(default=None, max_length=20)
 
 
 class ApkInspect(BaseModel):
@@ -91,6 +94,12 @@ class AppCreate(BaseModel):
     source_code: HttpUrl | None = None
     issue_tracker: HttpUrl | None = None
     author_name: str | None = Field(default=None, max_length=255)
+    author_email: str | None = Field(default=None, max_length=255)
+    donate: str | None = Field(default=None, max_length=512)
+    liberapay: str | None = Field(default=None, max_length=512)
+    bitcoin: str | None = Field(default=None, max_length=512)
+    open_collective: str | None = Field(default=None, max_length=512)
+    translation: str | None = Field(default=None, max_length=512)
     visibility: AppVisibility = AppVisibility.PUBLIC
     category_ids: list[uuid.UUID] = Field(default_factory=list)
 
@@ -104,6 +113,12 @@ class AppUpdate(BaseModel):
     source_code: HttpUrl | None = None
     issue_tracker: HttpUrl | None = None
     author_name: str | None = Field(default=None, max_length=255)
+    author_email: str | None = Field(default=None, max_length=255)
+    donate: str | None = Field(default=None, max_length=512)
+    liberapay: str | None = Field(default=None, max_length=512)
+    bitcoin: str | None = Field(default=None, max_length=512)
+    open_collective: str | None = Field(default=None, max_length=512)
+    translation: str | None = Field(default=None, max_length=512)
     visibility: AppVisibility | None = None
     category_ids: list[uuid.UUID] | None = None
 
@@ -126,8 +141,15 @@ class AppRead(BaseModel):
     source_code: str | None
     issue_tracker: str | None
     author_name: str | None
+    author_email: str | None = None
+    donate: str | None = None
+    liberapay: str | None = None
+    bitcoin: str | None = None
+    open_collective: str | None = None
+    translation: str | None = None
     icon_path: str | None
     icon_is_custom: bool = False
+    feature_graphic_path: str | None = None
     visibility: AppVisibility
     status: AppStatus
     suggested_version_code: int | None

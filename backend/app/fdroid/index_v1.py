@@ -51,12 +51,24 @@ def _serialize_app(app: App) -> dict[str, Any]:
         obj["suggestedVersionName"] = app.suggested_version_name
     if app.author_name:
         obj["authorName"] = app.author_name
+    if app.author_email:
+        obj["authorEmail"] = app.author_email
     if app.website:
         obj["webSite"] = app.website
     if app.source_code:
         obj["sourceCode"] = app.source_code
     if app.issue_tracker:
         obj["issueTracker"] = app.issue_tracker
+    if app.translation:
+        obj["translation"] = app.translation
+    if app.donate:
+        obj["donate"] = app.donate
+    if app.liberapay:
+        obj["liberapay"] = app.liberapay
+    if app.bitcoin:
+        obj["bitcoin"] = app.bitcoin
+    if app.open_collective:
+        obj["openCollective"] = app.open_collective
     if app.icon_path:
         # F-Droid v1 clients expect just the basename of an icon stored under
         # ``<repo-url>/icons/<filename>``.
@@ -74,6 +86,16 @@ def _serialize_app(app: App) -> dict[str, Any]:
         shots_by_locale.setdefault(s.locale, []).append(s.storage_key.rsplit("/", 1)[-1])
     for locale, files in shots_by_locale.items():
         localized.setdefault(locale, {})["phoneScreenshots"] = files
+
+    # Featured graphic is stored at ``<package>/<locale>/featureGraphic.png``;
+    # v1 expects just the basename inside the per-locale block (the client
+    # rebuilds the URL using the app's package + the locale key).
+    if app.feature_graphic_path:
+        fg_basename = app.feature_graphic_path.rsplit("/", 1)[-1]
+        # Pick locale from the storage key — second-to-last segment.
+        parts = app.feature_graphic_path.split("/")
+        fg_locale = parts[-2] if len(parts) >= 2 else DEFAULT_LOCALE
+        localized.setdefault(fg_locale, {})["featureGraphic"] = fg_basename
 
     latest_with_notes = next(
         iter(
@@ -125,6 +147,10 @@ def _serialize_apk(apk: Apk, app: App) -> dict[str, Any]:
         obj["uses-permission"] = [[p, None] for p in apk.permissions]
     if apk.features:
         obj["features"] = list(apk.features)
+    if apk.anti_features:
+        # v1 emits anti-features as a flat list of label strings per APK; the
+        # client renders the corresponding badge ("Tracking", "NonFreeNet"…).
+        obj["antiFeatures"] = list(apk.anti_features)
     return obj
 
 

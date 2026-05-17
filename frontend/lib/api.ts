@@ -236,7 +236,7 @@ export const api = {
     },
     deleteApk: (apkId: string) =>
       apiFetch<void>(`/api/v1/apks/${apkId}`, { method: "DELETE" }),
-    updateApk: (apkId: string, payload: { whats_new?: string | null }) =>
+    updateApk: (apkId: string, payload: { whats_new?: string | null; anti_features?: string[] }) =>
       apiFetch<Apk>(`/api/v1/apks/${apkId}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
@@ -252,6 +252,16 @@ export const api = {
     },
     revertIcon: (appId: string) =>
       apiFetch<void>(`/api/v1/apps/${appId}/icon`, { method: "DELETE" }),
+    uploadFeatureGraphic: (appId: string, file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch<{ feature_graphic_path: string }>(
+        `/api/v1/apps/${appId}/feature-graphic`,
+        { method: "POST", body: fd },
+      );
+    },
+    deleteFeatureGraphic: (appId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/feature-graphic`, { method: "DELETE" }),
     listScreenshots: (appId: string) =>
       apiFetch<Screenshot[]>(`/api/v1/apps/${appId}/screenshots`, {
         anonymous: !getAccessToken(),
@@ -383,8 +393,15 @@ export type AppSummary = {
   source_code: string | null;
   issue_tracker: string | null;
   author_name: string | null;
+  author_email: string | null;
+  donate: string | null;
+  liberapay: string | null;
+  bitcoin: string | null;
+  open_collective: string | null;
+  translation: string | null;
   icon_path: string | null;
   icon_is_custom: boolean;
+  feature_graphic_path: string | null;
   visibility: "public" | "private";
   status: "draft" | "pending_review" | "published" | "rejected" | "archived";
   suggested_version_code: number | null;
@@ -419,6 +436,7 @@ export type Apk = {
   signer_sha256: string;
   permissions: string[];
   native_code: string[];
+  anti_features: string[];
   status: "uploaded" | "parsed" | "pending_review" | "published" | "rejected" | "deleted";
   rejection_reason: string | null;
   whats_new: string | null;
@@ -441,6 +459,12 @@ export type AppCreate = {
   source_code?: string;
   issue_tracker?: string;
   author_name?: string;
+  author_email?: string;
+  donate?: string;
+  liberapay?: string;
+  bitcoin?: string;
+  open_collective?: string;
+  translation?: string;
   visibility?: "public" | "private";
   category_ids?: string[];
 };
@@ -491,6 +515,7 @@ export type RepoConfigInfo = {
   last_indexed_at: string | null;
   public_mode: boolean;
   registration_policy: RegistrationPolicy;
+  mirrors: string[];
 };
 
 export type InviteCode = {

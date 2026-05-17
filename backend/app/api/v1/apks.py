@@ -233,7 +233,8 @@ async def update_apk(
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
 ) -> ApkRead:
-    """Edit a previously-uploaded APK's mutable fields (only the changelog).
+    """Edit a previously-uploaded APK's mutable fields: the changelog and the
+    anti-feature flags surfaced to F-Droid clients.
 
     Whitespace is normalized on save and "" maps to NULL so the index
     builder can cleanly omit the field instead of emitting an empty
@@ -258,6 +259,18 @@ async def update_apk(
         else:
             cleaned = payload.whats_new.strip()
             apk.whats_new = cleaned or None
+    if "anti_features" in payload.model_fields_set and payload.anti_features is not None:
+        # Normalize: dedupe + drop blanks. Order preserved so the admin UI
+        # round-trips edits without churn.
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for flag in payload.anti_features:
+            stripped = flag.strip()
+            if not stripped or stripped in seen:
+                continue
+            seen.add(stripped)
+            normalized.append(stripped)
+        apk.anti_features = normalized
     await db.flush()
     await enqueue_reindex()
     return ApkRead.model_validate(apk)

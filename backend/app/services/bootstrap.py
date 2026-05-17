@@ -49,6 +49,12 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE apks ADD COLUMN IF NOT EXISTS whats_new TEXT",
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS public_mode BOOLEAN NOT NULL DEFAULT TRUE",
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS registration_policy VARCHAR(16) NOT NULL DEFAULT 'public'",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS donate VARCHAR(512)",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS liberapay VARCHAR(512)",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS bitcoin VARCHAR(512)",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS open_collective VARCHAR(512)",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS translation VARCHAR(512)",
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS anti_features JSON NOT NULL DEFAULT '[]'",
         ):
             try:
                 await conn.execute(text(stmt))

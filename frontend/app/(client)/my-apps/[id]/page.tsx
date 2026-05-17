@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Eye, ImagePlus, RotateCcw, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, Eye, ImagePlus, RotateCcw, ShieldAlert, Trash2, Upload, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Fragment, useEffect, useState } from "react";
@@ -31,12 +31,19 @@ function ManageAppInner() {
   const [sourceCode, setSourceCode] = useState("");
   const [issueTracker, setIssueTracker] = useState("");
   const [authorName, setAuthorName] = useState("");
+  const [authorEmail, setAuthorEmail] = useState("");
+  const [donate, setDonate] = useState("");
+  const [liberapay, setLiberapay] = useState("");
+  const [bitcoin, setBitcoin] = useState("");
+  const [openCollective, setOpenCollective] = useState("");
+  const [translation, setTranslation] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   const [editingChangelog, setEditingChangelog] = useState<{ apkId: string; text: string } | null>(null);
   const [savingChangelog, setSavingChangelog] = useState(false);
+  const [savingApkId, setSavingApkId] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -50,6 +57,12 @@ function ManageAppInner() {
       setSourceCode(detail.source_code || "");
       setIssueTracker(detail.issue_tracker || "");
       setAuthorName(detail.author_name || "");
+      setAuthorEmail(detail.author_email || "");
+      setDonate(detail.donate || "");
+      setLiberapay(detail.liberapay || "");
+      setBitcoin(detail.bitcoin || "");
+      setOpenCollective(detail.open_collective || "");
+      setTranslation(detail.translation || "");
       setVisibility(detail.visibility);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load app");
@@ -71,6 +84,12 @@ function ManageAppInner() {
         source_code: sourceCode || undefined,
         issue_tracker: issueTracker || undefined,
         author_name: authorName || undefined,
+        author_email: authorEmail || undefined,
+        donate: donate || undefined,
+        liberapay: liberapay || undefined,
+        bitcoin: bitcoin || undefined,
+        open_collective: openCollective || undefined,
+        translation: translation || undefined,
         visibility,
       });
       setMsg("Saved.");
@@ -129,6 +148,36 @@ function ManageAppInner() {
     setError(null); setMsg(null);
     try { await api.apps.uploadIcon(app.id, file); setMsg("Custom icon uploaded."); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "Icon upload failed"); }
+  }
+  async function uploadFeatureGraphic(file: File) {
+    if (!app) return;
+    setError(null); setMsg(null);
+    try { await api.apps.uploadFeatureGraphic(app.id, file); setMsg("Featured graphic uploaded."); await load(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Upload failed"); }
+  }
+  async function clearFeatureGraphic() {
+    if (!app) return;
+    if (!confirm("Remove the featured graphic?")) return;
+    setError(null); setMsg(null);
+    try { await api.apps.deleteFeatureGraphic(app.id); setMsg("Featured graphic removed."); await load(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
+  }
+  async function toggleApkAntiFeature(apk: Apk, flag: string) {
+    // Toggle locally then save. Optimistic + reload to stay in sync with the
+    // server (the index rebuild is async so we want the canonical state back).
+    const current = apk.anti_features || [];
+    const next = current.includes(flag)
+      ? current.filter((f) => f !== flag)
+      : [...current, flag];
+    setSavingApkId(apk.id); setError(null); setMsg(null);
+    try {
+      await api.apps.updateApk(apk.id, { anti_features: next });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSavingApkId(null);
+    }
   }
   async function revertIcon() {
     if (!app) return;
@@ -234,6 +283,24 @@ function ManageAppInner() {
           <FormField label="Issue tracker" htmlFor="issue" className="md:col-span-2">
             <Input id="issue" type="url" value={issueTracker} onChange={(e) => setIssueTracker(e.target.value)} />
           </FormField>
+          <FormField label="Author email" htmlFor="aemail">
+            <Input id="aemail" type="email" value={authorEmail} onChange={(e) => setAuthorEmail(e.target.value)} />
+          </FormField>
+          <FormField label="Translation URL" htmlFor="trans">
+            <Input id="trans" type="url" placeholder="https://weblate.example.org/…" value={translation} onChange={(e) => setTranslation(e.target.value)} />
+          </FormField>
+          <FormField label="Donate URL" htmlFor="don">
+            <Input id="don" type="url" value={donate} onChange={(e) => setDonate(e.target.value)} />
+          </FormField>
+          <FormField label="Liberapay" htmlFor="lib">
+            <Input id="lib" type="url" placeholder="https://liberapay.com/you" value={liberapay} onChange={(e) => setLiberapay(e.target.value)} />
+          </FormField>
+          <FormField label="Open Collective" htmlFor="oc">
+            <Input id="oc" type="url" placeholder="https://opencollective.com/you" value={openCollective} onChange={(e) => setOpenCollective(e.target.value)} />
+          </FormField>
+          <FormField label="Bitcoin" htmlFor="btc">
+            <Input id="btc" placeholder="bc1q… or bitcoin:bc1q…" value={bitcoin} onChange={(e) => setBitcoin(e.target.value)} />
+          </FormField>
           <div className="md:col-span-2 flex justify-end">
             <Button type="submit" variant="filled" size="lg" disabled={saving}>
               {saving ? "Saving…" : "Save listing"}
@@ -271,6 +338,46 @@ function ManageAppInner() {
                 </Button>
               )}
             </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* ──── Featured graphic ──── */}
+      <Section
+        step="2b"
+        title="Featured graphic"
+        subtitle="Wide banner the F-Droid client shows above the description. 1024×500 max, JPEG/PNG/WebP."
+      >
+        <div className="flex flex-wrap items-center gap-5">
+          {app.feature_graphic_path ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={mediaUrl(app.feature_graphic_path) || ""}
+              alt="featured graphic"
+              className="h-32 w-auto rounded-2xl border border-outline-soft bg-surface-2 object-cover shadow-e1"
+            />
+          ) : (
+            <div className="flex h-32 w-64 items-center justify-center rounded-2xl border border-dashed border-outline bg-surface-2 text-xs italic text-ink-mute">
+              No banner yet
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex">
+              <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary-container px-4 text-sm font-semibold text-primary-on-container hover:brightness-[1.04]">
+                <ImagePlus className="h-4 w-4" /> Upload banner
+              </span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFeatureGraphic(f); e.target.value = ""; }}
+                className="sr-only"
+              />
+            </label>
+            {app.feature_graphic_path && (
+              <Button type="button" variant="outlined" size="md" onClick={clearFeatureGraphic}>
+                <Trash2 className="h-4 w-4" /> Remove
+              </Button>
+            )}
           </div>
         </div>
       </Section>
@@ -371,6 +478,11 @@ function ManageAppInner() {
                       ) : (
                         <p className="mt-1 text-xs italic text-ink-mute">No changelog</p>
                       )}
+                      <AntiFeatureChips
+                        apk={apk}
+                        disabled={savingApkId === apk.id}
+                        onToggle={(flag) => toggleApkAntiFeature(apk, flag)}
+                      />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button
@@ -482,6 +594,62 @@ function FormField({
 function Spinner() {
   return (
     <div className="h-6 w-6 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label="Loading" />
+  );
+}
+
+// The set the F-Droid client recognises and renders as warning badges. Order
+// roughly matches how upstream metadata lists them, with the security/privacy
+// ones first.
+const KNOWN_ANTI_FEATURES = [
+  "Tracking",
+  "NonFreeNet",
+  "NonFreeAdd",
+  "KnownVuln",
+  "NoSourceSince",
+  "NonFreeAssets",
+  "NonFreeDep",
+  "UpstreamNonFree",
+  "DisabledAlgorithm",
+  "NSFW",
+] as const;
+
+function AntiFeatureChips({
+  apk,
+  disabled,
+  onToggle,
+}: {
+  apk: Apk;
+  disabled: boolean;
+  onToggle: (flag: string) => void;
+}) {
+  const active = new Set(apk.anti_features || []);
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <ShieldAlert className="h-3.5 w-3.5 text-ink-mute" />
+      <span className="mr-1 text-[10px] uppercase tracking-wider text-ink-mute">
+        Anti-features
+      </span>
+      {KNOWN_ANTI_FEATURES.map((flag) => {
+        const on = active.has(flag);
+        return (
+          <button
+            key={flag}
+            type="button"
+            disabled={disabled}
+            onClick={() => onToggle(flag)}
+            className={cn(
+              "rounded-pill border px-2 py-0.5 text-[10px] font-semibold transition-colors",
+              on
+                ? "border-accent bg-accent-container text-accent-on-container"
+                : "border-outline-soft bg-surface text-ink-mute hover:border-outline hover:text-ink",
+              disabled && "opacity-50",
+            )}
+          >
+            {flag}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

@@ -114,20 +114,24 @@ async def _collect_file_meta(
         for s in app.screenshots:
             meta[s.storage_key] = {"sha256": s.sha256, "size": s.size_bytes}
 
-    # icons — re-hash from storage so we pick up overwrites
-    icon_keys: set[str] = set()
+    # icons + featured graphics — re-hash from storage so we pick up
+    # overwrites (an APK upload can overwrite ``icons/<package>.png``
+    # without touching the App row, and admins can replace banners).
+    file_keys: set[str] = set()
     if repo_config.icon_path:
-        icon_keys.add(repo_config.icon_path)
+        file_keys.add(repo_config.icon_path)
     for app in apps:
         if app.icon_path:
-            icon_keys.add(app.icon_path)
-    for key in icon_keys:
+            file_keys.add(app.icon_path)
+        if app.feature_graphic_path:
+            file_keys.add(app.feature_graphic_path)
+    for key in file_keys:
         try:
             if not await storage.exists(key):
                 continue
             data = await storage.get_bytes(key)
         except Exception as exc:  # noqa: BLE001
-            log.warning("could not read icon for index", key=key, error=str(exc))
+            log.warning("could not read static asset for index", key=key, error=str(exc))
             continue
         meta[key] = {
             "sha256": hashlib.sha256(data).hexdigest(),
@@ -145,8 +149,19 @@ async def _build_one(
 ) -> None:
     file_meta = await _collect_file_meta(storage, repo_config=repo_config, apps=apps)
 
+    # Admin-managed mirror list lives in ``mirrors_json`` as a JSON-encoded
+    # array. Tolerate empty/missing/garbled values: bad mirror data shouldn't
+    # block a reindex, the worst case is the index just lacks the field.
+    mirrors: list[str] = []
+    try:
+        raw = json.loads(repo_config.mirrors_json or "[]")
+        if isinstance(raw, list):
+            mirrors = [str(u) for u in raw if u]
+    except json.JSONDecodeError:
+        log.warning("repo_config.mirrors_json is not valid JSON; ignoring")
+
     # index-v1.jar (contains index-v1.json, signed)
-    v1_bytes = build_index_v1(repo_config=repo_config, apps=apps)
+    v1_bytes = build_index_v1(repo_config=repo_config, apps=apps, mirrors=mirrors)
     await _write_jar(
         storage,
         storage_key=f"{prefix}/index-v1.jar",
@@ -154,7 +169,7 @@ async def _build_one(
     )
 
     # index-v2.json (plaintext) + entry.jar (signed, contains entry.json)
-    v2_bytes = build_index_v2(repo_config=repo_config, apps=apps, file_meta=file_meta)
+    v2_bytes = build_index_v2(repo_config=repo_config, apps=apps, mirrors=mirrors, file_meta=file_meta)
     await _write_bytes(
         storage,
         f"{prefix}/index-v2.json",

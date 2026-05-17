@@ -11,6 +11,9 @@ RegistrationPolicy = Literal["public", "invite", "closed"]
 
 
 class RepoConfigRead(BaseModel):
+    # The ``RepoConfig`` ORM row exposes a ``mirrors`` property (decoded from
+    # ``mirrors_json``) so Pydantic's ``from_attributes`` reads the list
+    # straight off the model — no custom validator needed here.
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -24,6 +27,7 @@ class RepoConfigRead(BaseModel):
     last_indexed_at: datetime | None
     public_mode: bool
     registration_policy: RegistrationPolicy
+    mirrors: list[str] = []
 
 
 class RepoConfigUpdate(BaseModel):

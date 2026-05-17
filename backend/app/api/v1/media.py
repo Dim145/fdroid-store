@@ -32,6 +32,10 @@ from app.storage import get_storage
 router = APIRouter()
 log = get_logger(__name__)
 
+# Stored under the same locale subdirectory layout as screenshots so the
+# F-Droid client can read it through its existing media URL conventions.
+_DEFAULT_FG_LOCALE = "en-US"
+
 
 async def _load_owned_app(db, app_id: uuid.UUID, user: User) -> App:
     app = (
@@ -96,6 +100,56 @@ async def upload_custom_icon(
     await db.flush()
     await enqueue_reindex()
     return {"icon_path": key, "icon_is_custom": True}
+
+
+@router.post("/{app_id}/feature-graphic", response_model=dict)
+async def upload_feature_graphic(
+    app_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+    file: UploadFile = File(...),
+) -> dict:
+    """Set the app's featured graphic (the wide banner the F-Droid client
+    shows above the description). Re-encoded to PNG and capped at 1024×500,
+    which matches the dimensions Google Play and F-Droid clients optimise
+    for; clients downscale as needed."""
+    app = await _load_owned_app(db, app_id, user)
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    png = _normalize_to_png(raw, (1024, 500))
+
+    storage = get_storage()
+    key = f"{app.package_name}/{_DEFAULT_FG_LOCALE}/featureGraphic.png"
+    await storage.put(key, png, content_type="image/png")
+    app.feature_graphic_path = key
+    await db.flush()
+    await enqueue_reindex()
+    return {"feature_graphic_path": key}
+
+
+@router.delete(
+    "/{app_id}/feature-graphic",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
+async def delete_feature_graphic(
+    app_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    app = await _load_owned_app(db, app_id, user)
+    if not app.feature_graphic_path:
+        return
+    storage = get_storage()
+    try:
+        await storage.delete(app.feature_graphic_path)
+    except Exception:  # noqa: BLE001
+        pass
+    app.feature_graphic_path = None
+    await db.flush()
+    await enqueue_reindex()
 
 
 @router.delete(
