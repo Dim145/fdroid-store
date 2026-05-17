@@ -18,6 +18,7 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     AppCategory,
     Category,
     DownloadEvent,
+    InviteCode,
     Localization,
     RepoConfig,
     User,
@@ -46,6 +47,8 @@ async def _create_tables_if_needed() -> None:
         for stmt in (
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS icon_is_custom BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE apks ADD COLUMN IF NOT EXISTS whats_new TEXT",
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS public_mode BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS registration_policy VARCHAR(16) NOT NULL DEFAULT 'public'",
         ):
             try:
                 await conn.execute(text(stmt))

@@ -1,30 +1,62 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { api, type AuthMethodsInfo } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 
 export default function SignupPage() {
+  // Wrap so useSearchParams (reads ?invite=…) doesn't block static rendering.
+  return (
+    <Suspense fallback={null}>
+      <SignupInner />
+    </Suspense>
+  );
+}
+
+function SignupInner() {
   const router = useRouter();
+  const search = useSearchParams();
   const { signup } = useAuth();
+  // Pre-fill invite_code from ?invite=XXX so an admin can hand someone a
+  // single URL ("https://repo/signup?invite=XYZ") that lands ready to submit.
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState(search.get("invite") ?? "");
+  const [methods, setMethods] = useState<AuthMethodsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    api.authMethods().then(setMethods).catch(() => setMethods({
+      local: true,
+      oidc: false,
+      allow_signup: true,
+      oidc_login_url: null,
+      public_mode: true,
+      registration_policy: "public",
+    }));
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null); setSubmitting(true);
     try {
-      await signup({ email, username, password, full_name: fullName || undefined });
+      await signup({
+        email,
+        username,
+        password,
+        full_name: fullName || undefined,
+        invite_code: inviteCode.trim() || undefined,
+      });
       router.replace("/apps");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Signup failed");
@@ -32,6 +64,13 @@ export default function SignupPage() {
       setSubmitting(false);
     }
   }
+
+  // Closed mode: render a friendly explanation instead of a form that the
+  // backend would just reject.
+  const isClosed = methods != null && (
+    !methods.allow_signup || methods.registration_policy === "closed"
+  );
+  const requiresInvite = methods?.registration_policy === "invite";
 
   return (
     <main className="grid min-h-screen md:grid-cols-[1fr_1.1fr]">
@@ -73,9 +112,35 @@ export default function SignupPage() {
           <div className="mb-6 hidden md:flex md:justify-end">
             <ThemeToggle />
           </div>
-          <h2 className="text-3xl font-bold tracking-tight text-ink">Create your account</h2>
-          <p className="mt-1 text-ink-soft">It only takes a moment.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-ink">
+            {isClosed ? "Signups are closed" : "Create your account"}
+          </h2>
+          <p className="mt-1 text-ink-soft">
+            {isClosed
+              ? "Ask an administrator to create an account for you."
+              : requiresInvite
+              ? "An invite code is required to sign up here."
+              : "It only takes a moment."}
+          </p>
+          {isClosed ? (
+            <div className="mt-8 space-y-4">
+              <Button asChild variant="outlined" size="xl" className="w-full">
+                <Link href="/login">Back to sign in</Link>
+              </Button>
+            </div>
+          ) : (
           <form onSubmit={onSubmit} className="mt-8 space-y-4">
+            {requiresInvite && (
+              <Field label="Invite code" htmlFor="invite">
+                <Input
+                  id="invite"
+                  required
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  autoComplete="off"
+                />
+              </Field>
+            )}
             <Field label="Email" htmlFor="email">
               <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
@@ -101,6 +166,7 @@ export default function SignupPage() {
               </Link>
             </p>
           </form>
+          )}
         </div>
       </section>
     </main>

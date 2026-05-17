@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, AppWindow, Users, Settings2, Wand2 } from "lucide-react";
+import { LayoutDashboard, AppWindow, Users, Settings2, Wand2, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -12,6 +12,7 @@ const NAV = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/apps", label: "Apps & APKs", icon: AppWindow },
   { href: "/admin/users", label: "Users", icon: Users },
+  { href: "/admin/access", label: "Access", icon: ShieldCheck },
   { href: "/admin/repo", label: "Repo config", icon: Settings2 },
   { href: "/admin/setup", label: "Setup wizard", icon: Wand2 },
 ];

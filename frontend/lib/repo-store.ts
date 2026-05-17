@@ -29,6 +29,8 @@ type RepoInfoState = {
   loaded: boolean;
   /** True if the API said setup_complete. */
   setupComplete: boolean;
+  /** When false, anonymous visitors must be redirected to /login. */
+  publicMode: boolean;
   fetchOnce: () => Promise<void>;
   /** Force re-fetch — used after the admin saves /admin/repo. */
   refresh: () => Promise<void>;
@@ -44,6 +46,7 @@ export const useRepoStore = create<RepoInfoState>((set, get) => ({
   iconPath: null,
   loaded: false,
   setupComplete: false,
+  publicMode: true,
 
   async fetchOnce() {
     if (get().loaded) return;
@@ -58,6 +61,7 @@ export const useRepoStore = create<RepoInfoState>((set, get) => ({
           description: s.repo_description,
           iconPath: s.repo_icon_path,
           setupComplete: s.setup_complete,
+          publicMode: s.public_mode,
           loaded: true,
         });
       } catch {
@@ -79,6 +83,7 @@ export const useRepoStore = create<RepoInfoState>((set, get) => ({
         description: s.repo_description,
         iconPath: s.repo_icon_path,
         setupComplete: s.setup_complete,
+        publicMode: s.public_mode,
         loaded: true,
       });
     } catch {/* keep previous state */}

@@ -138,11 +138,15 @@ export type TokenPair = {
   expires_in: number;
 };
 
+export type RegistrationPolicy = "public" | "invite" | "closed";
+
 export type AuthMethodsInfo = {
   local: boolean;
   oidc: boolean;
   allow_signup: boolean;
   oidc_login_url: string | null;
+  public_mode: boolean;
+  registration_policy: RegistrationPolicy;
 };
 
 export type CurrentUser = {
@@ -165,7 +169,7 @@ export const api = {
       anonymous: true,
       body: JSON.stringify({ email, password }),
     }),
-  signup: (payload: { email: string; username: string; password: string; full_name?: string }) =>
+  signup: (payload: { email: string; username: string; password: string; full_name?: string; invite_code?: string }) =>
     apiFetch<TokenPair>("/api/v1/auth/signup", {
       method: "POST",
       anonymous: true,
@@ -313,6 +317,16 @@ export const api = {
     },
     stats: () =>
       apiFetch<AdminStats>("/api/v1/admin/stats"),
+    invites: {
+      list: () => apiFetch<InviteCode[]>("/api/v1/admin/invites"),
+      create: (payload: { note?: string; expires_in_days?: number }) =>
+        apiFetch<InviteCode>("/api/v1/admin/invites", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+      revoke: (id: string) =>
+        apiFetch<void>(`/api/v1/admin/invites/${id}`, { method: "DELETE" }),
+    },
   },
 };
 
@@ -326,6 +340,7 @@ export type SetupStatusResponse = {
   setup_complete: boolean;
   keystore_present: boolean;
   has_users: boolean;
+  public_mode: boolean;
   repo_name: string | null;
   repo_description: string | null;
   repo_address: string | null;
@@ -474,6 +489,19 @@ export type RepoConfigInfo = {
   keystore_fingerprint_sha256: string | null;
   last_index_version: number;
   last_indexed_at: string | null;
+  public_mode: boolean;
+  registration_policy: RegistrationPolicy;
+};
+
+export type InviteCode = {
+  id: string;
+  code: string;
+  note: string | null;
+  created_at: string;
+  expires_at: string | null;
+  used_at: string | null;
+  created_by_username: string | null;
+  used_by_username: string | null;
 };
 export type KeystoreInfo = {
   present: boolean;

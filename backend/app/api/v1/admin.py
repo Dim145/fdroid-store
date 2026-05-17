@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
-from typing import Annotated
-
 import io
+import secrets
+import uuid
+from datetime import UTC, datetime, timedelta
 from datetime import datetime as _dt
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from PIL import Image
 from sqlalchemy import desc, func, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.api.deps import DbSession, get_current_admin
 from app.core.security import hash_password
@@ -18,9 +18,11 @@ from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, Category
 from app.models.audit import DownloadEvent
+from app.models.invite_code import InviteCode
 from app.models.repo_config import RepoConfig
 from app.models.user import User
 from app.schemas.app import AppAdminUpdate, AppRead
+from app.schemas.invite import InviteCodeCreate, InviteCodeRead
 from app.schemas.repo import RepoConfigRead, RepoConfigUpdate
 from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserRead
 from app.services.queue import enqueue_reindex
@@ -265,16 +267,28 @@ async def update_repo_config(
 ) -> RepoConfigRead:
     import json as _json
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one()
+    repo_index_dirty = False
     if payload.name is not None:
         config.name = payload.name
+        repo_index_dirty = True
     if payload.description is not None:
         config.description = payload.description
+        repo_index_dirty = True
     if payload.address is not None:
         config.address = str(payload.address).rstrip("/")
+        repo_index_dirty = True
     if payload.mirrors is not None:
         config.mirrors_json = _json.dumps([str(m) for m in payload.mirrors])
+        repo_index_dirty = True
+    if payload.public_mode is not None:
+        config.public_mode = payload.public_mode
+    if payload.registration_policy is not None:
+        config.registration_policy = payload.registration_policy
     await db.flush()
-    await enqueue_reindex()
+    # Only re-render the index when something baked into the JSON actually
+    # changed — toggling registration policy doesn't move any bytes.
+    if repo_index_dirty:
+        await enqueue_reindex()
     return RepoConfigRead.model_validate(config)
 
 
@@ -427,3 +441,112 @@ async def admin_stats(
             for ev, app_name, username in recent_downloads
         ],
     }
+
+
+# --------------------------------------------------------------------------
+# Invite codes (used when registration_policy = "invite")
+# --------------------------------------------------------------------------
+def _generate_invite_code() -> str:
+    # 16 chars from token_urlsafe -> ~96 bits of entropy. Plenty for a
+    # human-shareable single-use code, still short enough to read aloud.
+    return secrets.token_urlsafe(12)[:16]
+
+
+async def _serialize_invite(db, invite: InviteCode) -> InviteCodeRead:
+    """Hydrate with the creator/consumer usernames so the admin UI doesn't
+    need a per-row /users round-trip."""
+    creator_name: str | None = None
+    consumer_name: str | None = None
+    if invite.created_by_user_id is not None:
+        creator_name = (
+            await db.execute(
+                select(User.username).where(User.id == invite.created_by_user_id)
+            )
+        ).scalar_one_or_none()
+    if invite.used_by_user_id is not None:
+        consumer_name = (
+            await db.execute(
+                select(User.username).where(User.id == invite.used_by_user_id)
+            )
+        ).scalar_one_or_none()
+    return InviteCodeRead(
+        id=invite.id,
+        code=invite.code,
+        note=invite.note,
+        created_at=invite.created_at,
+        expires_at=invite.expires_at,
+        used_at=invite.used_at,
+        created_by_username=creator_name,
+        used_by_username=consumer_name,
+    )
+
+
+@router.get("/invites", response_model=list[InviteCodeRead])
+async def list_invite_codes(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+) -> list[InviteCodeRead]:
+    """Newest first. Includes both pending and consumed codes — the admin
+    can see audit history at a glance."""
+    creator = aliased(User)
+    consumer = aliased(User)
+    rows = (
+        await db.execute(
+            select(InviteCode, creator.username, consumer.username)
+            .join(creator, InviteCode.created_by_user_id == creator.id, isouter=True)
+            .join(consumer, InviteCode.used_by_user_id == consumer.id, isouter=True)
+            .order_by(desc(InviteCode.created_at))
+        )
+    ).all()
+    return [
+        InviteCodeRead(
+            id=inv.id,
+            code=inv.code,
+            note=inv.note,
+            created_at=inv.created_at,
+            expires_at=inv.expires_at,
+            used_at=inv.used_at,
+            created_by_username=cname,
+            used_by_username=uname,
+        )
+        for inv, cname, uname in rows
+    ]
+
+
+@router.post("/invites", response_model=InviteCodeRead, status_code=status.HTTP_201_CREATED)
+async def create_invite_code(
+    payload: InviteCodeCreate,
+    db: DbSession,
+    admin: Annotated[User, Depends(get_current_admin)],
+) -> InviteCodeRead:
+    # Collisions are statistically impossible at 96 bits, but treating the
+    # unique constraint as authoritative beats hand-rolling a "retry on
+    # IntegrityError" loop in 99.9999% no-op territory.
+    invite = InviteCode(
+        code=_generate_invite_code(),
+        note=payload.note,
+        created_by_user_id=admin.id,
+        expires_at=(
+            datetime.now(UTC) + timedelta(days=payload.expires_in_days)
+            if payload.expires_in_days
+            else None
+        ),
+    )
+    db.add(invite)
+    await db.flush()
+    return await _serialize_invite(db, invite)
+
+
+@router.delete("/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, response_class=Response)
+async def revoke_invite_code(
+    invite_id: uuid.UUID,
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+) -> None:
+    invite = (
+        await db.execute(select(InviteCode).where(InviteCode.id == invite_id))
+    ).scalar_one_or_none()
+    if invite is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+    await db.delete(invite)
+    await db.flush()

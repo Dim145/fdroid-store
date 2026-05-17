@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_current_user, get_current_user_optional
+from app.api.deps import DbSession, get_current_user, require_browse_access
 from app.api.v1.apks import (
     attach_apk_to_app,
     parse_or_400,
@@ -37,13 +37,14 @@ def _app_visible_to(app: App, user: User | None) -> bool:
 @router.get("", response_model=list[AppRead])
 async def list_apps(
     db: DbSession,
-    user: Annotated[User | None, Depends(get_current_user_optional)],
+    user: Annotated[User | None, Depends(require_browse_access)],
     q: str | None = None,
     category: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[AppRead]:
-    """Browse apps. Anonymous callers only see PUBLIC + PUBLISHED apps."""
+    """Browse apps. Anonymous callers only see PUBLIC + PUBLISHED apps; they
+    are rejected outright when the repo is not in public mode."""
     stmt = (
         select(App)
         .options(selectinload(App.categories), selectinload(App.apks))
@@ -230,7 +231,7 @@ async def _load_app_or_404(db, app_id_or_pkg: str) -> App:
 async def get_app(
     app_ref: str,
     db: DbSession,
-    user: Annotated[User | None, Depends(get_current_user_optional)],
+    user: Annotated[User | None, Depends(require_browse_access)],
 ) -> AppDetail:
     app = await _load_app_or_404(db, app_ref)
     if not _app_visible_to(app, user):

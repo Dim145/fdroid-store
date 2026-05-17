@@ -7,6 +7,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
+RegistrationPolicy = Literal["public", "invite", "closed"]
+
+
 class RepoConfigRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -19,6 +22,8 @@ class RepoConfigRead(BaseModel):
     keystore_fingerprint_sha256: str | None
     last_index_version: int
     last_indexed_at: datetime | None
+    public_mode: bool
+    registration_policy: RegistrationPolicy
 
 
 class RepoConfigUpdate(BaseModel):
@@ -26,6 +31,8 @@ class RepoConfigUpdate(BaseModel):
     description: str | None = None
     address: HttpUrl | None = None
     mirrors: list[HttpUrl] | None = None
+    public_mode: bool | None = None
+    registration_policy: RegistrationPolicy | None = None
 
 
 class SetupStatus(BaseModel):
@@ -42,6 +49,10 @@ class SetupStatus(BaseModel):
     # it's the value F-Droid clients use to verify the repo signature, so
     # putting it in a QR code is its intended use.
     repo_fingerprint: str | None = None
+    # Whether anonymous browsing is currently allowed. Echoed here (in
+    # addition to /auth/methods) so the SPA can decide synchronously, on the
+    # same fetch it already does, whether to gate the catalogue.
+    public_mode: bool = True
 
 
 class SetupWizardRequest(BaseModel):

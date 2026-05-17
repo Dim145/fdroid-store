@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AppCard } from "@/components/app-card";
 import { FeatureHero } from "@/components/feature-hero";
+import { PrivateAccessGuard } from "@/components/private-access-guard";
 import { RepoCta } from "@/components/repo-cta";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
@@ -109,6 +110,7 @@ export default function Home() {
     <div className="flex min-h-screen flex-col">
       <SiteHeader />
       <main className="container flex-1 py-6 md:py-10">
+        <PrivateAccessGuard>
         {/* ──── Welcome / repo title ──── */}
         <header className="mb-6 md:mb-8">
           <div className="eyebrow">Welcome</div>
@@ -190,6 +192,7 @@ export default function Home() {
         <section className="mt-12 animate-fade-up [animation-delay:220ms]">
           <RepoCta />
         </section>
+        </PrivateAccessGuard>
       </main>
       <SiteFooter />
     </div>

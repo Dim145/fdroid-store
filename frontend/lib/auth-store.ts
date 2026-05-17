@@ -20,6 +20,7 @@ type AuthState = {
     username: string;
     password: string;
     full_name?: string;
+    invite_code?: string;
   }) => Promise<CurrentUser>;
   acceptOidcTokens: (access: string, refresh: string) => Promise<CurrentUser>;
   logout: () => void;

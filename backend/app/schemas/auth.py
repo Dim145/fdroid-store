@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -13,6 +15,8 @@ class SignupRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
     password: str = Field(min_length=8, max_length=128)
     full_name: str | None = Field(default=None, max_length=255)
+    # Required when the repo's registration_policy is "invite".
+    invite_code: str | None = Field(default=None, max_length=32)
 
 
 class TokenPair(BaseModel):
@@ -36,3 +40,7 @@ class AuthMethodsInfo(BaseModel):
     oidc: bool
     allow_signup: bool
     oidc_login_url: str | None = None
+    # Repo-level access flags, exposed so the login/signup pages can render
+    # the right CTA without a second request.
+    public_mode: bool = True
+    registration_policy: Literal["public", "invite", "closed"] = "public"

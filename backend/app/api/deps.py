@@ -18,6 +18,7 @@ from app.core.security import (
     verify_api_key_secret,
 )
 from app.models.api_key import ApiKey
+from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
 
 # --------------------------------------------------------------------------
@@ -130,3 +131,49 @@ async def get_principal(
     if api_key is not None:
         return api_key.user, api_key
     return None, None
+
+
+# --------------------------------------------------------------------------
+# Public-mode access gating
+# --------------------------------------------------------------------------
+async def _public_mode(db: AsyncSession) -> bool:
+    """Returns whether the repo is currently in public mode. Falls back to
+    ``True`` if the config row doesn't exist yet (initial bootstrap)."""
+    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+    return True if config is None else config.public_mode
+
+
+async def require_browse_access(
+    db: DbSession,
+    user_opt: Annotated[User | None, Depends(get_current_user_optional)],
+) -> User | None:
+    """Used by web-API routes that were anonymous-friendly. When the admin
+    flips public_mode off, anonymous callers are rejected; authenticated
+    users still pass through and downstream visibility rules apply as before.
+    """
+    if user_opt is not None:
+        return user_opt
+    if not await _public_mode(db):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    return None
+
+
+async def require_repo_access(
+    db: DbSession,
+    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)],
+) -> ApiKey | None:
+    """Counterpart to ``require_browse_access`` for the F-Droid client path.
+    When public_mode is off we ask the client to present credentials with the
+    Basic-auth challenge it knows how to handle."""
+    if api_key is not None:
+        return api_key
+    if not await _public_mode(db):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
+        )
+    return None

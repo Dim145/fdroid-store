@@ -30,6 +30,23 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
     setup_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     keystore_fingerprint_sha256: Mapped[str | None] = mapped_column(String(64))
 
+    # Access control:
+    #   public_mode=True  → catalogue + F-Droid index are reachable anonymously
+    #                       (existing app-level visibility still applies)
+    #   public_mode=False → everything requires auth (JWT for the web UI,
+    #                       an API key for the F-Droid client)
+    public_mode: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Self-signup policy. Values are kept as plain strings (rather than a PG
+    # enum) so changes don't require a schema migration each time we add a
+    # mode. Validated at the schema layer.
+    #   "public" → anyone may sign up (legacy behaviour)
+    #   "invite" → an admin-generated invite code is required
+    #   "closed" → no new accounts; OIDC only lets existing users log in
+    registration_policy: Mapped[str] = mapped_column(
+        String(16), default="public", nullable=False
+    )
+
     # Index versioning
     last_index_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -32,14 +32,30 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Only relevant when the SSO target server is in invite mode AND the user
+  // expects to create an account through it. Existing OIDC users never need it.
+  const [oidcInvite, setOidcInvite] = useState("");
 
   useEffect(() => { fetchMe(); }, [fetchMe]);
   useEffect(() => { if (user) router.replace(next); }, [user, router, next]);
   useEffect(() => {
     api.authMethods().then(setMethods).catch(() => setMethods({
-      local: true, oidc: false, allow_signup: true, oidc_login_url: null,
+      local: true,
+      oidc: false,
+      allow_signup: true,
+      oidc_login_url: null,
+      public_mode: true,
+      registration_policy: "public",
     }));
   }, []);
+
+  // Surface server-side errors returned from the OIDC callback (e.g. invite
+  // required, signup closed). The backend redirects back with ?oidc_error=...
+  // instead of dumping a raw 400.
+  useEffect(() => {
+    const e = search.get("oidc_error");
+    if (e) setError(e);
+  }, [search]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,8 +76,21 @@ function LoginForm() {
     }
   }
 
+  // For invite-mode repos, append ?invite=... to the OIDC login URL so the
+  // backend can carry it through the IdP round-trip in the session.
+  const oidcHref = (() => {
+    if (!methods?.oidc_login_url) return null;
+    const trimmed = oidcInvite.trim();
+    if (!trimmed) return methods.oidc_login_url;
+    const sep = methods.oidc_login_url.includes("?") ? "&" : "?";
+    return `${methods.oidc_login_url}${sep}invite=${encodeURIComponent(trimmed)}`;
+  })();
+
   return (
     <AuthShell title="Welcome back" lede="Sign in to manage your apps and API keys.">
+      {error && !methods?.local && (
+        <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
+      )}
       {methods?.local && (
         <form onSubmit={onSubmit} className="space-y-4">
           <Field label="Email" htmlFor="email">
@@ -79,11 +108,22 @@ function LoginForm() {
         </form>
       )}
 
-      {methods?.oidc && methods.oidc_login_url && (
+      {methods?.oidc && oidcHref && (
         <>
           <Divider />
+          {methods.registration_policy === "invite" && (
+            <Field label="Invite code (only if you don't have an account yet)" htmlFor="oidc-invite">
+              <Input
+                id="oidc-invite"
+                placeholder="optional for existing accounts"
+                value={oidcInvite}
+                onChange={(e) => setOidcInvite(e.target.value)}
+                autoComplete="off"
+              />
+            </Field>
+          )}
           <Button asChild variant="outlined" size="lg" className="w-full">
-            <a href={methods.oidc_login_url}>Continue with SSO</a>
+            <a href={oidcHref}>Continue with SSO</a>
           </Button>
         </>
       )}
@@ -94,6 +134,11 @@ function LoginForm() {
           <Link href="/signup" className="font-medium text-primary hover:underline">
             Create an account
           </Link>
+        </p>
+      )}
+      {methods && !methods.allow_signup && methods.registration_policy === "closed" && (
+        <p className="text-center text-xs text-ink-mute">
+          Signups are closed. Ask an administrator for an account.
         </p>
       )}
     </AuthShell>

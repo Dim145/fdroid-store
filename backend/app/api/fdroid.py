@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response, Streamin
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_api_key_from_basic_auth
+from app.api.deps import DbSession, require_repo_access
 from app.core.security import parse_api_key, verify_api_key_secret
 from app.fdroid.repo_builder import REPO_PRIVATE_PREFIX, REPO_PUBLIC_PREFIX
 from app.models.api_key import ApiKey
@@ -103,14 +103,24 @@ async def serve(
     filename: str,
     request: Request,
     db: DbSession,
-    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    api_key: Annotated[ApiKey | None, Depends(require_repo_access)] = None,
 ) -> Response:
-    """Catch-all under ``/fdroid/repo/`` — anonymous + Basic-auth path."""
+    """Catch-all under ``/fdroid/repo/`` — anonymous + Basic-auth path.
+    ``require_repo_access`` lets anonymous callers through only when the repo
+    is in public mode; otherwise it issues a 401 with Basic-auth challenge."""
     return await _dispatch_root(filename, request, db, api_key)
 
 
 @router.get("/icons/{filename}")
 async def serve_icon(filename: str) -> Response:
+    """Icons stay anonymous even in private mode.
+
+    They're loaded by ``<img>`` tags from the SPA, which can't attach a
+    bearer token. Gating them would force a 401 on every logged-in page
+    that just renders a thumbnail. Knowing the icon of a package whose
+    name you already had to guess doesn't help an attacker install
+    anything — APKs and the F-Droid index are the actual gates.
+    """
     storage = get_storage()
     key = f"icons/{filename}"
     if not await storage.exists(key):
@@ -133,8 +143,14 @@ _ALLOWED_MEDIA_KINDS = {
 
 @router.get("/{package}/{locale}/{kind}/{filename}")
 async def serve_media(
-    package: str, locale: str, kind: str, filename: str
+    package: str,
+    locale: str,
+    kind: str,
+    filename: str,
 ) -> Response:
+    # Same reasoning as serve_icon: screenshots are <img>-loaded previews,
+    # gating them would just break the catalogue's thumbnails for every
+    # logged-in user. The APK + index are where access actually matters.
     if kind not in _ALLOWED_MEDIA_KINDS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     # Defensive: refuse traversal-y components

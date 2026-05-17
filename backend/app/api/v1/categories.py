@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
-from app.api.deps import DbSession, get_current_admin
+from app.api.deps import DbSession, get_current_admin, require_browse_access
 from app.models.app import Category
 from app.models.user import User
 from app.schemas.app import CategoryCreate, CategoryRead
@@ -14,7 +14,10 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[CategoryRead])
-async def list_categories(db: DbSession) -> list[CategoryRead]:
+async def list_categories(
+    db: DbSession,
+    _: Annotated[User | None, Depends(require_browse_access)],
+) -> list[CategoryRead]:
     rows = (
         await db.execute(select(Category).order_by(Category.name))
     ).scalars().all()
