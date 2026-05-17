@@ -140,7 +140,7 @@ def _build_package(
         if apk.native_code:
             manifest["nativecode"] = list(apk.native_code)
 
-        versions[apk.sha256] = {
+        version_obj: dict[str, Any] = {
             "added": _ts_ms(apk.published_at or apk.created_at),
             "file": {
                 "name": f"/{apk.file_name}",
@@ -149,6 +149,10 @@ def _build_package(
             },
             "manifest": manifest,
         }
+        # v2 supports release notes per version, localized
+        if apk.whats_new:
+            version_obj["whatsNew"] = {DEFAULT_LOCALE: apk.whats_new}
+        versions[apk.sha256] = version_obj
 
     return {"metadata": metadata, "versions": versions}
 

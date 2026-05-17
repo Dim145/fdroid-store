@@ -38,8 +38,18 @@ class ApkRead(BaseModel):
     native_code: list[str]
     status: ApkStatus
     rejection_reason: str | None
+    whats_new: str | None = None
     published_at: datetime | None
     created_at: datetime
+
+
+class ApkUpdate(BaseModel):
+    """Fields editable on an existing APK row.
+
+    Only the changelog is mutable today — the rest is extracted from the
+    binary and would be rewritten by a rescan.
+    """
+    whats_new: str | None = Field(default=None, max_length=10_000)
 
 
 class ApkInspect(BaseModel):

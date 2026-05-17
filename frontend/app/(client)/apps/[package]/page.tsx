@@ -4,9 +4,10 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { AppIcon } from "@/components/app-icon";
+import { AppPermissions } from "@/components/app-permissions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, mediaUrl, type AppDetail } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/utils";
@@ -33,6 +34,11 @@ export default function AppDetailPage() {
   };
 
   const screenshots = [...app.screenshots].sort((a, b) => a.display_order - b.display_order);
+  // Permissions of the most recent published version — that's what a fresh
+  // install will request.
+  const latestPublished = app.apks
+    .filter((a) => a.status === "published")
+    .sort((a, b) => b.version_code - a.version_code)[0];
 
   return (
     <div className="space-y-6">
@@ -50,6 +56,20 @@ export default function AppDetailPage() {
           {app.summary && <p className="text-base">{app.summary}</p>}
         </div>
       </header>
+
+      {latestPublished?.whats_new && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">What&apos;s new</CardTitle>
+            <CardDescription>
+              In version {latestPublished.version_name} ({latestPublished.version_code})
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="whitespace-pre-wrap text-sm">{latestPublished.whats_new}</p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -97,6 +117,23 @@ export default function AppDetailPage() {
                 );
               })}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {latestPublished && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Permissions</CardTitle>
+            <CardDescription>
+              What the app asks Android to grant on install.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AppPermissions
+              permissions={latestPublished.permissions}
+              versionLabel={`${latestPublished.version_name} (${latestPublished.version_code})`}
+            />
           </CardContent>
         </Card>
       )}

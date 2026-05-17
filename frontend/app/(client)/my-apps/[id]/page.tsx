@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { AppIcon } from "@/components/app-icon";
+import { AppPermissions } from "@/components/app-permissions";
 import { AuthGuard } from "@/components/auth-guard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,6 +114,35 @@ function ManageAppInner() {
       router.replace("/my-apps");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  // Inline-edit state for per-version changelogs.
+  const [editingChangelog, setEditingChangelog] = useState<{
+    apkId: string;
+    text: string;
+  } | null>(null);
+  const [savingChangelog, setSavingChangelog] = useState(false);
+
+  function startChangelogEdit(apk: Apk) {
+    setEditingChangelog({ apkId: apk.id, text: apk.whats_new ?? "" });
+  }
+
+  async function saveChangelog() {
+    if (!editingChangelog) return;
+    setError(null); setMsg(null); setSavingChangelog(true);
+    try {
+      // Empty string clears the changelog on the backend (mapped to NULL).
+      await api.apps.updateApk(editingChangelog.apkId, {
+        whats_new: editingChangelog.text || null,
+      });
+      setMsg("Changelog saved.");
+      setEditingChangelog(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSavingChangelog(false);
     }
   }
 
@@ -360,6 +390,31 @@ function ManageAppInner() {
         </CardContent>
       </Card>
 
+      {/* ----- Permissions --------------------------------------------- */}
+      {(() => {
+        const latest = [...app.apks]
+          .filter((a) => a.status === "published")
+          .sort((a, b) => b.version_code - a.version_code)[0];
+        if (!latest) return null;
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle>Permissions</CardTitle>
+              <CardDescription>
+                Declared by the latest published APK. Updates automatically when
+                you publish a new version.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AppPermissions
+                permissions={latest.permissions}
+                versionLabel={`${latest.version_name} (${latest.version_code})`}
+              />
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* ----- Versions ------------------------------------------------ */}
       <Card>
         <CardHeader>
@@ -392,29 +447,107 @@ function ManageAppInner() {
                 <TableHead>SDK</TableHead>
                 <TableHead>Size</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Changelog</TableHead>
                 <TableHead>Added</TableHead>
                 <TableHead></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {app.apks.map((apk) => (
-                <TableRow key={apk.id}>
-                  <TableCell className="font-medium">{apk.version_name}</TableCell>
-                  <TableCell className="font-mono text-xs">{apk.version_code}</TableCell>
-                  <TableCell>{apk.min_sdk}–{apk.target_sdk}</TableCell>
-                  <TableCell>{formatBytes(apk.size_bytes)}</TableCell>
-                  <TableCell>
-                    <Badge variant={apk.status === "published" ? "success" : "outline"}>{apk.status}</Badge>
-                  </TableCell>
-                  <TableCell className="text-xs">{formatDate(apk.published_at || apk.created_at)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button size="sm" variant="destructive" onClick={() => deleteApk(apk)}>Delete</Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {app.apks.map((apk) => {
+                const isEditing = editingChangelog?.apkId === apk.id;
+                return (
+                  <Fragment key={apk.id}>
+                    <TableRow>
+                      <TableCell className="font-medium">{apk.version_name}</TableCell>
+                      <TableCell className="font-mono text-xs">{apk.version_code}</TableCell>
+                      <TableCell>{apk.min_sdk}–{apk.target_sdk}</TableCell>
+                      <TableCell>{formatBytes(apk.size_bytes)}</TableCell>
+                      <TableCell>
+                        <Badge variant={apk.status === "published" ? "success" : "outline"}>{apk.status}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        {apk.whats_new ? (
+                          <span title={apk.whats_new} className="block max-w-[14rem] truncate text-xs text-muted-foreground">
+                            {apk.whats_new}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs">{formatDate(apk.published_at || apk.created_at)}</TableCell>
+                      <TableCell className="space-x-2 text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => (isEditing ? setEditingChangelog(null) : startChangelogEdit(apk))}
+                        >
+                          {isEditing ? "Close" : apk.whats_new ? "Edit changelog" : "Add changelog"}
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => deleteApk(apk)}>Delete</Button>
+                      </TableCell>
+                    </TableRow>
+                    {isEditing && (
+                      <TableRow>
+                        <TableCell colSpan={8} className="bg-muted/30">
+                          <div className="space-y-2 p-2">
+                            <Label className="text-xs">
+                              Release notes for v{apk.version_name} ({apk.version_code})
+                            </Label>
+                            <textarea
+                              rows={5}
+                              value={editingChangelog!.text}
+                              onChange={(e) =>
+                                setEditingChangelog({ apkId: apk.id, text: e.target.value })
+                              }
+                              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                              placeholder="• Bug fixes&#10;• New feature&#10;…"
+                            />
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={saveChangelog} disabled={savingChangelog}>
+                                {savingChangelog ? "Saving…" : "Save"}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setEditingChangelog(null)}
+                              >
+                                Cancel
+                              </Button>
+                              {apk.whats_new && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="ml-auto text-destructive"
+                                  onClick={async () => {
+                                    setEditingChangelog({ apkId: apk.id, text: "" });
+                                    // Empty string → backend clears it
+                                    setSavingChangelog(true);
+                                    try {
+                                      await api.apps.updateApk(apk.id, { whats_new: null });
+                                      setMsg("Changelog cleared.");
+                                      setEditingChangelog(null);
+                                      await load();
+                                    } catch (e) {
+                                      setError(e instanceof Error ? e.message : "Clear failed");
+                                    } finally {
+                                      setSavingChangelog(false);
+                                    }
+                                  }}
+                                >
+                                  Clear
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                );
+              })}
               {app.apks.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground">
                     No versions yet.
                   </TableCell>
                 </TableRow>

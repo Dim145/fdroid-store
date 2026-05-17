@@ -45,6 +45,7 @@ async def _create_tables_if_needed() -> None:
         from sqlalchemy import text
         for stmt in (
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS icon_is_custom BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS whats_new TEXT",
         ):
             try:
                 await conn.execute(text(stmt))

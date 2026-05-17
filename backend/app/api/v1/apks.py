@@ -16,7 +16,7 @@ from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus
 from app.models.user import User, UserRole
-from app.schemas.app import ApkInspect, ApkRead
+from app.schemas.app import ApkInspect, ApkRead, ApkUpdate
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
 
@@ -224,6 +224,43 @@ async def upload_apk(
         return ApkRead.model_validate(apk)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+@router.patch("/{apk_id}", response_model=ApkRead)
+async def update_apk(
+    apk_id: uuid.UUID,
+    payload: ApkUpdate,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> ApkRead:
+    """Edit a previously-uploaded APK's mutable fields (only the changelog).
+
+    Whitespace is normalized on save and "" maps to NULL so the index
+    builder can cleanly omit the field instead of emitting an empty
+    ``whatsNew``.
+    """
+    apk = (
+        await db.execute(
+            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
+    if apk is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
+    if apk.app.owner_id != user.id and user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    # Distinguish "not provided" (don't touch) from "explicitly null/empty"
+    # (clear it). Pydantic ``model_fields_set`` only contains keys the
+    # client actually sent — exactly the discriminator we need.
+    if "whats_new" in payload.model_fields_set:
+        if payload.whats_new is None:
+            apk.whats_new = None
+        else:
+            cleaned = payload.whats_new.strip()
+            apk.whats_new = cleaned or None
+    await db.flush()
+    await enqueue_reindex()
+    return ApkRead.model_validate(apk)
 
 
 @router.delete(

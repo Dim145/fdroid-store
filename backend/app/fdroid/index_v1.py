@@ -19,6 +19,7 @@ from app.models.repo_config import RepoConfig
 
 
 F_DROID_INDEX_VERSION = 20002  # matches what fdroidserver writes
+DEFAULT_LOCALE = "en-US"
 
 
 def _ts_ms(value: datetime | None) -> int:
@@ -61,16 +62,33 @@ def _serialize_app(app: App) -> dict[str, Any]:
         # ``<repo-url>/icons/<filename>``.
         obj["icon"] = app.icon_path.split("/")[-1]
 
-    # Screenshots are advertised under "localized.<locale>.phoneScreenshots"
-    # as a list of basenames; the F-Droid client constructs the full URL
-    # ``<repo-url>/<package>/<locale>/phoneScreenshots/<basename>`` from those.
+    # Localized block (v1 keys locales at the app level, not per version):
+    #   - whatsNew: taken from the highest-versionCode published APK that has
+    #     one. F-Droid clients display it as "What's new in <latest>".
+    #   - phoneScreenshots: list of basenames; the client builds the full URL
+    #     ``<repo-url>/<package>/<locale>/phoneScreenshots/<basename>``.
+    localized: dict[str, dict[str, Any]] = {}
+
     shots_by_locale: dict[str, list[str]] = {}
     for s in app.screenshots:
         shots_by_locale.setdefault(s.locale, []).append(s.storage_key.rsplit("/", 1)[-1])
-    if shots_by_locale:
-        localized: dict[str, dict[str, list[str]]] = {}
-        for locale, files in shots_by_locale.items():
-            localized[locale] = {"phoneScreenshots": files}
+    for locale, files in shots_by_locale.items():
+        localized.setdefault(locale, {})["phoneScreenshots"] = files
+
+    latest_with_notes = next(
+        iter(
+            sorted(
+                (a for a in app.apks if a.status.value == "published" and a.whats_new),
+                key=lambda a: a.version_code,
+                reverse=True,
+            )
+        ),
+        None,
+    )
+    if latest_with_notes:
+        localized.setdefault(DEFAULT_LOCALE, {})["whatsNew"] = latest_with_notes.whats_new
+
+    if localized:
         obj["localized"] = localized
     return obj
 

@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -79,6 +80,11 @@ class Apk(Base, IdMixin, TimestampMixin):
         nullable=False,
     )
     rejection_reason: Mapped[str | None] = mapped_column(String(512))
+
+    # Free-form release notes shown to users. Editable after upload via
+    # PATCH /api/v1/apks/{id}. Surfaces as v2 ``versions.<sha>.whatsNew`` and
+    # the v1 app-level ``localized.<locale>.whatsNew`` (for the latest one).
+    whats_new: Mapped[str | None] = mapped_column(Text)
 
     uploaded_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

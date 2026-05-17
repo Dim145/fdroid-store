@@ -232,6 +232,11 @@ export const api = {
     },
     deleteApk: (apkId: string) =>
       apiFetch<void>(`/api/v1/apks/${apkId}`, { method: "DELETE" }),
+    updateApk: (apkId: string, payload: { whats_new?: string | null }) =>
+      apiFetch<Apk>(`/api/v1/apks/${apkId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
     myApps: () => apiFetch<Array<AppSummary>>("/api/v1/me/apps"),
     uploadIcon: (appId: string, file: File) => {
       const fd = new FormData();
@@ -389,6 +394,7 @@ export type Apk = {
   native_code: string[];
   status: "uploaded" | "parsed" | "pending_review" | "published" | "rejected" | "deleted";
   rejection_reason: string | null;
+  whats_new: string | null;
   published_at: string | null;
   created_at: string;
 };
