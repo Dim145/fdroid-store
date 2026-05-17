@@ -6,6 +6,7 @@ import {
   api,
   clearTokens,
   type CurrentUser,
+  getAccessToken,
   setTokens,
 } from "@/lib/api";
 
@@ -26,7 +27,10 @@ type AuthState = {
 
 export const useAuth = create<AuthState>((set) => ({
   user: null,
-  loading: true,
+  // We're only "loading" if there's a token worth resolving. With no token,
+  // we already know we're anonymous — starting at `true` would otherwise
+  // pin AuthGuard pages on the spinner until something triggers fetchMe.
+  loading: typeof window !== "undefined" && !!getAccessToken(),
 
   async fetchMe() {
     set({ loading: true });
@@ -66,3 +70,11 @@ export const useAuth = create<AuthState>((set) => ({
     set({ user: null, loading: false });
   },
 }));
+
+// One-shot bootstrap on first client load: if tokens sit in localStorage,
+// resolve them to a user before any page reads from the store. Without this,
+// reloading any route other than `/` or `/login` left the store unauthenticated
+// even with valid tokens, because no component triggered fetchMe() globally.
+if (typeof window !== "undefined" && getAccessToken()) {
+  void useAuth.getState().fetchMe();
+}

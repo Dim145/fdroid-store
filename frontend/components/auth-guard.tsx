@@ -12,11 +12,7 @@ type Props = {
 
 export function AuthGuard({ children, requireAdmin = false }: Props) {
   const router = useRouter();
-  const { user, loading, fetchMe } = useAuth();
-
-  useEffect(() => {
-    if (user === null && !loading) fetchMe();
-  }, [user, loading, fetchMe]);
+  const { user, loading } = useAuth();
 
   useEffect(() => {
     if (loading) return;
