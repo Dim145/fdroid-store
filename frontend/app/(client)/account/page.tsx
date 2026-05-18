@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { api, type ApiKey } from "@/lib/api";
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { useAuth } from "@/lib/auth-store";
@@ -137,11 +138,11 @@ function AccountInner() {
         title="Content"
         subtitle="Control what shows up on the catalogue and in your F-Droid client."
       >
-        <label className="flex cursor-pointer items-start gap-4 rounded-2xl border border-outline-soft bg-surface-2 p-4 transition-colors hover:border-outline">
-          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface text-ink-soft">
+        <div className="flex items-center gap-4 rounded-2xl border border-outline-soft bg-surface-2 p-4 transition-colors hover:border-outline">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface text-ink-soft">
             <EyeOff className="h-4 w-4" strokeWidth={2.2} />
           </span>
-          <span className="min-w-0 flex-1">
+          <label htmlFor="nsfw-switch" className="min-w-0 flex-1 cursor-pointer">
             <span className="block text-sm font-semibold text-ink">
               Show NSFW apps
             </span>
@@ -151,15 +152,15 @@ function AccountInner() {
               profiles. Direct links still open behind a confirmation screen.
               Toggling rebuilds the F-Droid index served to your API keys.
             </span>
-          </span>
-          <input
-            type="checkbox"
-            className="mt-1 h-4 w-4 shrink-0 accent-primary"
+          </label>
+          <Switch
+            id="nsfw-switch"
+            ariaLabel="Show NSFW apps"
             checked={showNsfw}
             disabled={nsfwBusy}
-            onChange={(e) => toggleNsfw(e.target.checked)}
+            onCheckedChange={toggleNsfw}
           />
-        </label>
+        </div>
       </Section>
 
       {/* Password */}

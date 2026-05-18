@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
 import { AppIcon } from "@/components/app-icon";
+import { NsfwTag } from "@/components/nsfw-tag";
 import { Badge } from "@/components/ui/badge";
 import { type AppSummary } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -55,7 +56,10 @@ function ListItem({
           {rank}
         </span>
       )}
-      <AppIcon iconPath={app.icon_path} name={app.name} size={56} shape="rounded" version={app.updated_at} />
+      <div className="relative shrink-0">
+        <AppIcon iconPath={app.icon_path} name={app.name} size={56} shape="rounded" version={app.updated_at} />
+        <NsfwTag active={app.is_nsfw} />
+      </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-ink">{app.name}</div>
         <div className="truncate text-xs text-ink-mute">
@@ -67,9 +71,6 @@ function ListItem({
           )}
           {app.visibility === "private" && (
             <Badge variant="accent" className="px-1.5 py-0 text-[9px]">private</Badge>
-          )}
-          {app.is_nsfw && (
-            <Badge variant="destructive" className="px-1.5 py-0 text-[9px]">NSFW</Badge>
           )}
         </div>
       </div>
@@ -92,14 +93,17 @@ function Tile({ app, className }: { app: AppSummary; className?: string }) {
         className,
       )}
     >
-      <AppIcon
-        iconPath={app.icon_path}
-        name={app.name}
-        size={120}
-        shape="rounded"
-        version={app.updated_at}
-        className="shadow-e1 transition-transform duration-200 group-hover:scale-[1.02]"
-      />
+      <div className="relative">
+        <AppIcon
+          iconPath={app.icon_path}
+          name={app.name}
+          size={120}
+          shape="rounded"
+          version={app.updated_at}
+          className="shadow-e1 transition-transform duration-200 group-hover:scale-[1.02]"
+        />
+        <NsfwTag active={app.is_nsfw} />
+      </div>
       <div className="w-full min-w-0">
         <div className="truncate text-sm font-semibold text-ink">{app.name}</div>
         <div className="truncate text-xs text-ink-mute">
@@ -138,19 +142,19 @@ function Feature({ app, className }: { app: AppSummary; className?: string }) {
           <Badge variant="primary" className="uppercase tracking-wider">
             Featured
           </Badge>
-          <div className="flex items-center gap-1.5">
-            {app.visibility === "private" && <Badge variant="accent">private</Badge>}
-            {app.is_nsfw && <Badge variant="destructive">NSFW</Badge>}
-          </div>
+          {app.visibility === "private" && <Badge variant="accent">private</Badge>}
         </div>
-        <AppIcon
-          iconPath={app.icon_path}
-          name={app.name}
-          size={88}
-          shape="rounded"
-          version={app.updated_at}
-          className="shadow-e2"
-        />
+        <div className="relative w-fit">
+          <AppIcon
+            iconPath={app.icon_path}
+            name={app.name}
+            size={88}
+            shape="rounded"
+            version={app.updated_at}
+            className="shadow-e2"
+          />
+          <NsfwTag active={app.is_nsfw} />
+        </div>
         <div className="min-w-0">
           <div className="text-xl font-bold tracking-tight text-ink">{app.name}</div>
           <div className="truncate text-sm text-ink-mute">

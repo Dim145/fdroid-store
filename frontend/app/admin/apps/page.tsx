@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { AppIcon } from "@/components/app-icon";
+import { NsfwTag } from "@/components/nsfw-tag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -134,7 +135,10 @@ export default function AdminAppsPage() {
               <TableRow key={app.id}>
                 <TableCell>
                   <div className="flex items-center gap-3">
-                    <AppIcon iconPath={app.icon_path} name={app.name} size={36} version={app.updated_at} />
+                    <div className="relative shrink-0">
+                      <AppIcon iconPath={app.icon_path} name={app.name} size={36} version={app.updated_at} />
+                      <NsfwTag active={app.is_nsfw} />
+                    </div>
                     <Link href={`/apps/${app.package_name}`} className="text-sm font-semibold text-ink hover:underline">
                       {app.name}
                     </Link>

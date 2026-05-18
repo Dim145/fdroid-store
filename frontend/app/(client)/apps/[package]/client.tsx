@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
 import { InstallPill } from "@/components/install-pill";
+import { NsfwTag } from "@/components/nsfw-tag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api, mediaUrl, type Apk, type AppDetail } from "@/lib/api";
@@ -150,21 +151,21 @@ export default function AppDetailClient() {
         </Link>
 
         <div className="grid items-start gap-6 md:grid-cols-[auto_1fr_auto] md:gap-10">
-          <AppIcon
-            iconPath={app.icon_path}
-            name={app.name}
-            size={140}
-            shape="rounded"
-            version={app.updated_at}
-            className="shadow-e3"
-          />
+          <div className="relative w-fit">
+            <AppIcon
+              iconPath={app.icon_path}
+              name={app.name}
+              size={140}
+              shape="rounded"
+              version={app.updated_at}
+              className="shadow-e3"
+            />
+            <NsfwTag active={app.is_nsfw} size="md" />
+          </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               {app.visibility === "private" && (
                 <Badge variant="accent">private</Badge>
-              )}
-              {app.is_nsfw && (
-                <Badge variant="destructive">NSFW</Badge>
               )}
               {app.categories.slice(0, 2).map((c) => (
                 <Badge key={c.id} variant="outline">{c.name}</Badge>
