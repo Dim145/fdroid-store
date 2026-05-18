@@ -65,6 +65,28 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS promo_graphic_path VARCHAR(512)",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS tv_banner_path VARCHAR(512)",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS suggested_version_is_manual BOOLEAN NOT NULL DEFAULT FALSE",
+            # Convert apks.whats_new from TEXT → JSON, wrapping any existing
+            # text values as ``{"en-US": <text>}`` so the F-Droid spec's
+            # per-locale shape is the only one the app code ever sees.
+            # Idempotent: ``data_type = 'text'`` is only true on the first run.
+            """
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'apks'
+                  AND column_name = 'whats_new'
+                  AND data_type = 'text'
+              ) THEN
+                ALTER TABLE apks
+                  ALTER COLUMN whats_new TYPE JSON
+                  USING (CASE
+                    WHEN whats_new IS NULL OR whats_new = '' THEN NULL
+                    ELSE json_build_object('en-US', whats_new)
+                  END);
+              END IF;
+            END $$;
+            """,
         ):
             try:
                 await conn.execute(text(stmt))

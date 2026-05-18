@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 import uuid
 from datetime import UTC, datetime
@@ -25,6 +26,10 @@ from app.storage import get_storage
 
 router = APIRouter()
 log = get_logger(__name__)
+
+# Loose BCP47: 2-3 letter primary subtag optionally followed by a region or
+# script subtag. Matches the shape used by the app localizations endpoint.
+_LOCALE_RE = re.compile(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,4})?$")
 
 
 # --------------------------------------------------------------------------
@@ -319,10 +324,31 @@ async def update_apk(
     # (clear it). Pydantic ``model_fields_set`` only contains keys the
     # client actually sent — exactly the discriminator we need.
     if "whats_new" in payload.model_fields_set:
-        if payload.whats_new is None:
+        if payload.whats_new is None or not payload.whats_new:
             apk.whats_new = None
         else:
-            cleaned = payload.whats_new.strip()
+            # Validate each locale tag + strip empty entries. Locale shape
+            # is the same loose BCP47 we accept for app localizations.
+            cleaned: dict[str, str] = {}
+            for locale, text in payload.whats_new.items():
+                if not isinstance(locale, str) or not _LOCALE_RE.match(locale):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid locale tag: {locale!r}",
+                    )
+                if not isinstance(text, str):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="whats_new values must be strings",
+                    )
+                trimmed = text.strip()
+                if len(trimmed) > 10_000:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"whats_new[{locale}] exceeds 10,000 chars",
+                    )
+                if trimmed:
+                    cleaned[locale] = trimmed
             apk.whats_new = cleaned or None
     if "anti_features" in payload.model_fields_set and payload.anti_features is not None:
         # Normalize: dedupe + drop blanks. Order preserved so the admin UI

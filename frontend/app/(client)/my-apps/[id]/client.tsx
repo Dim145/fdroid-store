@@ -31,8 +31,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, mediaUrl, type Apk, type AppDetail, type Category, type Screenshot } from "@/lib/api";
+import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { toast } from "@/lib/toast-store";
-import { cn, formatBytes, formatDate } from "@/lib/utils";
+import { cn, formatBytes, formatDate, pickLocalizedText } from "@/lib/utils";
 
 function ManageAppInner() {
   // Static export bakes ``useParams`` to the placeholder used at build time
@@ -76,7 +77,14 @@ function ManageAppInner() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  const [editingChangelog, setEditingChangelog] = useState<{ apkId: string; text: string } | null>(null);
+  // The changelog draft is a per-APK dict of locale → text. ``activeLocale``
+  // is just the tab the user is editing right now; saving sends the whole
+  // bag so removing a locale tab + saving deletes it server-side.
+  const [editingChangelog, setEditingChangelog] = useState<{
+    apkId: string;
+    entries: Record<string, string>;
+    activeLocale: string;
+  } | null>(null);
   const [savingChangelog, setSavingChangelog] = useState(false);
   const [savingApkId, setSavingApkId] = useState<string | null>(null);
 
@@ -185,7 +193,15 @@ function ManageAppInner() {
     if (!editingChangelog) return;
     setSavingChangelog(true);
     try {
-      await api.apps.updateApk(editingChangelog.apkId, { whats_new: editingChangelog.text || null });
+      // Drop blank entries server-side and on the wire — an explicit empty
+      // dict is interpreted as "clear it" by the API.
+      const trimmed: Record<string, string> = {};
+      for (const [locale, text] of Object.entries(editingChangelog.entries)) {
+        if (text.trim()) trimmed[locale] = text.trim();
+      }
+      const payload =
+        Object.keys(trimmed).length === 0 ? null : trimmed;
+      await api.apps.updateApk(editingChangelog.apkId, { whats_new: payload });
       toast.success("Changelog saved.");
       setEditingChangelog(null);
       await load();
@@ -671,16 +687,29 @@ function ManageAppInner() {
                       <div className="mt-0.5 text-xs text-ink-mute">
                         Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk ?? "?"}–{apk.target_sdk ?? "?"}
                       </div>
-                      {apk.whats_new ? (
-                        <p
-                          title={apk.whats_new}
-                          className="mt-1 max-w-md truncate text-xs text-ink-soft"
-                        >
-                          ★ {apk.whats_new}
-                        </p>
-                      ) : (
-                        <p className="mt-1 text-xs italic text-ink-mute">No changelog</p>
-                      )}
+                      {(() => {
+                        const preview = pickLocalizedText(apk.whats_new);
+                        const locales = apk.whats_new ? Object.keys(apk.whats_new) : [];
+                        if (!preview) {
+                          return (
+                            <p className="mt-1 text-xs italic text-ink-mute">No changelog</p>
+                          );
+                        }
+                        return (
+                          <p
+                            title={preview.text}
+                            className="mt-1 max-w-md truncate text-xs text-ink-soft"
+                          >
+                            ★ <span className="font-mono text-[10px] text-ink-mute">{preview.locale}</span>{" "}
+                            {preview.text}
+                            {locales.length > 1 && (
+                              <span className="ml-1 text-ink-mute">
+                                (+{locales.length - 1} more)
+                              </span>
+                            )}
+                          </p>
+                        );
+                      })()}
                       <AntiFeatureChips
                         apk={apk}
                         disabled={savingApkId === apk.id}
@@ -701,7 +730,27 @@ function ManageAppInner() {
                       <Button
                         size="sm"
                         variant="outlined"
-                        onClick={() => (isEditing ? setEditingChangelog(null) : setEditingChangelog({ apkId: apk.id, text: apk.whats_new ?? "" }))}
+                        onClick={() => {
+                          if (isEditing) {
+                            setEditingChangelog(null);
+                            return;
+                          }
+                          // Hydrate the draft from the server-side dict (an
+                          // empty bag gives us a single en-US tab to start).
+                          const initial: Record<string, string> = {};
+                          if (apk.whats_new) {
+                            for (const [l, t] of Object.entries(apk.whats_new)) {
+                              if (t) initial[l] = t;
+                            }
+                          }
+                          if (Object.keys(initial).length === 0) initial["en-US"] = "";
+                          const firstLocale = Object.keys(initial)[0];
+                          setEditingChangelog({
+                            apkId: apk.id,
+                            entries: initial,
+                            activeLocale: firstLocale,
+                          });
+                        }}
                       >
                         {isEditing ? "Close" : apk.whats_new ? "Edit notes" : "Add notes"}
                       </Button>
@@ -710,26 +759,21 @@ function ManageAppInner() {
                       </Button>
                     </div>
                   </li>
-                  {isEditing && (
+                  {isEditing && editingChangelog && (
                     <li className="rounded-2xl bg-surface-2 p-4">
-                      <Label className="text-xs font-medium text-ink-soft">
-                        Release notes for v{apk.version_name} ({apk.version_code})
-                      </Label>
-                      <textarea
-                        rows={5}
-                        value={editingChangelog!.text}
-                        onChange={(e) => setEditingChangelog({ apkId: apk.id, text: e.target.value })}
-                        className="mt-2 w-full rounded-xl border border-outline bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
-                        placeholder="• What changed…"
+                      <ChangelogEditor
+                        version={`v${apk.version_name} (${apk.version_code})`}
+                        draft={editingChangelog}
+                        onChange={setEditingChangelog}
                       />
-                      <div className="mt-2 flex gap-2">
+                      <div className="mt-3 flex flex-wrap gap-2">
                         <Button size="md" variant="filled" onClick={saveChangelog} disabled={savingChangelog}>
                           {savingChangelog ? "Saving…" : "Save"}
                         </Button>
                         <Button size="md" variant="ghost" onClick={() => setEditingChangelog(null)}>Cancel</Button>
-                        {apk.whats_new && (
+                        {apk.whats_new && Object.keys(apk.whats_new).length > 0 && (
                           <Button size="md" variant="text" className="ml-auto text-danger" onClick={() => clearChangelog(apk.id)}>
-                            Clear
+                            Clear all locales
                           </Button>
                         )}
                       </div>
@@ -807,6 +851,183 @@ function FormField({
 function Spinner() {
   return (
     <div className="h-6 w-6 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label="Loading" />
+  );
+}
+
+/* Multi-locale release notes editor. Each known locale is a clickable pill;
+ * the active pill swaps the textarea body. An "+ Add language" pill opens a
+ * compact picker (common locales not already on this APK, plus a free-text
+ * BCP47 fallback). Removing a locale just drops it from the local entries
+ * map — the parent's save flow trims blanks and PATCHes the resulting
+ * dict, so removing here + saving deletes the locale server-side. */
+type ChangelogDraft = {
+  apkId: string;
+  entries: Record<string, string>;
+  activeLocale: string;
+};
+
+function ChangelogEditor({
+  version,
+  draft,
+  onChange,
+}: {
+  version: string;
+  draft: ChangelogDraft;
+  onChange: (next: ChangelogDraft) => void;
+}) {
+  const [picker, setPicker] = useState(false);
+  const [custom, setCustom] = useState("");
+  const locales = Object.keys(draft.entries);
+
+  function patch(entries: Record<string, string>, activeLocale?: string) {
+    onChange({
+      apkId: draft.apkId,
+      entries,
+      activeLocale: activeLocale ?? draft.activeLocale,
+    });
+  }
+
+  function addLocale(code: string) {
+    if (!code || draft.entries[code] !== undefined) return;
+    patch({ ...draft.entries, [code]: "" }, code);
+    setPicker(false);
+    setCustom("");
+  }
+
+  function removeLocale(code: string) {
+    const { [code]: _drop, ...rest } = draft.entries;
+    const nextActive = rest[draft.activeLocale] !== undefined
+      ? draft.activeLocale
+      : Object.keys(rest)[0] ?? "en-US";
+    if (Object.keys(rest).length === 0) {
+      // Never let the user leave an empty editor with zero locales; reset
+      // to a single en-US tab so the next save can either populate it or
+      // explicitly clear (Save with a blank textarea clears).
+      patch({ "en-US": "" }, "en-US");
+      return;
+    }
+    patch(rest, nextActive);
+  }
+
+  const available = COMMON_LOCALES.filter((l) => draft.entries[l.code] === undefined);
+
+  return (
+    <div>
+      <Label className="text-xs font-medium text-ink-soft">
+        Release notes for {version}
+      </Label>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {locales.map((code) => {
+          const active = code === draft.activeLocale;
+          const lbl = localeLabel(code);
+          return (
+            <span key={code} className="inline-flex items-center">
+              <button
+                type="button"
+                onClick={() => patch(draft.entries, code)}
+                aria-pressed={active}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-l-pill border px-3 py-1 text-xs font-medium transition-colors",
+                  active
+                    ? "border-primary bg-primary text-primary-fg"
+                    : "border-outline-soft bg-surface text-ink-soft hover:border-outline hover:bg-surface-2 hover:text-ink",
+                )}
+                title={lbl.label}
+              >
+                <span className="font-mono text-[10px]">{code}</span>
+                {draft.entries[code]?.trim() && <span className="opacity-70">●</span>}
+              </button>
+              <button
+                type="button"
+                onClick={() => removeLocale(code)}
+                aria-label={`Remove ${lbl.label}`}
+                className={cn(
+                  "inline-flex h-[22px] items-center justify-center rounded-r-pill border border-l-0 px-1.5 transition-colors",
+                  active
+                    ? "border-primary bg-primary text-primary-fg/80 hover:text-primary-fg"
+                    : "border-outline-soft bg-surface text-ink-mute hover:border-danger hover:bg-danger-container hover:text-danger-on-container",
+                )}
+              >
+                <X className="h-3 w-3" strokeWidth={2.6} />
+              </button>
+            </span>
+          );
+        })}
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setPicker((o) => !o)}
+            className="inline-flex items-center gap-1 rounded-pill border border-dashed border-outline px-3 py-1 text-xs font-medium text-ink-soft transition-colors hover:border-primary hover:text-primary"
+          >
+            <Plus className="h-3 w-3" strokeWidth={2.6} /> Add language
+          </button>
+          {picker && (
+            <div className="absolute left-0 top-9 z-20 w-72 rounded-2xl border border-outline-soft bg-surface p-3 shadow-e3">
+              <div className="mb-1 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
+                Pick a locale
+              </div>
+              <div className="max-h-56 space-y-0.5 overflow-y-auto">
+                {available.length === 0 ? (
+                  <p className="px-2 py-2 text-xs italic text-ink-mute">
+                    Every common locale is already covered.
+                  </p>
+                ) : (
+                  available.map((l) => (
+                    <button
+                      key={l.code}
+                      type="button"
+                      onClick={() => addLocale(l.code)}
+                      className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-surface-2"
+                    >
+                      <span className="truncate font-medium text-ink">{l.label}</span>
+                      <span className="font-mono text-[10px] text-ink-mute">{l.code}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="mt-2 border-t border-outline-soft pt-2">
+                <div className="mb-1 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
+                  Other (BCP47)
+                </div>
+                <div className="flex gap-1.5 px-1">
+                  <Input
+                    placeholder="e.g. zh-Hant"
+                    value={custom}
+                    onChange={(e) => setCustom(e.target.value)}
+                    className="h-9"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outlined"
+                    onClick={() => addLocale(custom.trim())}
+                    disabled={!custom.trim()}
+                  >
+                    Add
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <textarea
+        rows={5}
+        value={draft.entries[draft.activeLocale] ?? ""}
+        onChange={(e) =>
+          patch({ ...draft.entries, [draft.activeLocale]: e.target.value })
+        }
+        className="mt-3 w-full rounded-xl border border-outline bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
+        placeholder={`• What changed in ${localeLabel(draft.activeLocale).label}…`}
+      />
+      <p className="mt-1 text-[10px] text-ink-mute">
+        Each locale is independent. Empty tabs are dropped on save — they
+        won't ship to the F-Droid client.
+      </p>
+    </div>
   );
 }
 

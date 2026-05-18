@@ -26,6 +26,27 @@ export function formatDate(iso: string | null | undefined): string {
   }
 }
 
+/** Pick the best release-notes entry for the caller out of a
+ *  ``{locale: text}`` dict. Tries the preferred locale first, then a
+ *  language-only fallback, then en-US, then any first entry. Returns
+ *  ``null`` when the dict is empty. */
+export function pickLocalizedText(
+  bag: Record<string, string> | null | undefined,
+  preferredLocale?: string | null,
+): { text: string; locale: string } | null {
+  if (!bag) return null;
+  const keys = Object.keys(bag).filter((k) => !!bag[k]);
+  if (keys.length === 0) return null;
+  if (preferredLocale) {
+    if (bag[preferredLocale]) return { text: bag[preferredLocale], locale: preferredLocale };
+    const primary = preferredLocale.split("-")[0].toLowerCase();
+    const langMatch = keys.find((k) => k.split("-")[0].toLowerCase() === primary);
+    if (langMatch) return { text: bag[langMatch], locale: langMatch };
+  }
+  if (bag["en-US"]) return { text: bag["en-US"], locale: "en-US" };
+  return { text: bag[keys[0]], locale: keys[0] };
+}
+
 /** Compact integer formatter — ``1234 → "1.2k"`` ``12345 → "12k"``. Keeps a
  *  decimal only when it changes the reading (i.e. under 10× the unit). */
 export function formatCount(n: number): string {

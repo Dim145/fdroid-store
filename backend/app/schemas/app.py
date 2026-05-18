@@ -52,7 +52,8 @@ class ApkRead(BaseModel):
     anti_features: list[str] = Field(default_factory=list)
     status: ApkStatus
     rejection_reason: str | None
-    whats_new: str | None = None
+    # ``{locale: text}`` — empty dict and NULL both render as "no notes".
+    whats_new: dict[str, str] | None = None
     published_at: datetime | None
     created_at: datetime
 
@@ -63,7 +64,10 @@ class ApkUpdate(BaseModel):
     The changelog and the anti-feature flags are admin-curated metadata; the
     rest is extracted from the binary and would be rewritten by a rescan.
     """
-    whats_new: str | None = Field(default=None, max_length=10_000)
+    # ``{locale: text}`` per BCP47. ``None`` leaves it alone; an explicit
+    # empty dict clears it. The handler validates locale shape + total
+    # per-entry length so the JSON column stays tidy.
+    whats_new: dict[str, str] | None = Field(default=None)
     # ``None`` = leave as-is. Empty list explicitly clears the flags.
     anti_features: list[str] | None = Field(default=None, max_length=20)
 

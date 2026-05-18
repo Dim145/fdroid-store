@@ -117,6 +117,9 @@ def _serialize_app(app: App) -> dict[str, Any]:
         locale = parts[-2] if len(parts) >= 2 else DEFAULT_LOCALE
         localized.setdefault(locale, {})[key_in_block] = basename
 
+    # v1 only carries a single whatsNew per app per locale, so we pick the
+    # highest-versionCode published APK that has any release notes and lay
+    # each of its locale entries into the matching ``localized`` bucket.
     latest_with_notes = next(
         iter(
             sorted(
@@ -128,7 +131,10 @@ def _serialize_app(app: App) -> dict[str, Any]:
         None,
     )
     if latest_with_notes:
-        localized.setdefault(DEFAULT_LOCALE, {})["whatsNew"] = latest_with_notes.whats_new
+        for locale, text in (latest_with_notes.whats_new or {}).items():
+            if not text:
+                continue
+            localized.setdefault(locale, {})["whatsNew"] = text
 
     if localized:
         obj["localized"] = localized

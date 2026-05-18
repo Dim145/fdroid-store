@@ -273,7 +273,7 @@ export const api = {
         `/api/v1/apks/${apkId}/download-url`,
         { method: "POST" },
       ),
-    updateApk: (apkId: string, payload: { whats_new?: string | null; anti_features?: string[] }) =>
+    updateApk: (apkId: string, payload: { whats_new?: Record<string, string> | null; anti_features?: string[] }) =>
       apiFetch<Apk>(`/api/v1/apks/${apkId}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
@@ -550,7 +550,7 @@ export type Apk = {
   anti_features: string[];
   status: "uploaded" | "parsed" | "pending_review" | "published" | "rejected" | "deleted";
   rejection_reason: string | null;
-  whats_new: string | null;
+  whats_new: Record<string, string> | null;
   published_at: string | null;
   created_at: string;
 };

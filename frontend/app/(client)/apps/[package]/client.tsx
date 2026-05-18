@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { api, mediaUrl, type Apk, type AppDetail } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { useRepoInfo } from "@/lib/repo-store";
-import { cn, formatBytes, formatCount, formatDate } from "@/lib/utils";
+import { cn, formatBytes, formatCount, formatDate, pickLocalizedText } from "@/lib/utils";
+import { localeLabel } from "@/lib/locales";
 
 /* ============================================================================
  * App detail — the conversion page. Hero with the big Install pill at top,
@@ -275,26 +276,42 @@ export default function AppDetailClient() {
       )}
 
       {/* ──── What's new ──── */}
-      {latest?.whats_new && (
-        <section className="mt-10">
-          <h2 className="section-title mb-3">What&apos;s new</h2>
-          <div className="surface p-6">
-            <div className="flex flex-wrap items-baseline gap-3 border-b border-outline-soft pb-3">
-              <span className="text-xl font-bold tracking-tight text-ink">v{latest.version_name}</span>
-              <Badge variant="primary">latest</Badge>
-              {latest.published_at && (
-                <span className="text-xs text-ink-mute">
-                  <Calendar className="mr-1 inline-block h-3 w-3" />
-                  {formatDate(latest.published_at)}
+      {latest && (() => {
+        const notes = pickLocalizedText(latest.whats_new, user?.preferred_locale);
+        if (!notes) return null;
+        const fellBack =
+          !!user?.preferred_locale && notes.locale !== user.preferred_locale;
+        return (
+          <section className="mt-10">
+            <h2 className="section-title mb-3">What&apos;s new</h2>
+            <div className="surface p-6">
+              <div className="flex flex-wrap items-baseline gap-3 border-b border-outline-soft pb-3">
+                <span className="text-xl font-bold tracking-tight text-ink">v{latest.version_name}</span>
+                <Badge variant="primary">latest</Badge>
+                {latest.published_at && (
+                  <span className="text-xs text-ink-mute">
+                    <Calendar className="mr-1 inline-block h-3 w-3" />
+                    {formatDate(latest.published_at)}
+                  </span>
+                )}
+                <span
+                  className="ml-auto font-mono text-[10px] text-ink-mute"
+                  title={
+                    fellBack
+                      ? `No notes in ${localeLabel(user!.preferred_locale!).label} — showing ${localeLabel(notes.locale).label} instead.`
+                      : `Locale: ${localeLabel(notes.locale).label}`
+                  }
+                >
+                  {notes.locale}
                 </span>
-              )}
+              </div>
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft">
+                {notes.text}
+              </p>
             </div>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft">
-              {latest.whats_new}
-            </p>
-          </div>
-        </section>
-      )}
+          </section>
+        );
+      })()}
 
       {/* ──── About + side specs ──── */}
       <section className="mt-10 grid gap-6 md:grid-cols-[1.6fr_1fr]">

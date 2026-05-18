@@ -87,10 +87,13 @@ class Apk(Base, IdMixin, TimestampMixin):
     )
     rejection_reason: Mapped[str | None] = mapped_column(String(512))
 
-    # Free-form release notes shown to users. Editable after upload via
-    # PATCH /api/v1/apks/{id}. Surfaces as v2 ``versions.<sha>.whatsNew`` and
-    # the v1 app-level ``localized.<locale>.whatsNew`` (for the latest one).
-    whats_new: Mapped[str | None] = mapped_column(Text)
+    # Release notes shown to users, keyed by BCP47 locale. Editable after
+    # upload via PATCH /api/v1/apks/{id}. Surfaces as v2
+    # ``versions.<sha>.whatsNew`` (the dict shape the spec expects) and the
+    # v1 app-level ``localized.<locale>.whatsNew`` block, where every locale
+    # in the dict gets its own entry on the highest-versionCode APK that
+    # has notes. Empty dict and NULL are equivalent — both mean "no notes".
+    whats_new: Mapped[dict | None] = mapped_column(JSON)
 
     uploaded_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

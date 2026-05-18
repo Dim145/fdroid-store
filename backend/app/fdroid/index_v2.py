@@ -191,9 +191,13 @@ def _build_package(
             },
             "manifest": manifest,
         }
-        # v2 supports release notes per version, localized
+        # v2 supports release notes per version, localized. Apk.whats_new is
+        # already shaped as ``{locale: text}`` post-migration — pass it
+        # through, just trimmed of empty entries.
         if apk.whats_new:
-            version_obj["whatsNew"] = {DEFAULT_LOCALE: apk.whats_new}
+            trimmed = {l: t for l, t in apk.whats_new.items() if t}
+            if trimmed:
+                version_obj["whatsNew"] = trimmed
         if apk.anti_features:
             # v2 shape: ``{label: {locale: reason}}``. We don't currently
             # capture per-flag reasons (admins overwhelmingly leave them
