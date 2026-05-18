@@ -11,6 +11,7 @@ from app.api.v1 import (
     me,
     media,
     setup,
+    users,
 )
 
 api_router = APIRouter()
@@ -25,4 +26,5 @@ api_router.include_router(media.router, prefix="/apps", tags=["media"])
 api_router.include_router(apps.router, prefix="/apps", tags=["apps"])
 api_router.include_router(apks.router, prefix="/apks", tags=["apks"])
 api_router.include_router(categories.router, prefix="/categories", tags=["categories"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])

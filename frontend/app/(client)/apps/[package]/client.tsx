@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert, UserCircle2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -146,6 +146,19 @@ export default function AppDetailClient() {
         <div className="mt-6 md:hidden">
           <InstallPill apkFileName={latest?.file_name} apkId={latest?.id} size="lg" />
         </div>
+
+        {app.owner_username && (
+          <div className="mt-6 flex items-center justify-end gap-1.5 text-xs text-ink-mute md:absolute md:bottom-4 md:right-6 md:mt-0">
+            <UserCircle2 className="h-3.5 w-3.5" strokeWidth={2.2} />
+            Uploaded by{" "}
+            <Link
+              href={`/u/${encodeURIComponent(app.owner_username)}`}
+              className="font-mono font-semibold text-ink underline-offset-4 transition-colors hover:text-primary hover:underline"
+            >
+              @{app.owner_username}
+            </Link>
+          </div>
+        )}
       </section>
 
       {/* ──── Featured graphic ──── */}

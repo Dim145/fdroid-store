@@ -314,6 +314,13 @@ export const api = {
     list: () => apiFetch<Array<Category>>("/api/v1/categories", { anonymous: !getAccessToken() }),
   },
 
+  users: {
+    profile: (username: string) =>
+      apiFetch<PublicProfile>(`/api/v1/users/${encodeURIComponent(username)}/profile`, {
+        anonymous: !getAccessToken(),
+      }),
+  },
+
   setup: {
     status: () =>
       apiFetch<SetupStatusResponse>("/api/v1/setup/status", { anonymous: true }),
@@ -478,6 +485,13 @@ export type AppDetail = AppSummary & {
   apks: Apk[];
   screenshots: Screenshot[];
   owner_username: string | null;
+};
+
+export type PublicProfile = {
+  username: string;
+  full_name: string | null;
+  member_since: string;
+  apps: AppSummary[];
 };
 export type AppCreate = {
   package_name: string;

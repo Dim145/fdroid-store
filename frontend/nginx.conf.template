@@ -119,6 +119,9 @@ server {
     location /my-apps/ {
         try_files $uri $uri/index.html /my-apps/__dynamic/index.html;
     }
+    location /u/ {
+        try_files $uri $uri/index.html /u/__dynamic/index.html;
+    }
 
     # Default: serve the file if it exists, otherwise its index.html, then
     # fall back to the SPA root.
