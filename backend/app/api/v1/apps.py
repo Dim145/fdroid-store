@@ -414,9 +414,54 @@ async def update_app(
             ).scalars().all()
         )
         app.categories = cats
+    # ``model_fields_set`` lets us distinguish "field omitted" from
+    # "explicitly null" — the latter clears the manual pin and reverts to
+    # auto-tracking.
+    if "suggested_version_code" in payload.model_fields_set:
+        await _apply_suggested_version_override(app, payload.suggested_version_code)
 
     await db.flush()
+    await enqueue_reindex()
     return AppRead.model_validate(app)
+
+
+async def _apply_suggested_version_override(
+    app: App, version_code: int | None,
+) -> None:
+    """Set or clear the manually-pinned suggested version.
+
+    Pinning to a concrete ``version_code`` is only allowed when a published
+    APK on the same app actually carries it — otherwise the F-Droid client
+    would advertise a version that nobody can install. Passing ``None``
+    clears the pin and re-runs the auto-bump against whatever's published
+    today so the recommended version snaps to the highest published code.
+    """
+    if version_code is None:
+        app.suggested_version_is_manual = False
+        published = [a for a in app.apks if a.status == ApkStatus.PUBLISHED]
+        if published:
+            top = max(published, key=lambda a: a.version_code)
+            app.suggested_version_code = top.version_code
+            app.suggested_version_name = top.version_name
+        else:
+            app.suggested_version_code = None
+            app.suggested_version_name = None
+        return
+
+    target = next(
+        (a for a in app.apks if a.version_code == version_code and a.status == ApkStatus.PUBLISHED),
+        None,
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "suggested_version_code must match a published APK on this app."
+            ),
+        )
+    app.suggested_version_is_manual = True
+    app.suggested_version_code = target.version_code
+    app.suggested_version_name = target.version_name
 
 
 @router.delete("/{app_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, response_class=Response)

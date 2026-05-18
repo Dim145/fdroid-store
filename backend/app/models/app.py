@@ -101,6 +101,13 @@ class App(Base, IdMixin, TimestampMixin):
 
     suggested_version_code: Mapped[int | None] = mapped_column()
     suggested_version_name: Mapped[str | None] = mapped_column(String(128))
+    # When True, the owner pinned a specific suggested version and subsequent
+    # APK uploads must NOT bump the suggestion automatically. Cleared by the
+    # "reset to auto" action, which also re-runs the auto-bump against the
+    # current set of published APKs.
+    suggested_version_is_manual: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     owner_id: Mapped[uuid.UUID | None] = mapped_column(

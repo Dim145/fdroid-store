@@ -137,6 +137,12 @@ class AppUpdate(BaseModel):
     translation: str | None = Field(default=None, max_length=512)
     visibility: AppVisibility | None = None
     category_ids: list[uuid.UUID] | None = None
+    # Suggested version override. An explicit integer pins that version_code
+    # (must match a published APK); an explicit null clears the pin and
+    # restarts auto-tracking from the current set of published APKs. The
+    # field uses ``model_fields_set`` semantics so omitting it leaves the
+    # current state alone.
+    suggested_version_code: int | None = None
 
 
 class AppAdminUpdate(AppUpdate):
@@ -172,6 +178,8 @@ class AppRead(BaseModel):
     status: AppStatus
     suggested_version_code: int | None
     suggested_version_name: str | None
+    suggested_version_is_manual: bool = False
+    locked_signer_sha256: str | None = None
     last_published_at: datetime | None
     created_at: datetime
     updated_at: datetime

@@ -514,6 +514,8 @@ export type AppSummary = {
   status: "draft" | "pending_review" | "published" | "rejected" | "archived";
   suggested_version_code: number | null;
   suggested_version_name: string | null;
+  suggested_version_is_manual: boolean;
+  locked_signer_sha256: string | null;
   last_published_at: string | null;
   created_at: string;
   updated_at: string;
@@ -605,7 +607,11 @@ export type AppCreateWithApk = Omit<AppCreate, "package_name" | "category_ids"> 
   package_name?: string;
   file: File;
 };
-export type AppUpdatePayload = Partial<Omit<AppCreate, "package_name">>;
+export type AppUpdatePayload = Partial<Omit<AppCreate, "package_name">> & {
+  /** Pin (number) or clear (null) the suggested version. Omit the field
+   *  entirely to leave the current state alone. */
+  suggested_version_code?: number | null;
+};
 
 export type ApkInspect = {
   package_name: string;

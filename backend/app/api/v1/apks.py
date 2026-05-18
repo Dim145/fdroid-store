@@ -204,8 +204,12 @@ async def attach_apk_to_app(
                     first_locked_at=datetime.now(UTC),
                 )
             )
-        app.suggested_version_code = max(app.suggested_version_code or 0, meta.version_code)
-        app.suggested_version_name = meta.version_name
+        # Auto-bump the suggested version only when the owner hasn't pinned
+        # one. With a manual pin the F-Droid client keeps offering the chosen
+        # version even after a new (possibly regressed) upload.
+        if not app.suggested_version_is_manual:
+            app.suggested_version_code = max(app.suggested_version_code or 0, meta.version_code)
+            app.suggested_version_name = meta.version_name
         app.status = AppStatus.PUBLISHED
         app.last_published_at = datetime.now(UTC)
 

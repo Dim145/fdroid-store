@@ -270,10 +270,11 @@ async def admin_publish_apk(
                 first_locked_at=datetime.now(UTC),
             )
         )
-    apk.app.suggested_version_code = max(
-        apk.app.suggested_version_code or 0, apk.version_code
-    )
-    apk.app.suggested_version_name = apk.version_name
+    if not apk.app.suggested_version_is_manual:
+        apk.app.suggested_version_code = max(
+            apk.app.suggested_version_code or 0, apk.version_code
+        )
+        apk.app.suggested_version_name = apk.version_name
     apk.app.last_published_at = datetime.now(UTC)
     await db.flush()
     await enqueue_reindex()

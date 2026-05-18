@@ -242,6 +242,28 @@ function ManageAppInner() {
     try { await api.apps.deleteTvBanner(app.id); toast.success("TV banner removed."); await load(); }
     catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
   }
+  async function pinSuggestedVersion(versionCode: number) {
+    if (!app) return;
+    try {
+      await api.apps.update(app.id, { suggested_version_code: versionCode });
+      toast.success(`Suggested version pinned to v${versionCode}.`);
+      await load();
+    } catch (e) {
+      toast.error("Pin failed", e instanceof Error ? e.message : undefined);
+    }
+  }
+  async function resetSuggestedVersion() {
+    if (!app) return;
+    try {
+      // null tells the server to clear the manual pin and revert to
+      // auto-tracking the latest published APK.
+      await api.apps.update(app.id, { suggested_version_code: null });
+      toast.success("Suggested version back to auto.");
+      await load();
+    } catch (e) {
+      toast.error("Reset failed", e instanceof Error ? e.message : undefined);
+    }
+  }
   async function toggleApkAntiFeature(apk: Apk, flag: string) {
     // Toggle locally then save. Optimistic + reload to stay in sync with the
     // server (the index rebuild is async so we want the canonical state back).
@@ -419,6 +441,26 @@ function ManageAppInner() {
             </Button>
           </div>
         </form>
+
+        {app.locked_signer_sha256 && (
+          <div className="mt-6 rounded-2xl border border-outline-soft bg-surface-2/50 p-4">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-pill bg-surface text-ink-soft">
+                <ShieldAlert className="h-3.5 w-3.5" strokeWidth={2.2} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-ink">Signing certificate locked</div>
+                <p className="mt-0.5 text-xs text-ink-mute">
+                  Subsequent APK uploads must be signed with this exact certificate.
+                  Anything else is rejected before it can replace the package.
+                </p>
+                <code className="mt-2 block select-all break-all rounded-xl border border-outline-soft bg-surface px-3 py-2 font-mono text-[11px] text-ink-soft">
+                  SHA-256 {app.locked_signer_sha256}
+                </code>
+              </div>
+            </div>
+          </div>
+        )}
       </Section>
 
       {/* ──── Icon ──── */}
@@ -558,22 +600,43 @@ function ManageAppInner() {
       )}
 
       {/* ──── Versions ──── */}
-      <Section step="06" title="Versions" subtitle="Upload a new APK to publish a new version. The signer must match.">
-        <label className="mb-4 inline-flex">
-          <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary px-4 text-sm font-semibold text-primary-fg shadow-e1 hover:brightness-[1.04]">
-            <Upload className="h-4 w-4" /> Upload new version
-          </span>
-          <input
-            type="file"
-            accept=".apk,application/vnd.android.package-archive"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadVersion(f); e.target.value = ""; }}
-            disabled={uploading}
-            className="sr-only"
-          />
-        </label>
-        {uploading && (
-          <span className="ml-3 text-sm text-ink-soft">Uploading…</span>
-        )}
+      <Section
+        step="06"
+        title="Versions"
+        subtitle={
+          app.suggested_version_is_manual
+            ? `Upload a new APK to publish a new version. The signer must match. Suggested version is pinned — uploads no longer auto-bump it.`
+            : `Upload a new APK to publish a new version. The signer must match. The latest published version is auto-suggested to F-Droid clients.`
+        }
+      >
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <label className="inline-flex">
+            <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary px-4 text-sm font-semibold text-primary-fg shadow-e1 hover:brightness-[1.04]">
+              <Upload className="h-4 w-4" /> Upload new version
+            </span>
+            <input
+              type="file"
+              accept=".apk,application/vnd.android.package-archive"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadVersion(f); e.target.value = ""; }}
+              disabled={uploading}
+              className="sr-only"
+            />
+          </label>
+          {uploading && (
+            <span className="text-sm text-ink-soft">Uploading…</span>
+          )}
+          {app.suggested_version_is_manual && (
+            <Button
+              type="button"
+              variant="outlined"
+              size="sm"
+              onClick={resetSuggestedVersion}
+              className="ml-auto"
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Auto-suggest latest
+            </Button>
+          )}
+        </div>
 
         <ul className="space-y-2">
           {app.apks.length === 0 ? (
@@ -583,15 +646,27 @@ function ManageAppInner() {
           ) : (
             app.apks.map((apk) => {
               const isEditing = editingChangelog?.apkId === apk.id;
+              const isSuggested = apk.version_code === app.suggested_version_code;
+              const canPin = apk.status === "published" && !isSuggested;
               return (
                 <Fragment key={apk.id}>
-                  <li className="surface flex flex-wrap items-center gap-3 p-4">
+                  <li
+                    className={cn(
+                      "surface flex flex-wrap items-center gap-3 p-4 transition-shadow",
+                      isSuggested && "ring-2 ring-primary",
+                    )}
+                  >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="text-base font-semibold text-ink">v{apk.version_name}</span>
                         <Badge variant={apk.status === "published" ? "primary" : "soft"}>
                           {apk.status.replace("_", " ")}
                         </Badge>
+                        {isSuggested && (
+                          <Badge variant="accent" className="font-mono uppercase tracking-wider">
+                            {app.suggested_version_is_manual ? "pinned" : "suggested"}
+                          </Badge>
+                        )}
                       </div>
                       <div className="mt-0.5 text-xs text-ink-mute">
                         Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk ?? "?"}–{apk.target_sdk ?? "?"}
@@ -613,6 +688,16 @@ function ManageAppInner() {
                       />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
+                      {canPin && (
+                        <Button
+                          size="sm"
+                          variant="text"
+                          onClick={() => pinSuggestedVersion(apk.version_code)}
+                          title="Make this the version F-Droid clients recommend"
+                        >
+                          Suggest this
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outlined"

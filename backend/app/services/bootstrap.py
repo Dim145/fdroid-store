@@ -64,6 +64,7 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_locale VARCHAR(16)",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS promo_graphic_path VARCHAR(512)",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS tv_banner_path VARCHAR(512)",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS suggested_version_is_manual BOOLEAN NOT NULL DEFAULT FALSE",
         ):
             try:
                 await conn.execute(text(stmt))
