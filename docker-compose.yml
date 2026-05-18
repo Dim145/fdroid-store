@@ -29,6 +29,7 @@ services:
       retries: 10
 
   backend:
+    image: ghcr.io/dim145/fdroid-store-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -67,6 +68,7 @@ services:
       retries: 10
 
   worker:
+    image: ghcr.io/dim145/fdroid-store-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -98,6 +100,7 @@ services:
   # URL is baked in at build time, so this image can be pushed to a registry
   # and reused on any host (only ``UPSTREAM_BACKEND`` is needed at runtime).
   frontend:
+    image: ghcr.io/dim145/fdroid-store-frontend:latest
     build:
       context: ./frontend
       dockerfile: Dockerfile
