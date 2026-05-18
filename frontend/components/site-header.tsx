@@ -1,6 +1,7 @@
 "use client";
 
-import { Search, Sparkles, LayoutGrid, User as UserIcon, ShieldCheck, LogOut, Menu, X } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { History as HistoryIcon, LayoutGrid, LogOut, Menu, Search, ShieldCheck, Sparkles, User as UserIcon, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
@@ -107,21 +108,71 @@ export function SiteHeader() {
           )}
           {user ? (
             <div className="hidden items-center gap-2 md:flex">
-              <Link
-                href="/account"
-                className="flex h-10 w-10 items-center justify-center rounded-pill bg-surface-2 text-ink-soft transition-colors hover:bg-surface-3 hover:text-ink"
-                aria-label="Account"
-              >
-                <UserIcon className="h-4 w-4" strokeWidth={2.2} />
-              </Link>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => { logout(); router.replace("/"); }}
-                aria-label="Sign out"
-              >
-                <LogOut className="h-4 w-4" strokeWidth={2.2} />
-              </Button>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-10 w-10 items-center justify-center rounded-pill bg-surface-2 text-ink-soft transition-colors hover:bg-surface-3 hover:text-ink data-[state=open]:bg-surface-3 data-[state=open]:text-ink"
+                    aria-label="User menu"
+                  >
+                    <UserIcon className="h-4 w-4" strokeWidth={2.2} />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    align="end"
+                    sideOffset={8}
+                    className="z-50 min-w-[14rem] origin-top-right animate-slide-down rounded-2xl border border-outline-soft bg-surface p-1 text-sm shadow-e3"
+                  >
+                    <div className="px-3 py-2">
+                      <div className="truncate text-xs uppercase tracking-wider text-ink-mute">
+                        Signed in as
+                      </div>
+                      <div className="truncate font-semibold text-ink">
+                        {user.full_name || user.email}
+                      </div>
+                    </div>
+                    <DropdownMenu.Separator className="my-1 h-px bg-outline-soft" />
+                    <DropdownMenu.Item asChild>
+                      <Link
+                        href="/account"
+                        className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-ink-soft outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-ink"
+                      >
+                        <UserIcon className="h-4 w-4" strokeWidth={2.2} />
+                        Account
+                      </Link>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item asChild>
+                      <Link
+                        href="/history"
+                        className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-ink-soft outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-ink"
+                      >
+                        <HistoryIcon className="h-4 w-4" strokeWidth={2.2} />
+                        Download history
+                      </Link>
+                    </DropdownMenu.Item>
+                    {user.role === "admin" && (
+                      <DropdownMenu.Item asChild>
+                        <Link
+                          href="/admin"
+                          className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-ink-soft outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-ink"
+                        >
+                          <ShieldCheck className="h-4 w-4" strokeWidth={2.2} />
+                          Admin
+                        </Link>
+                      </DropdownMenu.Item>
+                    )}
+                    <DropdownMenu.Separator className="my-1 h-px bg-outline-soft" />
+                    <DropdownMenu.Item
+                      onSelect={() => { logout(); router.replace("/"); }}
+                      className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-danger outline-none data-[highlighted]:bg-danger-container data-[highlighted]:text-danger-on-container"
+                    >
+                      <LogOut className="h-4 w-4" strokeWidth={2.2} />
+                      Sign out
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
             </div>
           ) : (
             <Button asChild size="md" variant="filled" className="hidden md:inline-flex">
@@ -186,6 +237,13 @@ export function SiteHeader() {
                     className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
                   >
                     <UserIcon className="h-4 w-4" /> Account
+                  </Link>
+                  <Link
+                    href="/history"
+                    onClick={() => setDrawer(false)}
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
+                  >
+                    <HistoryIcon className="h-4 w-4" /> Download history
                   </Link>
                   {user.role === "admin" && (
                     <Link

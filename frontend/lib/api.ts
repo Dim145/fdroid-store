@@ -209,9 +209,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   downloadHistory: () =>
-    apiFetch<{ items: Array<{ id: string; apk_id: string; app_id: string; created_at: string; bytes_served: number | null }> }>(
-      "/api/v1/me/downloads"
-    ),
+    apiFetch<{ items: DownloadHistoryItem[] }>("/api/v1/me/downloads"),
 
   apiKeys: {
     list: () => apiFetch<Array<ApiKey>>("/api/v1/me/api-keys"),
@@ -578,6 +576,21 @@ export type SetupWizardPayload = {
   key_password?: string;
   key_dname?: string;
   keystore_b64?: string;
+};
+
+export type DownloadHistoryItem = {
+  app_id: string;
+  package_name: string;
+  app_name: string;
+  icon_path: string | null;
+  download_count: number;
+  bytes_total: number;
+  last_downloaded_at: string | null;
+  last_apk_version_code: number | null;
+  last_apk_version_name: string | null;
+  latest_apk_version_code: number | null;
+  latest_apk_version_name: string | null;
+  has_update_available: boolean;
 };
 
 export type AdminStats = {

@@ -138,13 +138,13 @@ export default function AppDetailClient() {
 
           {/* Install pill column (desktop) */}
           <div className="hidden md:block">
-            <InstallPill apkFileName={latest?.file_name} size="xl" />
+            <InstallPill apkFileName={latest?.file_name} apkId={latest?.id} size="xl" />
           </div>
         </div>
 
         {/* Install pill (mobile) */}
         <div className="mt-6 md:hidden">
-          <InstallPill apkFileName={latest?.file_name} size="lg" />
+          <InstallPill apkFileName={latest?.file_name} apkId={latest?.id} size="lg" />
         </div>
       </section>
 

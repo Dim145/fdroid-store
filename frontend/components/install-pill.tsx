@@ -4,12 +4,17 @@ import { Download } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-store";
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { cn } from "@/lib/utils";
 
 type Props = {
   /** Direct-download fallback for the latest APK file. */
   apkFileName?: string;
+  /** APK row id, used to exchange the user's JWT for a signed download URL
+   *  in private mode (anchor clicks carry no Authorization header). */
+  apkId?: string;
   /** Visual emphasis — XL is the detail-page hero pill. */
   size?: "md" | "lg" | "xl";
   className?: string;
@@ -18,11 +23,39 @@ type Props = {
 /* Signature install CTA. The deep-link scheme matches the configured repo
  * URL (fdroidrepo:// for HTTP, fdroidrepos:// for HTTPS) so we never hand
  * F-Droid a URL on the wrong port. */
-export function InstallPill({ apkFileName, size = "lg", className }: Props) {
+export function InstallPill({ apkFileName, apkId, size = "lg", className }: Props) {
   const repo = useRepoInfo();
+  const { user } = useAuth();
   const [hover, setHover] = useState(false);
+  const [busy, setBusy] = useState(false);
   const fdLink = fdroidDeepLink(repo.url, { fingerprint: repo.fingerprint });
   const apkLink = apkFileName ? `${repo.url}/${apkFileName}` : null;
+
+  async function onClickApk(e: React.MouseEvent<HTMLAnchorElement>) {
+    // Anonymous + public mode: the direct URL works, let the browser
+    // handle the click. Logged-in users in private mode need a signed
+    // URL — anchor clicks carry no Authorization header otherwise.
+    if (!user || !apkId) return;
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const { url } = await api.apps.downloadUrl(apkId);
+      // Reject anything that isn't a same-origin or http(s) URL — defence
+      // against a misconfigured ``config.address`` smuggling a
+      // ``javascript:`` URI through the API response (CWE-79).
+      if (!/^https?:\/\//i.test(url) && !url.startsWith("/")) {
+        throw new Error("unsafe download URL");
+      }
+      window.location.href = url;
+    } catch {
+      // Fall through to the raw URL — the browser then prompts for
+      // Basic-auth in private mode, which at least surfaces the failure
+      // instead of looking broken.
+      if (apkLink) window.location.href = apkLink;
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className={cn("flex flex-col items-stretch gap-2", className)}>
@@ -49,9 +82,9 @@ export function InstallPill({ apkFileName, size = "lg", className }: Props) {
         </a>
       </Button>
       {apkLink && (
-        <Button asChild variant="tonal" size="sm" className="self-stretch">
-          <a href={apkLink} download className="text-xs">
-            Or download .apk
+        <Button asChild variant="tonal" size="sm" className="self-stretch" disabled={busy}>
+          <a href={apkLink} onClick={onClickApk} download className="text-xs">
+            {busy ? "…" : "Or download .apk"}
           </a>
         </Button>
       )}

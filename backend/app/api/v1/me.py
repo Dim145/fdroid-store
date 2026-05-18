@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import uuid as uuid_module
 from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user
 from app.core.security import hash_password, verify_password
+from app.models.apk import Apk, ApkStatus
+from app.models.app import App
 from app.models.audit import DownloadEvent
 from app.models.user import User
 from app.schemas.app import AppRead
@@ -66,28 +70,123 @@ async def my_download_history(
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
     limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
 ) -> dict:
-    stmt = (
-        select(DownloadEvent)
+    """One row per app the user has ever downloaded.
+
+    Each row carries the latest download timestamp + the version code the
+    user grabbed, plus the latest published version on the repo today so
+    the UI can render a "newer version available" hint. Total download
+    count is summed across all versions of the same app.
+
+    Note on installation status: F-Droid Android clients don't report back
+    to the repo (no telemetry channel exists in the F-Droid spec), so we
+    can't actually know whether the APK is still on a device. The closest
+    proxy is "you downloaded the latest version recently" — anything
+    stronger would require a companion app or a re-architected sync model.
+    """
+    # Per-app aggregates: most recent download timestamp, total event count,
+    # the apk_id the user grabbed last, total bytes served.
+    last_event_per_app = (
+        select(
+            DownloadEvent.app_id.label("app_id"),
+            func.max(DownloadEvent.created_at).label("last_at"),
+            func.count(DownloadEvent.id).label("dl_count"),
+            func.coalesce(func.sum(DownloadEvent.bytes_served), 0).label("bytes_total"),
+        )
         .where(DownloadEvent.user_id == user.id)
-        .order_by(desc(DownloadEvent.created_at))
-        .limit(limit)
-        .offset(offset)
+        .group_by(DownloadEvent.app_id)
+        .subquery()
     )
-    rows = (await db.execute(stmt)).scalars().all()
-    return {
-        "items": [
+
+    # Highest published version_code per app — the "current latest" the
+    # repo would serve today. Apps with no published APK (all withdrawn)
+    # come back as NULL via the outer join.
+    latest_published = (
+        select(
+            Apk.app_id.label("app_id"),
+            func.max(Apk.version_code).label("max_vc"),
+        )
+        .where(Apk.status == ApkStatus.PUBLISHED)
+        .group_by(Apk.app_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            App,
+            last_event_per_app.c.last_at,
+            last_event_per_app.c.dl_count,
+            last_event_per_app.c.bytes_total,
+            latest_published.c.max_vc,
+        )
+        .options(selectinload(App.apks))
+        .join(last_event_per_app, App.id == last_event_per_app.c.app_id)
+        .outerjoin(latest_published, App.id == latest_published.c.app_id)
+        .order_by(desc(last_event_per_app.c.last_at))
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    # For each app, look up which APK the user actually downloaded most
+    # recently — version_code + version_name. We resolve with a single
+    # query keyed on (user, app, max(created_at)).
+    last_apk_ids = (
+        await db.execute(
+            select(
+                DownloadEvent.app_id,
+                DownloadEvent.apk_id,
+                DownloadEvent.created_at,
+            )
+            .where(
+                DownloadEvent.user_id == user.id,
+                DownloadEvent.app_id.in_([app.id for app, *_ in rows]),
+            )
+        )
+    ).all()
+    # Reduce to ``{app_id: apk_id with max created_at}``.
+    chosen_apk_per_app: dict[uuid_module.UUID, uuid_module.UUID] = {}
+    chosen_at: dict[uuid_module.UUID, datetime] = {}
+    for app_id, apk_id, created_at in last_apk_ids:
+        if app_id not in chosen_at or created_at > chosen_at[app_id]:
+            chosen_at[app_id] = created_at
+            chosen_apk_per_app[app_id] = apk_id
+
+    items = []
+    for app, last_at, dl_count, bytes_total, max_vc in rows:
+        last_apk = next(
+            (a for a in app.apks if a.id == chosen_apk_per_app.get(app.id)),
+            None,
+        )
+        # ``app.apks`` is already ordered by version_code desc on the
+        # relationship, so the first PUBLISHED entry is the current latest.
+        current_latest = next(
+            (a for a in app.apks if a.status == ApkStatus.PUBLISHED),
+            None,
+        )
+        items.append(
             {
-                "id": str(r.id),
-                "apk_id": str(r.apk_id),
-                "app_id": str(r.app_id),
-                "created_at": r.created_at.isoformat(),
-                "bytes_served": r.bytes_served,
+                "app_id": str(app.id),
+                "package_name": app.package_name,
+                "app_name": app.name,
+                "icon_path": app.icon_path,
+                "download_count": int(dl_count),
+                "bytes_total": int(bytes_total or 0),
+                "last_downloaded_at": last_at.isoformat() if last_at else None,
+                "last_apk_version_code": last_apk.version_code if last_apk else None,
+                "last_apk_version_name": last_apk.version_name if last_apk else None,
+                "latest_apk_version_code": (
+                    current_latest.version_code if current_latest else max_vc
+                ),
+                "latest_apk_version_name": (
+                    current_latest.version_name if current_latest else None
+                ),
+                "has_update_available": (
+                    bool(last_apk and current_latest)
+                    and current_latest.version_code > last_apk.version_code
+                ),
             }
-            for r in rows
-        ]
-    }
+        )
+    return {"items": items}
 
 
 @router.get("/apps", response_model=list[AppRead])
