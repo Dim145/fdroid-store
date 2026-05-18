@@ -11,10 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user
+from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus
-from app.models.app import App, AppStatus
+from app.models.app import App, AppStatus, AppVisibility
+from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
 from app.schemas.app import ApkInspect, ApkRead, ApkUpdate
 from app.services.queue import enqueue_reindex
@@ -274,6 +276,45 @@ async def update_apk(
     await db.flush()
     await enqueue_reindex()
     return ApkRead.model_validate(apk)
+
+
+@router.post("/{apk_id}/download-url", response_model=dict)
+async def issue_download_url(
+    apk_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    """Mint a short-lived signed download URL the SPA can hand to ``<a href>``.
+
+    Plain anchor clicks carry no Authorization header, so private-mode APKs
+    can't be downloaded directly from the web UI without triggering the
+    browser's Basic-auth pop-up. The SPA calls this endpoint with its JWT,
+    gets back a URL of the form ``/fdroid/repo/<filename>?t=<hmac>``, and
+    navigates to it. The token expires after ~10 minutes and is bound to
+    the specific filename so it can't be replayed against other APKs.
+    """
+    apk = (
+        await db.execute(
+            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
+    if apk is None or apk.status != ApkStatus.PUBLISHED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
+    app = apk.app
+    # Same visibility rules as the F-Droid serve handler. Owners and admins
+    # always see their own / all apps; anyone else needs the app to be
+    # public + published.
+    if app.visibility == AppVisibility.PRIVATE:
+        if user.role != UserRole.ADMIN and app.owner_id != user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
+
+    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+    base = (config.address.rstrip("/") if config and config.address else "/fdroid/repo")
+    token = sign_download_token(apk.file_name)
+    return {
+        "url": f"{base}/{apk.file_name}?t={token}",
+        "expires_in": DEFAULT_TTL_SECONDS,
+    }
 
 
 @router.delete(

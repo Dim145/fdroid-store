@@ -472,7 +472,7 @@ function ManageAppInner() {
                         </Badge>
                       </div>
                       <div className="mt-0.5 text-xs text-ink-mute">
-                        Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk}–{apk.target_sdk}
+                        Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk ?? "?"}–{apk.target_sdk ?? "?"}
                       </div>
                       {apk.whats_new ? (
                         <p

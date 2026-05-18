@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 import { api, REPO_URL } from "@/lib/api";
 
@@ -91,9 +92,27 @@ export const useRepoStore = create<RepoInfoState>((set, get) => ({
 }));
 
 /** Read-side hook. Triggers the (deduplicated) one-time fetch on first
- *  mount; subsequent renders are pulled from the cache. */
+ *  mount; subsequent renders are pulled from the cache.
+ *
+ *  Uses ``useShallow`` so consumers only re-render when one of the
+ *  primitives they actually read changes — selecting the whole store
+ *  object (as we did before) re-rendered every dependent component on
+ *  any mutation, even mutations they didn't care about. */
 export function useRepoInfo() {
-  const state = useRepoStore();
+  const state = useRepoStore(
+    useShallow((s) => ({
+      url: s.url,
+      fingerprint: s.fingerprint,
+      name: s.name,
+      description: s.description,
+      iconPath: s.iconPath,
+      loaded: s.loaded,
+      setupComplete: s.setupComplete,
+      publicMode: s.publicMode,
+      fetchOnce: s.fetchOnce,
+      refresh: s.refresh,
+    })),
+  );
   useEffect(() => {
     if (!state.loaded) state.fetchOnce();
   }, [state.loaded, state.fetchOnce]);

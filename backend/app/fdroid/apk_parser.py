@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -223,13 +222,23 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
     return meta
 
 
-def verify_apksigner_available() -> bool:
-    """Return True if the apksigner binary is on PATH."""
+async def verify_apksigner_available() -> bool:
+    """Return True if the apksigner binary is on PATH.
+
+    Async to avoid blocking the event loop — sync ``subprocess.run`` here
+    would freeze every other request for the duration of the JVM start.
+    """
     try:
-        r = subprocess.run(
-            ["apksigner", "--version"],
-            capture_output=True, text=True, timeout=10, check=False,
+        proc = await asyncio.create_subprocess_exec(
+            "apksigner", "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        return r.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return False
+        return proc.returncode == 0
+    except FileNotFoundError:
         return False

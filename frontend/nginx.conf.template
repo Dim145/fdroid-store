@@ -27,6 +27,19 @@ server {
     gzip_types text/plain application/json application/javascript text/css application/xml;
     gzip_min_length 1024;
 
+    # Security headers applied to every response. The CSP forbids cross-origin
+    # script and connect sources, so a hypothetical XSS sink can't ship the
+    # JWT in localStorage to ``evil.com``. ``frame-ancestors 'none'`` makes
+    # clickjacking of destructive actions (revoke key, delete app) impossible.
+    # ``'unsafe-inline'`` is needed for the theme bootstrap script in
+    # layout.tsx — replacing it with a nonce would require a server-side
+    # render step that the static export doesn't have.
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
     # NOTE: don't redefine ``types {}`` here — that would override the
     # http-level ``include /etc/nginx/mime.types`` and strip text/html,
     # text/css, … from the response, so browsers would download the SPA

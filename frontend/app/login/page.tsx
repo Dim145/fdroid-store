@@ -19,11 +19,22 @@ export default function LoginPage() {
   );
 }
 
+// Defence against an open redirect via ``?next=//evil.com/...``. We only
+// follow same-origin, absolute paths — anything else (full URLs, protocol-
+// relative ``//host``, empty strings) falls back to /apps.
+function safeNext(raw: string | null): string {
+  if (!raw) return "/apps";
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) {
+    return "/apps";
+  }
+  return raw;
+}
+
 function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
-  const next = search.get("next") || "/apps";
-  const { user, login, fetchMe } = useAuth();
+  const next = safeNext(search.get("next"));
+  const { user, login } = useAuth();
 
   const [methods, setMethods] = useState<AuthMethodsInfo | null>(null);
   const [email, setEmail] = useState("");
@@ -34,7 +45,9 @@ function LoginForm() {
   // expects to create an account through it. Existing OIDC users never need it.
   const [oidcInvite, setOidcInvite] = useState("");
 
-  useEffect(() => { fetchMe(); }, [fetchMe]);
+  // ``fetchMe`` already runs once at module load from the auth-store
+  // bootstrap (see auth-store.ts) — calling it again here just causes a
+  // duplicate /me request on every login page mount.
   useEffect(() => { if (user) router.replace(next); }, [user, router, next]);
   useEffect(() => {
     api.authMethods().then(setMethods).catch(() => setMethods({
@@ -76,12 +89,17 @@ function LoginForm() {
 
   // For invite-mode repos, append ?invite=... to the OIDC login URL so the
   // backend can carry it through the IdP round-trip in the session.
+  //
+  // Defensive: validate the scheme is http/https so a compromised or
+  // misconfigured /auth/methods response can't slip a ``javascript:`` /
+  // ``data:`` URL into our <a href>.
   const oidcHref = (() => {
-    if (!methods?.oidc_login_url) return null;
+    const base = methods?.oidc_login_url;
+    if (!base || !/^https?:\/\//i.test(base)) return null;
     const trimmed = oidcInvite.trim();
-    if (!trimmed) return methods.oidc_login_url;
-    const sep = methods.oidc_login_url.includes("?") ? "&" : "?";
-    return `${methods.oidc_login_url}${sep}invite=${encodeURIComponent(trimmed)}`;
+    if (!trimmed) return base;
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}invite=${encodeURIComponent(trimmed)}`;
   })();
 
   return (

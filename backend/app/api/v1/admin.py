@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import io
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from datetime import datetime as _dt
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from PIL import Image
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import aliased, selectinload
 
 from app.api.deps import DbSession, get_current_admin
 from app.core.security import hash_password
+from app.core.uploads import normalize_image, read_capped
 from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, Category
@@ -38,9 +36,9 @@ router = APIRouter()
 async def list_users(
     db: DbSession,
     _: Annotated[User, Depends(get_current_admin)],
-    q: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    q: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[UserRead]:
     stmt = select(User).order_by(User.created_at.desc())
     if q:
@@ -120,9 +118,9 @@ async def delete_user(
 async def admin_list_apps(
     db: DbSession,
     _: Annotated[User, Depends(get_current_admin)],
-    status_filter: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    status_filter: str | None = Query(default=None, max_length=32),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[AppRead]:
     stmt = (
         select(App)
@@ -361,28 +359,15 @@ async def upload_repo_icon(
     file: UploadFile = File(...),
 ) -> RepoConfigRead:
     """Upload a custom repo icon. PNG output, max 512×512."""
-    raw = await file.read()
+    raw = await read_capped(file, 4 * 1024 * 1024)
     if not raw:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
-    try:
-        with Image.open(io.BytesIO(raw)) as probe:
-            probe.verify()
-        img = Image.open(io.BytesIO(raw))
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File is not a valid image",
-        ) from exc
-
-    img = img.convert("RGBA")
-    img.thumbnail((512, 512), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    png = await normalize_image(raw, (512, 512))
 
     storage = get_storage()
-    ts = int(_dt.now().timestamp())
+    ts = int(datetime.now(UTC).timestamp())
     key = f"icons/repo-icon-{ts}.png"
-    await storage.put(key, buf.getvalue(), content_type="image/png")
+    await storage.put(key, png, content_type="image/png")
 
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one()
     config.icon_path = key

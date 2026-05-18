@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -91,8 +91,15 @@ async def _api_key_from_secret(secret: str, db: AsyncSession) -> ApiKey | None:
         return None
     if not verify_api_key_secret(secret_part, api_key.hashed_secret):
         return None
-    api_key.last_used_at = datetime.now(UTC)
-    await db.flush()
+    # Rate-limit ``last_used_at`` writes to one per minute per key. F-Droid
+    # clients can fire a handful of requests in quick succession while
+    # syncing the index + downloading APKs; without throttling each one
+    # forces a DB write on the same row and the second-to-arrive request
+    # waits on the first's transaction.
+    now = datetime.now(UTC)
+    if api_key.last_used_at is None or (now - api_key.last_used_at) >= timedelta(minutes=1):
+        api_key.last_used_at = now
+        await db.flush()
     return api_key
 
 
@@ -136,11 +143,16 @@ async def get_principal(
 # --------------------------------------------------------------------------
 # Public-mode access gating
 # --------------------------------------------------------------------------
-async def _public_mode(db: AsyncSession) -> bool:
+async def is_public_mode(db: AsyncSession) -> bool:
     """Returns whether the repo is currently in public mode. Falls back to
     ``True`` if the config row doesn't exist yet (initial bootstrap)."""
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
     return True if config is None else config.public_mode
+
+
+# Backwards-compatible alias kept for any internal callers still using the
+# underscore-prefixed name.
+_public_mode = is_public_mode
 
 
 async def require_browse_access(

@@ -10,7 +10,8 @@ import { AppPermissions } from "@/components/app-permissions";
 import { InstallPill } from "@/components/install-pill";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, mediaUrl, type AppDetail } from "@/lib/api";
+import { api, mediaUrl, type Apk, type AppDetail } from "@/lib/api";
+import { useAuth } from "@/lib/auth-store";
 import { useRepoInfo } from "@/lib/repo-store";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 
@@ -28,6 +29,7 @@ export default function AppDetailClient() {
     return m ? decodeURIComponent(m[1]) : "";
   }, [pathname]);
   const repo = useRepoInfo();
+  const { user } = useAuth();
   const [app, setApp] = useState<AppDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandDesc, setExpandDesc] = useState(false);
@@ -311,7 +313,7 @@ export default function AppDetailClient() {
                       {i === 0 && <Badge variant="primary">latest</Badge>}
                     </div>
                     <div className="mt-0.5 text-xs text-ink-mute">
-                      Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk}–{apk.target_sdk}
+                      Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk ?? "?"}–{apk.target_sdk ?? "?"}
                     </div>
                     {apk.published_at && (
                       <div className="mt-1 font-mono text-[11px] text-ink-mute">
@@ -327,11 +329,12 @@ export default function AppDetailClient() {
                       </div>
                     )}
                   </div>
-                  <Button asChild variant={i === 0 ? "filled" : "outlined"} size="md">
-                    <a href={`${repo.url}/${apk.file_name}`} download>
-                      .apk
-                    </a>
-                  </Button>
+                  <DownloadApkButton
+                    apk={apk}
+                    repoUrl={repo.url}
+                    authenticated={!!user}
+                    primary={i === 0}
+                  />
                 </li>
               ))}
             </ul>
@@ -408,7 +411,68 @@ function Spinner() {
   );
 }
 
+/** Download button that handles the SPA-friendly download flow.
+ *
+ * The F-Droid serve endpoint requires either a Basic-auth API key or a
+ * signed ``?t=`` token in private mode. Anchor clicks carry no auth, so
+ * for logged-in users we exchange the JWT for a short-lived signed URL
+ * before navigating. Anonymous users in public mode still get the direct
+ * URL (which works since the repo allows anonymous downloads then). */
+function DownloadApkButton({
+  apk,
+  repoUrl,
+  authenticated,
+  primary,
+}: {
+  apk: Apk;
+  repoUrl: string;
+  authenticated: boolean;
+  primary: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function onClick(e: React.MouseEvent<HTMLAnchorElement>) {
+    if (!authenticated) return; // let the default ``<a download>`` flow run
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const { url } = await api.apps.downloadUrl(apk.id);
+      window.location.href = url;
+    } catch {
+      // Fall back to the bare URL — the browser will then prompt for
+      // credentials if private mode is on, which surfaces the failure
+      // rather than silently doing nothing.
+      window.location.href = `${repoUrl}/${apk.file_name}`;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button asChild variant={primary ? "filled" : "outlined"} size="md" disabled={busy}>
+      <a href={`${repoUrl}/${apk.file_name}`} onClick={onClick} download>
+        {busy ? "…" : ".apk"}
+      </a>
+    </Button>
+  );
+}
+
+// Whitelist of URI schemes funding chips are allowed to link to. App-author-
+// supplied values flow through here, so anything outside the list (notably
+// ``javascript:``, ``data:``, ``vbscript:``) is rendered as plain text.
+const _FUNDING_URL_RE = /^(https?|mailto|bitcoin):/i;
+
 function FundingChip({ label, href }: { label: string; href: string }) {
+  if (!_FUNDING_URL_RE.test(href)) {
+    return (
+      <span
+        title="Link removed (unsupported URL scheme)"
+        className="inline-flex items-center gap-1.5 rounded-pill border border-outline-soft bg-surface px-3 py-1.5 text-xs font-medium text-ink-mute"
+      >
+        {label}
+      </span>
+    );
+  }
   return (
     <a
       href={href}

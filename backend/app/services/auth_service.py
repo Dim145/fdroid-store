@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -110,8 +110,18 @@ async def signup_local(
     db.add(user)
     await db.flush()
     if invite is not None:
-        invite.used_at = datetime.now(UTC)
-        invite.used_by_user_id = user.id
+        # Conditional UPDATE so two concurrent signups racing on the same
+        # code can't both burn it: only the first one whose ``used_at IS
+        # NULL`` claim still holds gets to claim it. ``rowcount`` is 0 if
+        # someone else consumed it in the meantime.
+        now = datetime.now(UTC)
+        result = await db.execute(
+            update(InviteCode)
+            .where(InviteCode.id == invite.id, InviteCode.used_at.is_(None))
+            .values(used_at=now, used_by_user_id=user.id)
+        )
+        if result.rowcount == 0:
+            raise AuthError("Invite code has already been used or has expired")
         await db.flush()
     access, refresh = _token_pair_for(user)
     return user, access, refresh

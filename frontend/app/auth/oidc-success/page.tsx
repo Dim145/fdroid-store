@@ -15,6 +15,10 @@ export default function OidcSuccessPage() {
     const params = new URLSearchParams(hash);
     const access = params.get("access_token");
     const refresh = params.get("refresh_token");
+    // Strip the fragment immediately so the tokens don't linger in browser
+    // history, the address bar, copy-paste of the URL, or any extension /
+    // analytics script that reads ``window.location`` after we mount.
+    window.history.replaceState(null, "", window.location.pathname);
     if (!access || !refresh) { setError("Missing tokens in callback"); return; }
     acceptOidcTokens(access, refresh).then(
       () => router.replace("/apps"),

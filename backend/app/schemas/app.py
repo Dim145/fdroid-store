@@ -84,11 +84,14 @@ class ScreenshotRead(BaseModel):
     display_order: int
 
 
+_DESCRIPTION_MAX = 20_000
+
+
 class AppCreate(BaseModel):
     package_name: str = Field(min_length=3, max_length=255, pattern=r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
     name: str = Field(min_length=1, max_length=255)
     summary: str | None = Field(default=None, max_length=255)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=_DESCRIPTION_MAX)
     license: str | None = Field(default=None, max_length=128)
     website: HttpUrl | None = None
     source_code: HttpUrl | None = None
@@ -107,7 +110,7 @@ class AppCreate(BaseModel):
 class AppUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     summary: str | None = Field(default=None, max_length=255)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=_DESCRIPTION_MAX)
     license: str | None = Field(default=None, max_length=128)
     website: HttpUrl | None = None
     source_code: HttpUrl | None = None

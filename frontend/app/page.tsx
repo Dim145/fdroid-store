@@ -22,14 +22,16 @@ import { useAuth } from "@/lib/auth-store";
  * ============================================================================ */
 export default function Home() {
   const router = useRouter();
-  const { user, loading, fetchMe } = useAuth();
+  const { user, loading } = useAuth();
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [repoName, setRepoName] = useState<string | null>(null);
   const [repoDescription, setRepoDescription] = useState<string | null>(null);
   const [apps, setApps] = useState<AppSummary[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
 
-  useEffect(() => { fetchMe(); }, [fetchMe]);
+  // ``fetchMe`` is fired once at module load by the auth-store bootstrap;
+  // an extra effect here just caused a duplicate /me request on every
+  // home-page mount.
 
   useEffect(() => {
     api.setup.status()

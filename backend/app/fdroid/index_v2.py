@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.fdroid.index_v1 import F_DROID_INDEX_VERSION
@@ -24,7 +24,7 @@ DEFAULT_LOCALE = "en-US"
 
 def _ts_ms(value: datetime | None) -> int:
     if value is None:
-        return int(datetime.now().timestamp() * 1000)
+        return int(datetime.now(UTC).timestamp() * 1000)
     return int(value.timestamp() * 1000)
 
 
@@ -194,7 +194,7 @@ def build_index_v2(
     hash + size. The F-Droid v2 client rejects icon entries that don't carry
     these, so the caller is responsible for hashing icons before calling.
     """
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
     packages: dict[str, Any] = {}
     categories_seen: set[str] = set()
     for app in apps:
@@ -235,7 +235,7 @@ def build_entry_json(index_v2_bytes: bytes, timestamp_ms: int | None = None) -> 
     It contains a checksum of ``index-v2.json`` so the F-Droid client can
     verify the (large, unsigned) index against this (small, signed) entry.
     """
-    ts = timestamp_ms or int(datetime.now().timestamp() * 1000)
+    ts = timestamp_ms or int(datetime.now(UTC).timestamp() * 1000)
     sha = hashlib.sha256(index_v2_bytes).hexdigest()
     payload = {
         "timestamp": ts,

@@ -8,8 +8,16 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Default credentials shipped in the repo. Production deployments MUST
+# override these; the model validator below refuses to start otherwise.
+_INSECURE_DEFAULTS = {
+    "initial_admin_password": "changeme_admin",
+    "keystore_password": "changeme_keystore",
+    "key_password": "changeme_key",
+}
 
 
 class Settings(BaseSettings):
@@ -112,6 +120,51 @@ class Settings(BaseSettings):
         if v == "replace_with_a_long_random_string_at_least_64_chars_long":
             raise ValueError("SECRET_KEY must be set to a unique random value")
         return v
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _check_cors_origins(cls, v: str) -> str:
+        # ``CORS_ORIGINS="*"`` paired with ``allow_credentials=True`` (which we
+        # hard-code in main.py) is a known footgun: the browser blocks the
+        # literal star but the laxer reflective behaviour of some middleware
+        # versions still echoes the request origin back. Refuse the
+        # combination outright.
+        if any(o.strip() == "*" for o in v.split(",")):
+            raise ValueError(
+                "CORS_ORIGINS=\"*\" is not allowed when credentials are enabled; "
+                "list explicit origins instead.",
+            )
+        return v
+
+    @field_validator("oidc_issuer")
+    @classmethod
+    def _check_oidc_issuer(cls, v: str | None) -> str | None:
+        # OIDC discovery + token exchange MUST happen over HTTPS. We allow
+        # ``http://localhost`` for development convenience but block any
+        # other plain-HTTP issuer.
+        if v is None or v == "":
+            return v
+        lowered = v.lower()
+        if lowered.startswith("https://"):
+            return v
+        if lowered.startswith("http://localhost") or lowered.startswith("http://127.0.0.1"):
+            return v
+        raise ValueError("OIDC_ISSUER must be served over HTTPS (or localhost for dev)")
+
+    @model_validator(mode="after")
+    def _refuse_insecure_defaults_in_production(self) -> "Settings":
+        if self.environment != "production":
+            return self
+        leftovers = [
+            name for name, default in _INSECURE_DEFAULTS.items()
+            if getattr(self, name) == default
+        ]
+        if leftovers:
+            raise ValueError(
+                "Refusing to start in production with the shipped default "
+                f"credentials: {', '.join(leftovers)}. Override them in .env."
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

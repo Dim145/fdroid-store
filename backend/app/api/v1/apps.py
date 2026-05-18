@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
@@ -38,10 +38,10 @@ def _app_visible_to(app: App, user: User | None) -> bool:
 async def list_apps(
     db: DbSession,
     user: Annotated[User | None, Depends(require_browse_access)],
-    q: str | None = None,
-    category: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    q: str | None = Query(default=None, max_length=200),
+    category: str | None = Query(default=None, max_length=64),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> list[AppRead]:
     """Browse apps. Anonymous callers only see PUBLIC + PUBLISHED apps; they
     are rejected outright when the repo is not in public mode."""

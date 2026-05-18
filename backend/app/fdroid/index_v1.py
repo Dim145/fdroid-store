@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.models.apk import Apk
@@ -24,7 +24,7 @@ DEFAULT_LOCALE = "en-US"
 
 def _ts_ms(value: datetime | None) -> int:
     if value is None:
-        return int(datetime.now().timestamp() * 1000)
+        return int(datetime.now(UTC).timestamp() * 1000)
     return int(value.timestamp() * 1000)
 
 
@@ -165,7 +165,7 @@ def build_index_v1(
     Only apps with at least one PUBLISHED apk are emitted. Apps with no APK
     are silently skipped (the index would not be useful without binaries).
     """
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
     apps_list: list[dict[str, Any]] = []
     packages: dict[str, list[dict[str, Any]]] = {}
 

@@ -9,7 +9,7 @@ The endpoint:
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -17,7 +17,8 @@ from fastapi.responses import FileResponse, RedirectResponse, Response, Streamin
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, require_repo_access
+from app.api.deps import DbSession, get_api_key_from_basic_auth, is_public_mode
+from app.core.download_token import verify_download_token
 from app.core.security import parse_api_key, verify_api_key_secret
 from app.fdroid.repo_builder import REPO_PRIVATE_PREFIX, REPO_PUBLIC_PREFIX
 from app.models.api_key import ApiKey
@@ -103,11 +104,26 @@ async def serve(
     filename: str,
     request: Request,
     db: DbSession,
-    api_key: Annotated[ApiKey | None, Depends(require_repo_access)] = None,
+    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    t: str | None = None,
 ) -> Response:
     """Catch-all under ``/fdroid/repo/`` — anonymous + Basic-auth path.
-    ``require_repo_access`` lets anonymous callers through only when the repo
-    is in public mode; otherwise it issues a 401 with Basic-auth challenge."""
+
+    Auth precedence:
+      1. Basic auth API key (``api_key`` is set by the dependency).
+      2. ``?t=<signed token>`` issued by /api/v1/apks/{id}/download-url for a
+         logged-in SPA session — lets ``<a href download>`` clicks work in
+         private mode without triggering the browser's Basic-auth prompt.
+      3. Anonymous, only when the repo is in public mode.
+    """
+    if api_key is None:
+        token_ok = t is not None and verify_download_token(filename, t)
+        if not token_ok and not await is_public_mode(db):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
+            )
     return await _dispatch_root(filename, request, db, api_key)
 
 
@@ -223,8 +239,12 @@ async def _api_key_from_token_path(token: str, db) -> ApiKey:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     if not verify_api_key_secret(secret, key.hashed_secret):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    key.last_used_at = datetime.now(UTC)
-    await db.flush()
+    # Same throttle as deps.py: bursts of F-Droid client requests share a
+    # single ``last_used_at`` write per minute.
+    now = datetime.now(UTC)
+    if key.last_used_at is None or (now - key.last_used_at) >= timedelta(minutes=1):
+        key.last_used_at = now
+        await db.flush()
     return key
 
 

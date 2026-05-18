@@ -24,10 +24,18 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user
 from app.core.logging import get_logger
+from app.core.uploads import normalize_image, read_capped
 from app.models.app import App, AppScreenshot
 from app.models.user import User, UserRole
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
+
+# Per-endpoint upload caps. Anything above these is rejected before the
+# bytes hit memory; the PIL pipeline also enforces a global pixel-count
+# limit (see app/core/uploads.py).
+_MAX_ICON_BYTES = 4 * 1024 * 1024          # 4 MiB
+_MAX_FEATURE_GRAPHIC_BYTES = 8 * 1024 * 1024  # 8 MiB
+_MAX_SCREENSHOT_BYTES = 12 * 1024 * 1024   # 12 MiB
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -52,24 +60,10 @@ async def _load_owned_app(db, app_id: uuid.UUID, user: User) -> App:
     return app
 
 
-def _normalize_to_png(raw: bytes, max_size: tuple[int, int]) -> bytes:
-    """Validate + re-encode an image to PNG with a max bounding box.
-
-    Raises ``HTTPException(400)`` if the bytes don't decode.
-    """
-    try:
-        with Image.open(io.BytesIO(raw)) as probe:
-            probe.verify()
-        img = Image.open(io.BytesIO(raw)).convert("RGBA")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File is not a valid image",
-        ) from exc
-    img.thumbnail(max_size, Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+# Image normalisation is now in app.core.uploads — same pipeline shared with
+# the repo-icon endpoint, with format whitelisting + decompression-bomb
+# detection + ``asyncio.to_thread`` to keep the event loop responsive on
+# multi-megapixel inputs.
 
 
 # --------------------------------------------------------------------------
@@ -87,10 +81,10 @@ async def upload_custom_icon(
     Sets ``icon_is_custom = True`` so future APK uploads don't replace it.
     """
     app = await _load_owned_app(db, app_id, user)
-    raw = await file.read()
+    raw = await read_capped(file, _MAX_ICON_BYTES)
     if not raw:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
-    png = _normalize_to_png(raw, (512, 512))
+    png = await normalize_image(raw, (512, 512))
 
     storage = get_storage()
     key = f"icons/{app.package_name}-custom.png"
@@ -114,10 +108,10 @@ async def upload_feature_graphic(
     which matches the dimensions Google Play and F-Droid clients optimise
     for; clients downscale as needed."""
     app = await _load_owned_app(db, app_id, user)
-    raw = await file.read()
+    raw = await read_capped(file, _MAX_FEATURE_GRAPHIC_BYTES)
     if not raw:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
-    png = _normalize_to_png(raw, (1024, 500))
+    png = await normalize_image(raw, (1024, 500))
 
     storage = get_storage()
     key = f"{app.package_name}/{_DEFAULT_FG_LOCALE}/featureGraphic.png"
@@ -211,12 +205,12 @@ async def upload_screenshots(
 
     created: list[AppScreenshot] = []
     for upload in files:
-        raw = await upload.read()
+        raw = await read_capped(upload, _MAX_SCREENSHOT_BYTES)
         if not raw:
             continue
         # Screenshots can stay larger than icons — phone images are typically
         # 1080×1920 (or similar). Cap at a sensible upper bound.
-        png = _normalize_to_png(raw, (1080, 1920))
+        png = await normalize_image(raw, (1080, 1920))
 
         with Image.open(io.BytesIO(png)) as img:
             width, height = img.size

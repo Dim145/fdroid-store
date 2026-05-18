@@ -46,8 +46,20 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    # SessionMiddleware is required by Authlib for the OIDC flow.
-    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+    # SessionMiddleware is required by Authlib for the OIDC flow. Cookie
+    # lifetime is capped at one hour because the only thing we stash there
+    # is the OIDC ``state``/``nonce`` pair (Authlib) + an optional invite
+    # code — both consumed by the callback. ``https_only`` is on outside
+    # development; ``same_site=lax`` allows the cross-site GET that the IdP
+    # redirects back with.
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.secret_key,
+        max_age=3600,
+        same_site="lax",
+        https_only=settings.environment == "production",
+        session_cookie="fdroid_session",
+    )
 
     # API routes (JSON, admin/client zone consumes them)
     app.include_router(api_router, prefix="/api/v1")

@@ -70,21 +70,35 @@ type FetchOptions = RequestInit & {
   noRetry?: boolean;
 };
 
+// Single in-flight refresh shared across all concurrent ``apiFetch`` calls.
+// Without this dedupe, N parallel 401s each fire their own refresh request;
+// the first to land consumes the refresh token, the rest get a 401 back
+// and clear tokens — logging the user out mid-session.
+let _refreshInflight: Promise<boolean> | null = null;
+
 async function refreshAccessToken(): Promise<boolean> {
-  const refresh = getRefreshToken();
-  if (!refresh) return false;
-  const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ refresh_token: refresh }),
-  });
-  if (!res.ok) {
-    clearTokens();
-    return false;
+  if (_refreshInflight) return _refreshInflight;
+  _refreshInflight = (async () => {
+    const refresh = getRefreshToken();
+    if (!refresh) return false;
+    const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: refresh }),
+    });
+    if (!res.ok) {
+      clearTokens();
+      return false;
+    }
+    const data = (await res.json()) as { access_token: string; refresh_token: string };
+    setTokens(data.access_token, data.refresh_token);
+    return true;
+  })();
+  try {
+    return await _refreshInflight;
+  } finally {
+    _refreshInflight = null;
   }
-  const data = (await res.json()) as { access_token: string; refresh_token: string };
-  setTokens(data.access_token, data.refresh_token);
-  return true;
 }
 
 export async function apiFetch<T = unknown>(
@@ -96,12 +110,17 @@ export async function apiFetch<T = unknown>(
   if (!finalHeaders.has("content-type") && rest.body && !(rest.body instanceof FormData)) {
     finalHeaders.set("content-type", "application/json");
   }
-  if (!anonymous) {
+  // Refuse to attach the bearer to absolute / cross-origin URLs. The current
+  // codebase never passes an absolute URL here, but if a future caller wires
+  // a user-controlled URL into ``apiFetch`` (a "validate website" feature,
+  // say) we don't want the token leaking off-origin.
+  const isAbsolute = /^https?:\/\//i.test(path);
+  if (!anonymous && !isAbsolute) {
     const token = getAccessToken();
     if (token) finalHeaders.set("authorization", `Bearer ${token}`);
   }
 
-  const url = path.startsWith("http") ? path : `${API_URL}${path}`;
+  const url = isAbsolute ? path : `${API_URL}${path}`;
   let res = await fetch(url, { ...rest, headers: finalHeaders });
 
   if (res.status === 401 && !noRetry && !anonymous) {
@@ -242,6 +261,13 @@ export const api = {
     },
     deleteApk: (apkId: string) =>
       apiFetch<void>(`/api/v1/apks/${apkId}`, { method: "DELETE" }),
+    // Signed, time-limited URL the browser can hit directly via <a href>
+    // without triggering the F-Droid Basic-auth pop-up in private mode.
+    downloadUrl: (apkId: string) =>
+      apiFetch<{ url: string; expires_in: number }>(
+        `/api/v1/apks/${apkId}/download-url`,
+        { method: "POST" },
+      ),
     updateApk: (apkId: string, payload: { whats_new?: string | null; anti_features?: string[] }) =>
       apiFetch<Apk>(`/api/v1/apks/${apkId}`, {
         method: "PATCH",

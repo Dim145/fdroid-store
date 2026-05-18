@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import desc, select
 
 from app.api.deps import DbSession, get_current_user
@@ -57,14 +57,14 @@ async def change_password(
 async def my_download_history(
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> dict:
     stmt = (
         select(DownloadEvent)
         .where(DownloadEvent.user_id == user.id)
         .order_by(desc(DownloadEvent.created_at))
-        .limit(min(limit, 500))
+        .limit(limit)
         .offset(offset)
     )
     rows = (await db.execute(stmt)).scalars().all()

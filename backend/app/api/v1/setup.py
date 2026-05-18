@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.api.deps import DbSession, get_current_admin
 from app.core.config import settings
@@ -28,12 +28,10 @@ log = get_logger(__name__)
 @router.get("/status", response_model=SetupStatus)
 async def setup_status(db: DbSession) -> SetupStatus:
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
-    has_users = ((await db.execute(select(func.count(User.id)))).scalar_one() or 0) > 0
     keystore_present = Path(settings.keystore_path).exists()
     return SetupStatus(
         setup_complete=bool(config and config.setup_complete),
         keystore_present=keystore_present,
-        has_users=has_users,
         repo_name=config.name if config else None,
         repo_description=config.description if config else None,
         repo_address=config.address if config else None,

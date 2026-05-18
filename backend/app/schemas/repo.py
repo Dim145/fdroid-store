@@ -42,7 +42,10 @@ class RepoConfigUpdate(BaseModel):
 class SetupStatus(BaseModel):
     setup_complete: bool
     keystore_present: bool
-    has_users: bool
+    # ``has_users`` is intentionally NOT exposed: an anonymous caller would
+    # otherwise be able to confirm whether the default admin account still
+    # exists, which makes brute-forcing the shipped ``changeme_admin``
+    # password materially easier.
     # Public-safe repo metadata exposed alongside setup state so anonymous
     # visitors can render the masthead without a separate request.
     repo_name: str | None = None
