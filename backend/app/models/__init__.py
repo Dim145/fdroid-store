@@ -9,6 +9,8 @@ from app.models.app import App, AppCategory, AppScreenshot, Category, Localizati
 from app.models.apk import Apk
 from app.models.audit import DownloadEvent
 from app.models.invite_code import InviteCode
+from app.models.package_signer import PackageSignerPin
+from app.models.refresh_token import RefreshToken
 from app.models.repo_config import RepoConfig
 from app.models.user import User
 
@@ -22,6 +24,8 @@ __all__ = [
     "DownloadEvent",
     "InviteCode",
     "Localization",
+    "PackageSignerPin",
+    "RefreshToken",
     "RepoConfig",
     "User",
 ]

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Materialise the HSTS directive used by nginx.conf.template based on the
+# ``ENABLE_HSTS`` / ``HSTS_MAX_AGE`` env vars. Empty by default so a local
+# HTTP-only test deployment doesn't pin HSTS in every visiting browser.
+#
+# The script runs before the upstream ``20-envsubst-on-templates.sh`` so the
+# ``${HSTS_DIRECTIVE}`` placeholder in the template is expanded with the
+# value we export here.
+set -eu
+
+if [ "${ENABLE_HSTS:-0}" = "1" ]; then
+    : "${HSTS_MAX_AGE:=31536000}"
+    export HSTS_DIRECTIVE="add_header Strict-Transport-Security \"max-age=${HSTS_MAX_AGE}; includeSubDomains\" always;"
+else
+    export HSTS_DIRECTIVE=""
+fi

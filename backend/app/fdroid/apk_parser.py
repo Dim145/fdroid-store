@@ -58,17 +58,36 @@ def _sha256_file(path: Path) -> tuple[str, int]:
 
 
 async def _apksigner_cert_sha256(path: Path) -> str:
-    """Return SHA-256 of the APK signer certificate, as lowercase hex."""
+    """Return SHA-256 of the APK signer certificate, as lowercase hex.
+
+    Defensive against:
+      * paths whose basename starts with ``-`` — we prefix with ``./`` so
+        the argument can never look like a flag, no matter what the
+        binary's parser tolerates (CWE-88).
+      * malformed APKs that make the JVM hang — ``asyncio.wait_for`` caps
+        wall-clock at 60 s and kills the process on timeout (CWE-400).
+    """
+    path_arg = str(path)
+    if not path_arg.startswith("/") and not path_arg.startswith("./"):
+        path_arg = "./" + path_arg
     proc = await asyncio.create_subprocess_exec(
-        "apksigner", "verify", "--print-certs", str(path),
+        "apksigner", "verify", "--print-certs", path_arg,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await proc.communicate()
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ApkParseError("apksigner timed out") from None
     if proc.returncode != 0:
-        raise ApkParseError(
-            f"apksigner failed (rc={proc.returncode}): {err.decode('utf-8', 'replace')}"
-        )
+        # Truncate + strip control bytes — apksigner's stderr can echo
+        # attacker-influenced bytes from the APK, and we don't want them
+        # in our error response or logs (CWE-209).
+        raw = err.decode("utf-8", "replace")[:512]
+        safe = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+        raise ApkParseError(f"apksigner failed (rc={proc.returncode}): {safe}")
     text = out.decode("utf-8", "replace")
     m = _APKSIGNER_HEX.search(text)
     if not m:

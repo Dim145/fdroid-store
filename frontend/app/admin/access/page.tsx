@@ -148,6 +148,21 @@ export default function AdminAccessPage() {
         />
       </section>
 
+      {/* ── Upload limits ── */}
+      <section className="surface p-6">
+        <h2 className="mb-1 text-lg font-bold tracking-tight text-ink">Upload limits</h2>
+        <p className="mb-5 text-sm text-ink-soft">
+          Hard cap on APK uploads. Larger files are refused before they hit
+          disk. Set this just above your largest legitimate release.
+        </p>
+        <ApkSizeEditor
+          repo={repo}
+          onSaved={async (next) => { setRepo(next); await refreshAll(); }}
+          setErr={setErr}
+          setMsg={setMsg}
+        />
+      </section>
+
       {/* ── Invite codes ── */}
       <section
         className={cn(
@@ -412,6 +427,63 @@ function InviteList({
     </ul>
   );
 }
+
+function ApkSizeEditor({
+  repo,
+  onSaved,
+  setErr,
+  setMsg,
+}: {
+  repo: RepoConfigInfo;
+  onSaved: (next: RepoConfigInfo) => Promise<void> | void;
+  setErr: (s: string | null) => void;
+  setMsg: (s: string | null) => void;
+}) {
+  const [value, setValue] = useState(String(repo.upload_max_apk_mb));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { setValue(String(repo.upload_max_apk_mb)); }, [repo.upload_max_apk_mb]);
+
+  async function save() {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 5 || parsed > 2000) {
+      setErr("APK size cap must be between 5 and 2000 MB");
+      return;
+    }
+    setErr(null); setMsg(null); setBusy(true);
+    try {
+      const updated = await api.admin.updateRepo({ upload_max_apk_mb: parsed });
+      await onSaved(updated);
+      setMsg("Saved.");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+      <div className="space-y-1.5">
+        <Label htmlFor="apksize" className="text-xs font-medium text-ink-soft">
+          Max APK size (MB)
+        </Label>
+        <Input
+          id="apksize"
+          type="number"
+          min={5}
+          max={2000}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </div>
+      <Button type="button" variant="filled" onClick={save} disabled={busy}>
+        Save
+      </Button>
+    </div>
+  );
+}
+
 
 function inviteStatus(inv: InviteCode): {
   label: string;

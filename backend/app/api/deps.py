@@ -45,6 +45,16 @@ async def _user_from_jwt(token: str, db: AsyncSession) -> User:
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    # C5: tokens minted before the last password change are dead. ``iat`` is
+    # always present (set in _create_token). If it isn't, the token was
+    # crafted against an old format we don't trust either.
+    iat = payload.get("iat")
+    if user.password_changed_at is not None:
+        if iat is None or datetime.fromtimestamp(int(iat), tz=UTC) < user.password_changed_at:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token invalidated by a password change",
+            )
     return user
 
 

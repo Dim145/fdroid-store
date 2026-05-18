@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import zipfile
 from pathlib import Path
 
@@ -41,27 +42,47 @@ async def sign_jar(
     # store password (it warns about this when you try to differ). So we use
     # the store password for both here — passing different ones makes
     # jarsigner think the alias is not a private-key entry.
+    #
+    # ``-storepass:env`` / ``-keypass:env`` keep the secret out of argv —
+    # otherwise it shows up in ``ps`` / ``/proc/<pid>/cmdline`` (CWE-214).
+    # The path is prefixed with ``./`` so a filename starting with ``-``
+    # can't be mistaken for a flag (CWE-88 defence in depth). jarsigner
+    # doesn't honour the standard ``--`` argv separator.
+    jar_arg = str(jar_path)
+    if not jar_arg.startswith("/") and not jar_arg.startswith("./"):
+        jar_arg = "./" + jar_arg
     cmd = [
         "jarsigner",
         "-keystore", str(keystore_path),
-        "-storepass", keystore_password,
-        "-keypass", keystore_password,
+        "-storepass:env", "FDROID_STOREPASS",
+        "-keypass:env", "FDROID_STOREPASS",
         "-sigalg", "SHA256withRSA",
         "-digestalg", "SHA-256",
         "-storetype", "PKCS12",
-        str(jar_path),
+        jar_arg,
         alias,
     ]
+    env = os.environ.copy()
+    env["FDROID_STOREPASS"] = keystore_password
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
-    out, err = await proc.communicate()
+    try:
+        # 60 s is comfortably above any legitimate index-signing run. A
+        # corrupt JAR that makes jarsigner spin would otherwise hold a
+        # worker indefinitely.
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise SigningError("jarsigner timed out") from None
     if proc.returncode != 0:
         raise SigningError(
             f"jarsigner failed (rc={proc.returncode}): "
-            f"{(err or out).decode('utf-8', 'replace')}"
+            f"{(err or out).decode('utf-8', 'replace')[:512]}"
         )
 
 

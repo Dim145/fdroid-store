@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Annotated
+
+# Mirrors the ``package_name`` regex in ``AppCreate`` — kept module-level so
+# the multipart endpoint can reuse it without going through the JSON
+# pipeline. Standard Android package id: at least two dot-separated
+# segments, each starting with a letter, alphanumeric + underscore.
+_PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import or_, select
@@ -9,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, require_browse_access
 from app.api.v1.apks import (
+    _apk_size_cap_bytes,
     attach_apk_to_app,
     parse_or_400,
     save_upload_to_temp,
@@ -73,22 +81,24 @@ async def create_app_with_apk(
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
     file: UploadFile = File(...),
-    name: str = Form(...),
-    package_name: str | None = Form(None),
-    summary: str | None = Form(None),
-    description: str | None = Form(None),
-    license: str | None = Form(None),
-    website: str | None = Form(None),
-    source_code: str | None = Form(None),
-    issue_tracker: str | None = Form(None),
-    author_name: str | None = Form(None),
-    visibility: str = Form("public"),
+    name: str = Form(..., min_length=1, max_length=255),
+    package_name: str | None = Form(default=None, max_length=255),
+    summary: str | None = Form(default=None, max_length=255),
+    description: str | None = Form(default=None, max_length=20_000),
+    license: str | None = Form(default=None, max_length=128),
+    website: str | None = Form(default=None, max_length=512),
+    source_code: str | None = Form(default=None, max_length=512),
+    issue_tracker: str | None = Form(default=None, max_length=512),
+    author_name: str | None = Form(default=None, max_length=255),
+    visibility: str = Form(default="public", max_length=16),
 ) -> AppDetail:
     """Create an App + attach an APK in one multipart request.
 
-    If ``package_name`` is empty, it is taken from the APK manifest. If it is
-    provided, it must match. The visibility string is validated against
-    AppVisibility.
+    All form fields run through the same constraints as ``AppCreate``
+    (length caps, enum validation) so this multipart path can't be used
+    to bypass the JSON Pydantic validation. URL fields are validated as
+    proper http(s) URLs to avoid storing ``javascript:`` etc. that would
+    later become an XSS surface.
     """
     try:
         visibility_enum = AppVisibility(visibility)
@@ -98,10 +108,36 @@ async def create_app_with_apk(
             detail="visibility must be 'public' or 'private'",
         ) from exc
 
-    tmp_path = await save_upload_to_temp(file)
+    # URL fields: reuse Pydantic's HttpUrl validator so we reject
+    # ``javascript:``, ``data:``, mailto, and other non-http schemes.
+    from pydantic import HttpUrl as _HttpUrl, ValidationError as _VErr
+
+    def _check_url(value: str | None, label: str) -> str | None:
+        if not value:
+            return None
+        try:
+            return str(_HttpUrl(value))
+        except _VErr as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{label} must be an http(s) URL",
+            ) from exc
+
+    website = _check_url(website, "website")
+    source_code = _check_url(source_code, "source_code")
+    issue_tracker = _check_url(issue_tracker, "issue_tracker")
+
+    tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
         meta = await parse_or_400(tmp_path)
         pkg = (package_name or meta.package_name).strip()
+        # Enforce the same package-name regex used on the JSON path; an
+        # APK manifest with a wonky package would otherwise slip through.
+        if not _PACKAGE_NAME_RE.match(pkg):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="package name must be a valid Android package id",
+            )
         if pkg != meta.package_name:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

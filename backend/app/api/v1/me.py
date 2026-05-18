@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -11,6 +12,7 @@ from app.models.audit import DownloadEvent
 from app.models.user import User
 from app.schemas.app import AppRead
 from app.schemas.auth import ChangePasswordRequest
+from app.services.auth_service import revoke_all_refresh_tokens
 from app.schemas.user import UserRead, UserUpdate
 
 router = APIRouter()
@@ -50,6 +52,12 @@ async def change_password(
             detail="Current password is incorrect",
         )
     user.hashed_password = hash_password(payload.new_password)
+    # C5: bumping password_changed_at invalidates every JWT minted before
+    # this moment via the iat check in deps.py. C6: explicitly revoke
+    # every outstanding refresh token so a leaked refresh can't be
+    # redeemed even before its 30-day expiry.
+    user.password_changed_at = datetime.now(UTC)
+    await revoke_all_refresh_tokens(db, user.id)
     await db.flush()
 
 

@@ -23,7 +23,7 @@ from app.core.security import parse_api_key, verify_api_key_secret
 from app.fdroid.repo_builder import REPO_PRIVATE_PREFIX, REPO_PUBLIC_PREFIX
 from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
-from app.models.app import App, AppVisibility
+from app.models.app import App, AppStatus, AppVisibility
 from app.models.audit import DownloadEvent
 from app.storage import get_storage
 from app.storage.local import LocalStorage
@@ -117,7 +117,7 @@ async def serve(
       3. Anonymous, only when the repo is in public mode.
     """
     if api_key is None:
-        token_ok = t is not None and verify_download_token(filename, t)
+        token_ok = t is not None and verify_download_token(filename, t) is not None
         if not token_ok and not await is_public_mode(db):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -127,16 +127,61 @@ async def serve(
     return await _dispatch_root(filename, request, db, api_key)
 
 
-@router.get("/icons/{filename}")
-async def serve_icon(filename: str) -> Response:
-    """Icons stay anonymous even in private mode.
+async def _media_anonymously_visible(
+    *,
+    db,
+    package_name: str,
+    api_key: ApiKey | None,
+) -> bool:
+    """Return True if the underlying app (looked up by package) may be
+    served anonymously through the media routes.
 
-    They're loaded by ``<img>`` tags from the SPA, which can't attach a
-    bearer token. Gating them would force a 401 on every logged-in page
-    that just renders a thumbnail. Knowing the icon of a package whose
-    name you already had to guess doesn't help an attacker install
-    anything — APKs and the F-Droid index are the actual gates.
+    Private apps' media (icons, banners, screenshots) is what makes their
+    name guessable by probing. Anonymous callers see media only for
+    PUBLIC + PUBLISHED apps; callers with an API key that ``can_download_
+    private`` also see private apps' media. Repo-level icons (no matching
+    app) stay anonymous so the catalogue masthead works for logged-out
+    visitors.
     """
+    app_row = (
+        await db.execute(
+            select(App).where(App.package_name == package_name)
+        )
+    ).scalar_one_or_none()
+    if app_row is None:
+        return True  # not tied to an app (e.g. the repo icon itself)
+    if app_row.visibility == AppVisibility.PUBLIC and app_row.status == AppStatus.PUBLISHED:
+        return True
+    if api_key is not None and api_key.can_download_private:
+        return True
+    return False
+
+
+@router.get("/icons/{filename}")
+async def serve_icon(
+    filename: str,
+    db: DbSession,
+    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+) -> Response:
+    """Icons.
+
+    Refuse anonymously serving icons of private / unpublished apps — the
+    file naming (``icons/<package>.png``) made the F-Droid serve route a
+    package-name oracle for private packages (CWE-203). Catalogue
+    thumbnails of public apps stay public so the logged-out home page
+    still renders.
+    """
+    # Filename layout is ``<package>.png``, ``<package>-custom.png``,
+    # ``fdroid-icon.png`` (the repo's own icon), or ``repo-icon-<ts>.png``.
+    # Derive the package name only for the per-app variants.
+    base = filename.rsplit(".", 1)[0]
+    package_name: str | None = None
+    if not base.startswith("repo-icon") and base != "fdroid-icon":
+        package_name = base.removesuffix("-custom")
+    if package_name and not await _media_anonymously_visible(
+        db=db, package_name=package_name, api_key=api_key,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
     storage = get_storage()
     key = f"icons/{filename}"
     if not await storage.exists(key):
@@ -173,12 +218,16 @@ async def serve_singleton_media(
     package: str,
     locale: str,
     filename: str,
+    db: DbSession,
+    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
 ) -> Response:
     if filename not in _ALLOWED_SINGLETON_MEDIA:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     for seg in (package, locale, filename):
         if not seg or "/" in seg or seg.startswith("."):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     key = f"{package}/{locale}/{filename}"
     storage = get_storage()
     if not await storage.exists(key):
@@ -192,16 +241,20 @@ async def serve_media(
     locale: str,
     kind: str,
     filename: str,
+    db: DbSession,
+    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
 ) -> Response:
-    # Same reasoning as serve_icon: screenshots are <img>-loaded previews,
-    # gating them would just break the catalogue's thumbnails for every
-    # logged-in user. The APK + index are where access actually matters.
+    # Screenshots are <img>-loaded previews but the URL doubles as a
+    # package-name oracle for private apps if served anonymously. Gate on
+    # the same rule as the icon route.
     if kind not in _ALLOWED_MEDIA_KINDS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     # Defensive: refuse traversal-y components
     for seg in (package, locale, kind, filename):
         if not seg or "/" in seg or seg.startswith("."):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     key = f"{package}/{locale}/{kind}/{filename}"
     storage = get_storage()
     if not await storage.exists(key):
@@ -270,8 +323,25 @@ async def serve_token_icon(
     filename: str,
     db: DbSession,
 ) -> Response:
-    await _api_key_from_token_path(token, db)
-    return await serve_icon(filename)
+    api_key = await _api_key_from_token_path(token, db)
+    return await serve_icon(filename, db=db, api_key=api_key)
+
+
+@token_router.get("/{token}/fdroid/repo/{package}/{locale}/{filename}")
+async def serve_token_singleton_media(
+    token: str,
+    package: str,
+    locale: str,
+    filename: str,
+    db: DbSession,
+) -> Response:
+    # H15: token equivalent of ``serve_singleton_media`` so featureGraphic
+    # / promoGraphic / tvBanner are reachable through the path-token URL
+    # in private mode without falling back to the anonymous route.
+    api_key = await _api_key_from_token_path(token, db)
+    return await serve_singleton_media(
+        package, locale, filename, db=db, api_key=api_key,
+    )
 
 
 @token_router.get("/{token}/fdroid/repo/{package}/{locale}/{kind}/{filename}")
@@ -283,8 +353,10 @@ async def serve_token_media(
     filename: str,
     db: DbSession,
 ) -> Response:
-    await _api_key_from_token_path(token, db)
-    return await serve_media(package, locale, kind, filename)
+    api_key = await _api_key_from_token_path(token, db)
+    return await serve_media(
+        package, locale, kind, filename, db=db, api_key=api_key,
+    )
 
 
 # --------------------------------------------------------------------------

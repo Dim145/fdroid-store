@@ -46,6 +46,10 @@ class User(Base, IdMixin, TimestampMixin):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set on every password change. The JWT decoder rejects access /
+    # refresh tokens whose ``iat`` predates this value, so a stolen
+    # token stops working the moment the victim rotates their password.
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # relationships
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")

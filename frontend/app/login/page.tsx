@@ -19,15 +19,21 @@ export default function LoginPage() {
   );
 }
 
-// Defence against an open redirect via ``?next=//evil.com/...``. We only
-// follow same-origin, absolute paths — anything else (full URLs, protocol-
-// relative ``//host``, empty strings) falls back to /apps.
+// Defence against open redirects via ``?next=...``. The cheap
+// ``startsWith`` checks missed several browser-tolerated bypasses
+// (single backslash, percent-encoded slash, tab/whitespace). Parse the
+// value with the standard ``URL`` constructor against our own origin —
+// anything that resolves to a different origin is rejected outright.
 function safeNext(raw: string | null): string {
-  if (!raw) return "/apps";
-  if (!raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) {
+  if (!raw || raw.length > 512) return "/apps";
+  if (typeof window === "undefined") return "/apps";
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.origin !== window.location.origin) return "/apps";
+    return url.pathname + url.search + url.hash;
+  } catch {
     return "/apps";
   }
-  return raw;
 }
 
 function LoginForm() {

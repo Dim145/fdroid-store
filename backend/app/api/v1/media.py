@@ -22,10 +22,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_current_user
+from app.api.deps import DbSession, get_current_user, get_current_user_optional, is_public_mode
 from app.core.logging import get_logger
 from app.core.uploads import normalize_image, read_capped
-from app.models.app import App, AppScreenshot
+from app.models.app import App, AppScreenshot, AppStatus, AppVisibility
 from app.models.user import User, UserRole
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
@@ -255,8 +255,13 @@ async def upload_screenshots(
 async def list_screenshots(
     app_id: uuid.UUID,
     db: DbSession,
+    user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> list[dict]:
-    """Public listing — no auth needed to enumerate an app's screenshots."""
+    """List screenshots for an app. Honours the same visibility rules as the
+    catalogue: a private app's screenshots are only listable by its owner
+    or by an admin, and anonymous callers are bounced when the repo is not
+    in public mode. The previous "no auth needed" wide-open behaviour
+    leaked private package names via storage_key inspection (CWE-639)."""
     app = (
         await db.execute(
             select(App).options(selectinload(App.screenshots)).where(App.id == app_id)
@@ -264,6 +269,18 @@ async def list_screenshots(
     ).scalar_one_or_none()
     if app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+    # Anonymous + private mode → never. Anonymous + public mode → only
+    # PUBLIC + PUBLISHED apps. Authenticated → owner / admin / any
+    # PUBLIC+PUBLISHED.
+    if user is None and not await is_public_mode(db):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    public_listable = (
+        app.visibility == AppVisibility.PUBLIC and app.status == AppStatus.PUBLISHED
+    )
+    if not public_listable:
+        if user is None or (user.role != UserRole.ADMIN and app.owner_id != user.id):
+            # Mask existence to the unauthorised caller.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
     return [
         {
             "id": str(s.id),

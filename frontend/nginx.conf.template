@@ -10,8 +10,13 @@
 #   * /_protected/ as an internal X-Accel-Redirect target for /data/storage
 #
 # Variables consumed:
-#   UPSTREAM_BACKEND   "host:port" of the backend service. Default in
-#                      docker-compose: ``backend:8000``.
+#   UPSTREAM_BACKEND     "host:port" of the backend service. Default in
+#                        docker-compose: ``backend:8000``.
+#   ENABLE_HSTS          "1" to emit ``Strict-Transport-Security``. Off by
+#                        default so plain-HTTP local development works.
+#                        Production deployments behind TLS should turn it
+#                        on (or set it at their upstream TLS terminator).
+#   HSTS_MAX_AGE         seconds for HSTS. Defaults to 31536000 (1y).
 
 # Docker's embedded DNS — refresh records every 10s so a backend restart
 # doesn't strand a stale IP.
@@ -39,6 +44,13 @@ server {
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
     add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    # HSTS is gated on ``ENABLE_HSTS=1`` so local HTTP development isn't
+    # locked into HTTPS the moment the browser caches the header. The
+    # entrypoint shim (10-fdroid-hsts.sh) materialises this value at
+    # container start: empty by default, ``add_header Strict-Transport-
+    # Security "max-age=<HSTS_MAX_AGE>; includeSubDomains" always;`` when
+    # the toggle is on. Production deployments behind TLS should turn it on.
+    ${HSTS_DIRECTIVE}
 
     # NOTE: don't redefine ``types {}`` here — that would override the
     # http-level ``include /etc/nginx/mime.types`` and strip text/html,
@@ -72,7 +84,14 @@ server {
         proxy_read_timeout 300;
     }
 
+    # The path-token route puts the full API key in the URL path. Nginx
+    # would otherwise log every request line — verbatim plaintext keys in
+    # access logs is a bulk-credential leak waiting for one rolled log to
+    # turn into account takeover for every F-Droid client. Turn the log
+    # off for the credential-bearing path; the backend still records
+    # authenticated downloads in ``download_events``.
     location /r/ {
+        access_log off;
         set $upstream_backend ${UPSTREAM_BACKEND};
         proxy_pass http://$upstream_backend;
         proxy_set_header Host $host;

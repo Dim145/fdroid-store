@@ -28,15 +28,21 @@ class RepoConfigRead(BaseModel):
     public_mode: bool
     registration_policy: RegistrationPolicy
     mirrors: list[str] = []
+    upload_max_apk_mb: int = 200
 
 
 class RepoConfigUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     address: HttpUrl | None = None
-    mirrors: list[HttpUrl] | None = None
+    mirrors: list[HttpUrl] | None = Field(default=None, max_length=32)
     public_mode: bool | None = None
     registration_policy: RegistrationPolicy | None = None
+    # Cap on APK upload size in mebibytes. The backend enforces this via
+    # ``read_capped`` on every APK upload endpoint. 5–2000 covers normal
+    # F-Droid use; anything outside that range is almost certainly a
+    # mis-configuration.
+    upload_max_apk_mb: int | None = Field(default=None, ge=5, le=2000)
 
 
 class SetupStatus(BaseModel):
@@ -73,6 +79,11 @@ class SetupWizardRequest(BaseModel):
     key_dname: str | None = Field(default=None, max_length=255)
     # When keystore_mode = "import":
     keystore_b64: str | None = None  # base64-encoded .p12 / .jks
+    # Must be explicitly set to ``True`` to re-generate the keystore once
+    # ``setup_complete`` is on the repo config. Rotating the signing key
+    # is a one-way decision — every F-Droid client that's already added
+    # the repo refuses to update past this point. Defaults to False.
+    confirm_destroy: bool = False
 
 
 class KeystoreInfo(BaseModel):

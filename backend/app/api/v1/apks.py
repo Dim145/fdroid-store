@@ -16,6 +16,7 @@ from app.core.logging import get_logger
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, AppVisibility
+from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
 from app.schemas.app import ApkInspect, ApkRead, ApkUpdate
@@ -29,21 +30,48 @@ log = get_logger(__name__)
 # --------------------------------------------------------------------------
 # Helpers (also used by /apps/with-apk)
 # --------------------------------------------------------------------------
-async def save_upload_to_temp(upload: UploadFile) -> Path:
-    """Stream an UploadFile to a NamedTemporaryFile. Caller cleans up."""
+async def save_upload_to_temp(upload: UploadFile, *, max_bytes: int) -> Path:
+    """Stream an UploadFile to a NamedTemporaryFile, refusing anything past
+    ``max_bytes``. Caller cleans up. The cap is fed from
+    ``RepoConfig.upload_max_apk_mb`` and is admin-configurable from the UI.
+    A partial file written before the cap-hit is unlinked before raising,
+    so a flood of oversized uploads doesn't fill the tmpfs (CWE-770).
+    """
     if not upload.filename or not upload.filename.lower().endswith(".apk"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Expected an .apk file",
         )
-    with tempfile.NamedTemporaryFile(suffix=".apk", delete=False) as tmp:
-        path = Path(tmp.name)
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            tmp.write(chunk)
+    total = 0
+    path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".apk", delete=False) as tmp:
+            path = Path(tmp.name)
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=(
+                            f"APK exceeds the configured {max_bytes} byte limit"
+                        ),
+                    )
+                tmp.write(chunk)
+    except Exception:
+        if path is not None:
+            path.unlink(missing_ok=True)
+        raise
     return path
+
+
+async def _apk_size_cap_bytes(db) -> int:
+    """Look up the admin-set cap from RepoConfig."""
+    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+    mb = config.upload_max_apk_mb if config else 200
+    return mb * 1024 * 1024
 
 
 async def parse_or_400(path: Path) -> ApkMetadata:
@@ -77,6 +105,25 @@ async def attach_apk_to_app(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="APK signer does not match the signer of previously published APKs",
+        )
+    # C1: cross-App signer pin. ``App.locked_signer_sha256`` lived on the App
+    # row, so deleting the app dropped the pin and let a different user
+    # re-register the same package with a different signing certificate.
+    # ``package_signers`` is a separate table keyed on package_name only —
+    # it survives App deletion and locks the signer permanently per Android
+    # package name (the same trust contract F-Droid clients enforce).
+    pin = (
+        await db.execute(
+            select(PackageSignerPin).where(PackageSignerPin.package_name == app.package_name)
+        )
+    ).scalar_one_or_none()
+    if pin is not None and pin.signer_sha256 != meta.signer_sha256:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This package was previously published with a different signing certificate. "
+                "Use the original keystore or pick a new package name."
+            ),
         )
     dup = (await db.execute(select(Apk).where(Apk.sha256 == meta.sha256))).scalar_one_or_none()
     if dup is not None:
@@ -145,6 +192,18 @@ async def attach_apk_to_app(
     if initial_status == ApkStatus.PUBLISHED:
         if app.locked_signer_sha256 is None:
             app.locked_signer_sha256 = meta.signer_sha256
+        # Also lock the signer in the cross-App pin table so the same
+        # package name can't be re-registered with a different signer if
+        # this App is ever deleted (C1).
+        if pin is None:
+            db.add(
+                PackageSignerPin(
+                    package_name=app.package_name,
+                    signer_sha256=meta.signer_sha256,
+                    locked_by_app_id=app.id,
+                    first_locked_at=datetime.now(UTC),
+                )
+            )
         app.suggested_version_code = max(app.suggested_version_code or 0, meta.version_code)
         app.suggested_version_name = meta.version_name
         app.status = AppStatus.PUBLISHED
@@ -174,7 +233,7 @@ async def inspect_apk(
     Intended to power the "auto-fill the new-app form when an APK is picked"
     UX flow. Authenticated callers only — APK parsing isn't free.
     """
-    tmp_path = await save_upload_to_temp(file)
+    tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
         meta = await parse_or_400(tmp_path)
         return ApkInspect(
@@ -215,7 +274,7 @@ async def upload_apk(
     if app.owner_id != user.id and user.role != UserRole.ADMIN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    tmp_path = await save_upload_to_temp(file)
+    tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
         meta = await parse_or_400(tmp_path)
         apk = await attach_apk_to_app(
@@ -310,7 +369,7 @@ async def issue_download_url(
 
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
     base = (config.address.rstrip("/") if config and config.address else "/fdroid/repo")
-    token = sign_download_token(apk.file_name)
+    token = sign_download_token(apk.file_name, user.id)
     return {
         "url": f"{base}/{apk.file_name}?t={token}",
         "expires_in": DEFAULT_TTL_SECONDS,

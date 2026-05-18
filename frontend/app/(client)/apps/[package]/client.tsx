@@ -437,6 +437,12 @@ function DownloadApkButton({
     setBusy(true);
     try {
       const { url } = await api.apps.downloadUrl(apk.id);
+      // Defence against an API that ever returns a non-http(s) URL
+      // (misconfig, DB-injection, future bug). Anything else would XSS
+      // through ``window.location = "javascript:..."``.
+      if (!/^https?:\/\//i.test(url) && !url.startsWith("/")) {
+        throw new Error("Unsafe download URL");
+      }
       window.location.href = url;
     } catch {
       // Fall back to the bare URL — the browser will then prompt for

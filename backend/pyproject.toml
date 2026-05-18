@@ -44,6 +44,11 @@ dependencies = [
     "email-validator>=2.2",
     "structlog>=25.5",
     "itsdangerous>=2.2",
+    # Per-IP rate limiting for the auth endpoints. ``slowapi`` is the
+    # FastAPI-shaped wrapper over ``limits``; the in-memory storage is
+    # fine for single-instance deployments, and the docs show a Redis
+    # back-end if we ever scale out workers.
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]

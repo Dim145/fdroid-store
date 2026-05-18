@@ -6,6 +6,9 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import __version__
@@ -13,6 +16,7 @@ from app.api.fdroid import router as fdroid_router, token_router as fdroid_token
 from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
+from app.core.rate_limit import limiter
 from app.services.bootstrap import bootstrap_first_run
 
 log = get_logger(__name__)
@@ -38,6 +42,14 @@ def create_app() -> FastAPI:
         redoc_url=None,
         openapi_url="/api/openapi.json" if settings.environment != "production" else None,
     )
+
+    # Rate limiter (slowapi). The state must be attached BEFORE the route
+    # decorators run; including the dependency module at import time
+    # already prepares the registry, here we just install the middleware
+    # and the 429 handler.
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
 
     app.add_middleware(
         CORSMiddleware,

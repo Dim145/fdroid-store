@@ -53,13 +53,21 @@ def verify_password(password: str, hashed: str) -> bool:
 # --------------------------------------------------------------------------
 # JWT
 # --------------------------------------------------------------------------
-def _create_token(subject: str, expires_delta: timedelta, token_type: str, extra: dict[str, Any] | None = None) -> str:
+def _create_token(
+    subject: str,
+    expires_delta: timedelta,
+    token_type: str,
+    extra: dict[str, Any] | None = None,
+    *,
+    jti: str | None = None,
+) -> str:
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": subject,
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
         "type": token_type,
+        "jti": jti or secrets.token_urlsafe(16),
     }
     if extra:
         payload.update(extra)
@@ -75,11 +83,15 @@ def create_access_token(subject: str, extra: dict[str, Any] | None = None) -> st
     )
 
 
-def create_refresh_token(subject: str) -> str:
+def create_refresh_token(subject: str, jti: str) -> str:
+    """Refresh tokens always carry a ``jti`` that maps to a persisted
+    ``refresh_tokens`` row. The auth service marks the row consumed on use
+    and refuses re-use — that's what gives us rotation + revocation."""
     return _create_token(
         subject,
         timedelta(days=settings.refresh_token_expire_days),
         "refresh",
+        jti=jti,
     )
 
 
@@ -102,8 +114,14 @@ def generate_api_key() -> tuple[str, str, str]:
 
     The full key is shown to the user once and must be stored client-side;
     only the hashed secret is persisted.
+
+    Prefix entropy bumped from ~48 bits to 96 bits (16 hex chars from a
+    64-byte raw seed) — the old ``token_urlsafe(6) → 8-char truncate +
+    -/_ collapse`` produced a biased 48-bit space at risk of unique-
+    constraint collisions on large instances and a narrow enumeration
+    window through the F-Droid serve path (CWE-330).
     """
-    prefix = secrets.token_urlsafe(6).replace("-", "x").replace("_", "y")[:8]
+    prefix = secrets.token_hex(8)  # 16 hex chars, 64 bits
     secret = secrets.token_urlsafe(32)
     full = f"{API_KEY_PROTO}_{prefix}_{secret}"
     return full, prefix, _hash_api_secret(secret)

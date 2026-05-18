@@ -1,8 +1,9 @@
 """Business logic for authentication: login, refresh, OIDC linking."""
 from __future__ import annotations
 
+import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,12 +17,18 @@ from app.core.security import (
     verify_password,
 )
 from app.models.invite_code import InviteCode
+from app.models.refresh_token import RefreshToken
 from app.models.repo_config import RepoConfig
 from app.models.user import AuthProvider, User, UserRole
 
 
 class AuthError(Exception):
     """Raised when an auth operation cannot complete (bad creds, disabled, ...)."""
+
+
+# Precomputed argon2 hash of a random string. Used in ``authenticate_local``
+# to keep the "user doesn't exist" branch as slow as a real verify.
+_DUMMY_PASSWORD_HASH = hash_password("this-is-a-fixed-dummy-string-for-timing-equalisation")
 
 
 async def _get_registration_policy(db: AsyncSession) -> str:
@@ -34,9 +41,70 @@ async def _get_registration_policy(db: AsyncSession) -> str:
     return config.registration_policy
 
 
-def _token_pair_for(user: User) -> tuple[str, str]:
+async def _issue_token_pair(
+    db: AsyncSession,
+    user: User,
+    *,
+    parent_jti: str | None = None,
+) -> tuple[str, str]:
+    """Mint a new (access, refresh) pair and persist the refresh-token row.
+
+    ``parent_jti`` is the jti of the refresh token this pair replaces (set
+    on rotation, None on a fresh login). The DB row is the source of
+    truth: only a row whose ``used_at IS NULL`` and ``revoked_at IS NULL``
+    is still redeemable.
+    """
     extra = {"role": user.role.value, "username": user.username}
-    return create_access_token(str(user.id), extra=extra), create_refresh_token(str(user.id))
+    access = create_access_token(str(user.id), extra=extra)
+    refresh_jti = secrets.token_urlsafe(16)
+    refresh = create_refresh_token(str(user.id), jti=refresh_jti)
+    db.add(
+        RefreshToken(
+            jti=refresh_jti,
+            user_id=user.id,
+            parent_jti=parent_jti,
+            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
+        )
+    )
+    await db.flush()
+    return access, refresh
+
+
+async def _revoke_refresh_chain(db: AsyncSession, jti: str) -> None:
+    """Walk the parent/child chain of a refresh-token row and mark every
+    descendant + ancestor revoked. Called when re-use of a consumed token
+    is detected — that's the signal that one of the two parties has been
+    compromised, and we don't know which. Burning the whole family logs
+    out both."""
+    # Walk forward: any row whose ``parent_jti`` is in our set joins the
+    # family. Iterate until stable.
+    family: set[str] = {jti}
+    while True:
+        rows = (
+            await db.execute(
+                select(RefreshToken.jti).where(RefreshToken.parent_jti.in_(family))
+            )
+        ).scalars().all()
+        new = set(rows) - family
+        if not new:
+            break
+        family |= new
+    # Also walk backward from the initial jti.
+    cur = jti
+    while True:
+        row = (
+            await db.execute(select(RefreshToken).where(RefreshToken.jti == cur))
+        ).scalar_one_or_none()
+        if row is None or row.parent_jti is None:
+            break
+        family.add(row.parent_jti)
+        cur = row.parent_jti
+    now = datetime.now(UTC)
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.jti.in_(family), RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
 
 
 async def authenticate_local(db: AsyncSession, email: str, password: str) -> tuple[User, str, str]:
@@ -44,6 +112,11 @@ async def authenticate_local(db: AsyncSession, email: str, password: str) -> tup
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
     if user is None or user.hashed_password is None:
+        # Burn an argon2 verify against a known-bad hash so the
+        # "user-doesn't-exist" branch takes the same wall-clock as the
+        # "user-exists-wrong-password" branch — closes the timing oracle
+        # an attacker would use to enumerate registered emails (CWE-208).
+        verify_password(password, _DUMMY_PASSWORD_HASH)
         raise AuthError("Invalid credentials")
     if not user.is_active:
         raise AuthError("Account disabled")
@@ -51,8 +124,7 @@ async def authenticate_local(db: AsyncSession, email: str, password: str) -> tup
         raise AuthError("Invalid credentials")
 
     user.last_login_at = datetime.now(UTC)
-    access, refresh = _token_pair_for(user)
-    await db.flush()
+    access, refresh = await _issue_token_pair(db, user)
     return user, access, refresh
 
 
@@ -123,11 +195,23 @@ async def signup_local(
         if result.rowcount == 0:
             raise AuthError("Invite code has already been used or has expired")
         await db.flush()
-    access, refresh = _token_pair_for(user)
+    access, refresh = await _issue_token_pair(db, user)
     return user, access, refresh
 
 
 async def refresh_tokens(db: AsyncSession, refresh_token: str) -> tuple[User, str, str]:
+    """Exchange a refresh token for a fresh access + refresh pair.
+
+    Implements rotation + reuse detection per RFC 9700 §2.2.2:
+      * Each refresh token is single-use. The DB row tracks ``used_at``.
+      * Successful redemption marks the consumed row used and mints a
+        replacement whose ``parent_jti`` points back at it.
+      * Presenting an already-consumed (or revoked) refresh token revokes
+        every member of the chain — the legitimate user is logged out, but
+        so is whoever was holding the leaked copy.
+      * Password change (see ``users.password_changed_at``) and admin
+        disable proactively revoke every outstanding refresh row.
+    """
     try:
         payload = decode_token(refresh_token)
     except Exception as exc:  # JWTError, ExpiredSignatureError, ...
@@ -135,8 +219,10 @@ async def refresh_tokens(db: AsyncSession, refresh_token: str) -> tuple[User, st
     if payload.get("type") != "refresh":
         raise AuthError("Not a refresh token")
     sub = payload.get("sub")
-    if not sub:
-        raise AuthError("Refresh token missing subject")
+    jti = payload.get("jti")
+    iat = payload.get("iat")
+    if not sub or not jti:
+        raise AuthError("Refresh token missing claims")
     try:
         user_id = uuid.UUID(sub)
     except ValueError as exc:
@@ -145,8 +231,60 @@ async def refresh_tokens(db: AsyncSession, refresh_token: str) -> tuple[User, st
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None or not user.is_active:
         raise AuthError("User not found or disabled")
-    access, refresh = _token_pair_for(user)
+
+    # C5: token issued before the last password change is dead.
+    if user.password_changed_at is not None and iat is not None:
+        token_iat = datetime.fromtimestamp(int(iat), tz=UTC)
+        if token_iat < user.password_changed_at:
+            raise AuthError("Refresh token invalidated by a password change")
+
+    row = (
+        await db.execute(select(RefreshToken).where(RefreshToken.jti == jti))
+    ).scalar_one_or_none()
+    if row is None:
+        # Unknown jti either means forged (different secret) or already
+        # purged. Treat as invalid.
+        raise AuthError("Refresh token not recognised")
+    if row.revoked_at is not None:
+        raise AuthError("Refresh token revoked")
+    if row.used_at is not None:
+        # Re-use detected — burn the whole family. ``get_db`` would roll
+        # back the revoke if we just raised the AuthError, so we commit
+        # the family-revoke explicitly first.
+        await _revoke_refresh_chain(db, jti)
+        await db.commit()
+        raise AuthError("Refresh token re-use detected; session revoked")
+
+    # Atomic consume: only the first racing claim wins.
+    consume = await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.jti == jti, RefreshToken.used_at.is_(None))
+        .values(used_at=datetime.now(UTC))
+    )
+    if consume.rowcount == 0:
+        await _revoke_refresh_chain(db, jti)
+        await db.commit()
+        raise AuthError("Refresh token re-use detected; session revoked")
+
+    access, refresh = await _issue_token_pair(db, user, parent_jti=jti)
     return user, access, refresh
+
+
+async def revoke_all_refresh_tokens(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """Mark every outstanding refresh token of ``user_id`` revoked.
+
+    Called when the password changes (or an admin disables the account) so
+    a leaked refresh token stops working before its 30-day expiry.
+    """
+    await db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.used_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
 
 
 async def link_or_create_oidc_user(
@@ -226,13 +364,20 @@ async def link_or_create_oidc_user(
             db.add(user)
 
     user.last_login_at = datetime.now(UTC)
-    # OIDC may promote/demote on each login if mapping is configured
-    if is_admin and user.role != UserRole.ADMIN:
+    # OIDC promote/demote — mirror the IdP claim symmetrically. The previous
+    # promote-only behaviour let an admin user keep ``ADMIN`` indefinitely
+    # after the IdP removed them from the admin group. We only demote
+    # OIDC-managed accounts (``auth_provider == OIDC``) so a locally-created
+    # admin who happens to log in via OIDC doesn't lose their role just
+    # because the IdP claim isn't set for them.
+    if user.auth_provider == AuthProvider.OIDC:
+        user.role = UserRole.ADMIN if is_admin else UserRole.USER
+    elif is_admin and user.role != UserRole.ADMIN:
         user.role = UserRole.ADMIN
     await db.flush()
     if is_new_account and invite is not None:
         invite.used_at = datetime.now(UTC)
         invite.used_by_user_id = user.id
         await db.flush()
-    access, refresh = _token_pair_for(user)
+    access, refresh = await _issue_token_pair(db, user)
     return user, access, refresh

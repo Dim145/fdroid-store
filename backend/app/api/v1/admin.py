@@ -17,8 +17,9 @@ from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, Category
 from app.models.audit import DownloadEvent
 from app.models.invite_code import InviteCode
+from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.app import AppAdminUpdate, AppRead
 from app.schemas.invite import InviteCodeCreate, InviteCodeRead
 from app.schemas.repo import RepoConfigRead, RepoConfigUpdate
@@ -74,6 +75,24 @@ async def create_user(
     return UserRead.model_validate(user)
 
 
+async def _would_orphan_admins(db, target: User, *, removing_admin: bool, disabling: bool) -> bool:
+    """Return True if applying the change leaves zero active admins."""
+    if target.role != UserRole.ADMIN:
+        return False
+    if not (removing_admin or disabling):
+        return False
+    other_active_admins = (
+        await db.execute(
+            select(func.count(User.id)).where(
+                User.id != target.id,
+                User.role == UserRole.ADMIN,
+                User.is_active.is_(True),
+            )
+        )
+    ).scalar_one()
+    return other_active_admins == 0
+
+
 @router.patch("/users/{user_id}", response_model=UserRead)
 async def update_user(
     user_id: uuid.UUID,
@@ -84,6 +103,19 @@ async def update_user(
     target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    # Refuse the change if it would leave the repo with zero active admins
+    # — there's no in-app recovery from that state (CWE-840).
+    if await _would_orphan_admins(
+        db,
+        target,
+        removing_admin=(payload.role is not None and payload.role != UserRole.ADMIN),
+        disabling=(payload.is_active is False),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refusing change: this would leave the repo without an active admin",
+        )
+
     if payload.full_name is not None:
         target.full_name = payload.full_name
     if payload.role is not None:
@@ -92,6 +124,20 @@ async def update_user(
         target.is_active = payload.is_active
     if payload.new_password:
         target.hashed_password = hash_password(payload.new_password)
+        # Bump password_changed_at so every outstanding access / refresh
+        # token for this user is immediately invalidated by the JWT
+        # decoder (C5) + revoke their persisted refresh-token rows (C6).
+        target.password_changed_at = datetime.now(UTC)
+        from app.services.auth_service import revoke_all_refresh_tokens
+
+        await revoke_all_refresh_tokens(db, target.id)
+    # If an admin disables a user, kill their sessions too — otherwise the
+    # JWT they're holding keeps working until expiry.
+    if payload.is_active is False:
+        from app.services.auth_service import revoke_all_refresh_tokens
+
+        await revoke_all_refresh_tokens(db, target.id)
+        target.password_changed_at = datetime.now(UTC)
     await db.flush()
     return UserRead.model_validate(target)
 
@@ -107,6 +153,11 @@ async def delete_user(
     target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if await _would_orphan_admins(db, target, removing_admin=True, disabling=True):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refusing delete: this would leave the repo without an active admin",
+        )
     await db.delete(target)
     await db.flush()
 
@@ -204,6 +255,21 @@ async def admin_publish_apk(
     apk.app.status = AppStatus.PUBLISHED
     if apk.app.locked_signer_sha256 is None:
         apk.app.locked_signer_sha256 = apk.signer_sha256
+    # Lock the signer in the cross-App pin table too (C1).
+    pin = (
+        await db.execute(
+            select(PackageSignerPin).where(PackageSignerPin.package_name == apk.app.package_name)
+        )
+    ).scalar_one_or_none()
+    if pin is None:
+        db.add(
+            PackageSignerPin(
+                package_name=apk.app.package_name,
+                signer_sha256=apk.signer_sha256,
+                locked_by_app_id=apk.app.id,
+                first_locked_at=datetime.now(UTC),
+            )
+        )
     apk.app.suggested_version_code = max(
         apk.app.suggested_version_code or 0, apk.version_code
     )
@@ -286,6 +352,8 @@ async def update_repo_config(
         config.public_mode = payload.public_mode
     if payload.registration_policy is not None:
         config.registration_policy = payload.registration_policy
+    if payload.upload_max_apk_mb is not None:
+        config.upload_max_apk_mb = payload.upload_max_apk_mb
     await db.flush()
     # Only re-render the index when something baked into the JSON actually
     # changed — toggling registration policy doesn't move any bytes.

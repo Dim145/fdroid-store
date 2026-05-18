@@ -548,6 +548,7 @@ export type RepoConfigInfo = {
   public_mode: boolean;
   registration_policy: RegistrationPolicy;
   mirrors: string[];
+  upload_max_apk_mb: number;
 };
 
 export type InviteCode = {

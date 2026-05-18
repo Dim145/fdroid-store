@@ -38,8 +38,16 @@ COPY --from=builder /app/out /usr/share/nginx/html
 # ${VAR} references listed in NGINX_ENVSUBST_TEMPLATE_VARS get substituted,
 # which keeps regex/${} fragments inside nginx config untouched.
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+# Custom entrypoint shim: materialises ``${HSTS_DIRECTIVE}`` from the
+# ``ENABLE_HSTS`` env toggle. Sourced (``.envsh``) so its exports survive
+# into the downstream envsubst step. The file MUST be readable by the
+# nginx user — it ships executable so the same image works whether the
+# entrypoint inspects modes or not.
+COPY docker-entrypoint.d/10-fdroid-hsts.envsh /docker-entrypoint.d/10-fdroid-hsts.envsh
 
 ENV UPSTREAM_BACKEND=backend:8000 \
-    NGINX_ENVSUBST_TEMPLATE_VARS='${UPSTREAM_BACKEND}'
+    ENABLE_HSTS=0 \
+    HSTS_MAX_AGE=31536000 \
+    NGINX_ENVSUBST_TEMPLATE_VARS='${UPSTREAM_BACKEND} ${HSTS_DIRECTIVE}'
 
 EXPOSE 8080

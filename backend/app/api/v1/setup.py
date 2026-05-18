@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -65,10 +66,40 @@ async def run_setup_wizard(
     alias = settings.key_alias
     key_password = settings.key_password
 
+    # C9: refuse to silently destroy the signing identity once setup is
+    # complete. Regenerating the keystore changes the SHA-256 fingerprint,
+    # which F-Droid clients pin on first add — every existing subscriber
+    # then rejects the next index update with no in-app recovery path.
+    # The admin must explicitly opt in via ``confirm_destroy=true`` after
+    # backing up the current keystore.
+    if (
+        payload.keystore_mode == "generate"
+        and keystore_path.exists()
+        and config.setup_complete
+        and not payload.confirm_destroy
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Regenerating the keystore would invalidate the trust chain "
+                "for every F-Droid client already subscribed to this repo. "
+                "Pass ``confirm_destroy=true`` to acknowledge this is irrecoverable, "
+                "and back up the current keystore file first."
+            ),
+        )
+
     try:
         if payload.keystore_mode == "generate":
             if keystore_path.exists():
-                await delete_keystore(keystore_path)
+                # Archive the old keystore alongside the new one so an
+                # operator with shell access can recover the previous
+                # signer identity if they confirmed by mistake.
+                ts = int(datetime.now(UTC).timestamp())
+                backup = keystore_path.with_suffix(keystore_path.suffix + f".bak-{ts}")
+                try:
+                    keystore_path.rename(backup)
+                except OSError:
+                    await delete_keystore(keystore_path)
             info = await generate_keystore(
                 keystore_path,
                 keystore_password=keystore_password,

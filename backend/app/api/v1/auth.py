@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.api.deps import DbSession
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.models.repo_config import RepoConfig
 from app.schemas.auth import (
     AuthMethodsInfo,
@@ -62,7 +63,8 @@ def _pair(access: str, refresh: str) -> TokenPair:
 
 
 @router.post("/login", response_model=TokenPair)
-async def login(payload: LoginRequest, db: DbSession) -> TokenPair:
+@limiter.limit("5/minute")
+async def login(request: Request, payload: LoginRequest, db: DbSession) -> TokenPair:
     if not settings.local_auth_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local auth disabled")
     try:
@@ -73,7 +75,8 @@ async def login(payload: LoginRequest, db: DbSession) -> TokenPair:
 
 
 @router.post("/signup", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
-async def signup(payload: SignupRequest, db: DbSession) -> TokenPair:
+@limiter.limit("5/minute")
+async def signup(request: Request, payload: SignupRequest, db: DbSession) -> TokenPair:
     if not settings.local_auth_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local auth disabled")
     try:
@@ -91,7 +94,8 @@ async def signup(payload: SignupRequest, db: DbSession) -> TokenPair:
 
 
 @router.post("/refresh", response_model=TokenPair)
-async def refresh(payload: RefreshRequest, db: DbSession) -> TokenPair:
+@limiter.limit("20/minute")
+async def refresh(request: Request, payload: RefreshRequest, db: DbSession) -> TokenPair:
     try:
         _, access, refresh_tok = await refresh_tokens(db, payload.refresh_token)
     except AuthError as exc:
@@ -106,11 +110,27 @@ async def refresh(payload: RefreshRequest, db: DbSession) -> TokenPair:
 async def oidc_login(request: Request, invite: str | None = None):
     """Start the OIDC dance. An optional ``?invite=`` is stashed in the session
     so the callback can hand it to the user-creation step (the invite must
-    survive the round-trip through the IdP, where we can't pass it directly)."""
+    survive the round-trip through the IdP, where we can't pass it directly).
+
+    H7 — defence against an attacker tricking a logged-out user into
+    consuming the attacker's invite via a cross-site link to this
+    endpoint: when ``invite`` is set we require a Referer / Origin that
+    matches the SPA's public URL, so a CSRF-style cross-site navigation
+    is refused. A user who legitimately reaches /login → "Continue with
+    SSO" carries a Referer of our own origin.
+    """
     oauth = get_oauth()
     if oauth is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OIDC disabled")
     if invite:
+        expected = settings.public_app_url.rstrip("/")
+        referer = request.headers.get("referer") or ""
+        origin = request.headers.get("origin") or ""
+        if not (referer.startswith(expected) or origin == expected):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invite codes must be supplied from within the app",
+            )
         request.session[_OIDC_INVITE_SESSION_KEY] = invite
     else:
         # Clear any stale value so a previous attempt's code can't be reused.
@@ -136,6 +156,16 @@ async def oidc_callback(request: Request, db: DbSession):
     email = userinfo.get("email")
     if not subject or not email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OIDC missing sub/email")
+    # CRITICAL: refuse callbacks whose email isn't IdP-verified. Otherwise
+    # any attacker who can register an unverified email at the IdP (or one
+    # of its tenants, on a multi-tenant provider) could silently claim an
+    # existing local account whose email happens to match — instant
+    # takeover. The check is binary: ``False`` and missing both fail.
+    if not bool(userinfo.get("email_verified")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OIDC email is not marked verified by the identity provider",
+        )
 
     username = (
         userinfo.get("preferred_username")

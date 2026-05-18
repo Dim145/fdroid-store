@@ -107,6 +107,11 @@ services:
     restart: unless-stopped
     environment:
       UPSTREAM_BACKEND: backend:8000
+      # Set ENABLE_HSTS=1 in your .env when the deployment is behind TLS.
+      # Defaults off so local HTTP testing isn't broken by browsers
+      # pinning HSTS after a single visit.
+      ENABLE_HSTS: ${ENABLE_HSTS:-0}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
     # Same lockdown as the backend. nginx writes its pid to /tmp (the
     # unprivileged base image already moved it there), and the official
     # entrypoint expands /etc/nginx/templates → /etc/nginx/conf.d at start,

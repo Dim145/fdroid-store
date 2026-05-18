@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     # ----- CORS ---------------------------------------------------------------
     cors_origins: str = "http://localhost:3000"
 
+    # ----- Reverse-proxy trust --------------------------------------------
+    # When True, ``X-Forwarded-For`` is read for rate-limit key derivation
+    # (so an entire network doesn't share one bucket because every
+    # request looks like it came from the nginx container). MUST stay
+    # False if the API is exposed directly to the internet without a
+    # trusted proxy in front — otherwise a client can spoof their IP.
+    trust_forwarded_headers: bool = True
+
     # ----- Misc ---------------------------------------------------------------
     log_level: str = "INFO"
     environment: Literal["development", "production", "test"] = "development"
@@ -152,18 +160,31 @@ class Settings(BaseSettings):
         raise ValueError("OIDC_ISSUER must be served over HTTPS (or localhost for dev)")
 
     @model_validator(mode="after")
-    def _refuse_insecure_defaults_in_production(self) -> "Settings":
-        if self.environment != "production":
-            return self
+    def _refuse_insecure_defaults(self) -> "Settings":
+        # Refuse the ``changeme_*`` defaults in production. Development
+        # deployments are still allowed to boot with them so local
+        # ``docker compose up`` keeps working; the stdout warning makes
+        # the trade-off loud enough that a careless promote-to-prod
+        # gets caught before the backend touches the internet. (CWE-798)
         leftovers = [
             name for name, default in _INSECURE_DEFAULTS.items()
             if getattr(self, name) == default
         ]
-        if leftovers:
+        if not leftovers:
+            return self
+        if self.environment == "production":
             raise ValueError(
                 "Refusing to start in production with the shipped default "
                 f"credentials: {', '.join(leftovers)}. Override them in .env."
             )
+        # Dev / test: don't block, but print a clearly-flagged warning.
+        import sys as _sys
+        print(
+            "[fdroid-store] WARNING: running with default credentials "
+            f"({', '.join(leftovers)}). Override before exposing the port.",
+            file=_sys.stderr,
+            flush=True,
+        )
         return self
 
 

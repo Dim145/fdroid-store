@@ -47,6 +47,11 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
         String(16), default="public", nullable=False
     )
 
+    # Max APK upload size in mebibytes. Admin-configurable from the UI so
+    # operators can tighten the upload surface without redeploying. The
+    # backend enforces it via ``read_capped`` on the upload endpoints.
+    upload_max_apk_mb: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+
     # Index versioning
     last_index_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

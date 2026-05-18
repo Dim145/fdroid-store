@@ -20,6 +20,8 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     DownloadEvent,
     InviteCode,
     Localization,
+    PackageSignerPin,
+    RefreshToken,
     RepoConfig,
     User,
 )
@@ -55,6 +57,8 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS open_collective VARCHAR(512)",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS translation VARCHAR(512)",
             "ALTER TABLE apks ADD COLUMN IF NOT EXISTS anti_features JSON NOT NULL DEFAULT '[]'",
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS upload_max_apk_mb INTEGER NOT NULL DEFAULT 200",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP WITH TIME ZONE",
         ):
             try:
                 await conn.execute(text(stmt))
