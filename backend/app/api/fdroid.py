@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import DbSession, get_api_key_from_basic_auth, is_public_mode
 from app.core.download_token import verify_download_token
 from app.core.security import parse_api_key, verify_api_key_secret
-from app.fdroid.repo_builder import REPO_PRIVATE_PREFIX, REPO_PUBLIC_PREFIX
+from app.fdroid.repo_builder import REPO_PUBLIC_PREFIX, user_private_prefix
 from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, AppVisibility
@@ -134,14 +134,16 @@ async def _media_anonymously_visible(
     api_key: ApiKey | None,
 ) -> bool:
     """Return True if the underlying app (looked up by package) may be
-    served anonymously through the media routes.
+    served through the media routes for this caller.
 
     Private apps' media (icons, banners, screenshots) is what makes their
-    name guessable by probing. Anonymous callers see media only for
-    PUBLIC + PUBLISHED apps; callers with an API key that ``can_download_
-    private`` also see private apps' media. Repo-level icons (no matching
-    app) stay anonymous so the catalogue masthead works for logged-out
-    visitors.
+    name guessable by probing. The rule is:
+
+      * PUBLIC + PUBLISHED → always visible.
+      * PRIVATE → only the owner's API key may fetch it. Other API keys
+        and anonymous callers are 404'd, indistinguishable from a typo.
+      * Repo-level media (no matching App row, e.g. the catalogue icon)
+        stays anonymous so the logged-out home page renders.
     """
     app_row = (
         await db.execute(
@@ -149,10 +151,15 @@ async def _media_anonymously_visible(
         )
     ).scalar_one_or_none()
     if app_row is None:
-        return True  # not tied to an app (e.g. the repo icon itself)
+        return True
     if app_row.visibility == AppVisibility.PUBLIC and app_row.status == AppStatus.PUBLISHED:
         return True
-    if api_key is not None and api_key.can_download_private:
+    if (
+        api_key is not None
+        and api_key.can_download_private
+        and app_row.owner_id is not None
+        and api_key.user_id == app_row.owner_id
+    ):
         return True
     return False
 
@@ -361,16 +368,25 @@ async def serve_token_media(
 
 # --------------------------------------------------------------------------
 async def _serve_index(filename: str, api_key: ApiKey | None) -> Response:
-    """Return the public OR private index variant depending on auth.
+    """Return the right index variant for this caller.
 
-    The private variant requires an API key with ``can_download_private``.
+    An API key with ``can_download_private`` resolves to its owner's per-user
+    private index (``repo/private/u_<user_id>/...``). If that user has no
+    private apps right now, the file is absent and we fall through to the
+    public index — which gives the same view as an anonymous caller would
+    get on a public-mode repo, plus access to private *download* URLs the
+    user owns elsewhere in the API.
     """
-    prefix = REPO_PUBLIC_PREFIX
-    if api_key is not None and api_key.can_download_private:
-        prefix = REPO_PRIVATE_PREFIX
-
-    storage_key = f"{prefix}/{filename}"
     storage = get_storage()
+
+    if api_key is not None and api_key.can_download_private:
+        per_user_key = f"{user_private_prefix(api_key.user_id)}/{filename}"
+        if await storage.exists(per_user_key):
+            return await _stream_or_redirect(
+                per_user_key, content_type=_INDEX_FILES[filename],
+            )
+
+    storage_key = f"{REPO_PUBLIC_PREFIX}/{filename}"
     if not await storage.exists(storage_key):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -399,7 +415,17 @@ async def _serve_apk(
 
     app = apk.app
     if app.visibility == AppVisibility.PRIVATE:
-        if api_key is None or not api_key.can_download_private:
+        # Only the owner's API key may download a private APK. A foreign API
+        # key (even one with ``can_download_private``) is treated like an
+        # anonymous request — 401 prompts for Basic auth, indistinguishable
+        # from a wrong-credential case.
+        owner_match = (
+            api_key is not None
+            and api_key.can_download_private
+            and app.owner_id is not None
+            and api_key.user_id == app.owner_id
+        )
+        if not owner_match:
             return Response(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},

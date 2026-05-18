@@ -56,6 +56,11 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
     last_index_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # JSON list of user UUIDs (as strings) for which a per-user private index
+    # has been built at ``repo/private/u_<id>/...``. Lets the rebuild clean up
+    # stale per-user indexes when their owner no longer has private apps.
+    private_index_owner_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+
     @property
     def mirrors(self) -> list[str]:
         """Decoded view of ``mirrors_json`` for serializers + the index builder."""

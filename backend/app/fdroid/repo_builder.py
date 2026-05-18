@@ -3,18 +3,22 @@
 Public API:
   * :func:`rebuild_repo_index` — full regenerate (called by the worker)
 
-A rebuild has two outputs:
-  1. The "public" index — contains only PUBLIC + PUBLISHED apps.
-  2. The "private" index — same plus PRIVATE apps. This is served behind auth.
+A rebuild produces:
+  1. **Public index** at ``repo/public/`` — PUBLIC + PUBLISHED apps.
+  2. **Per-user private index** at ``repo/private/u_<owner_id>/`` for every
+     user that owns at least one PRIVATE + PUBLISHED app. The index contains
+     all PUBLIC + PUBLISHED apps plus the owner's own PRIVATE + PUBLISHED
+     apps. This way an API key holder only ever sees their own private apps
+     in their F-Droid client.
 
-Both indexes are produced as ``index-v1.jar``, ``index-v2.json``, ``entry.jar``
-under separate storage prefixes (``repo/public/`` vs ``repo/private/``).
+Each variant is a triple of ``index-v1.jar`` + ``index-v2.json`` + ``entry.jar``.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import tempfile
+import uuid as uuid_module
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,7 +32,7 @@ from app.core.logging import get_logger
 from app.fdroid.index_v1 import build_index_v1
 from app.fdroid.index_v2 import build_entry_json, build_index_v2
 from app.fdroid.signing import build_and_sign_jar
-from app.models.app import App, AppVisibility
+from app.models.app import App, AppStatus, AppVisibility
 from app.models.apk import ApkStatus
 from app.models.repo_config import RepoConfig
 from app.storage import Storage, get_storage
@@ -40,6 +44,15 @@ REPO_PUBLIC_PREFIX = "repo/public"
 REPO_PRIVATE_PREFIX = "repo/private"
 
 
+def user_private_prefix(owner_id: uuid_module.UUID | str) -> str:
+    """Storage prefix for a single user's private index variant."""
+    return f"{REPO_PRIVATE_PREFIX}/u_{owner_id}"
+
+
+# The three filenames an F-Droid client fetches at the repo root.
+_INDEX_FILENAMES = ("index-v1.jar", "index-v2.json", "entry.jar")
+
+
 async def _load_repo_config(db: AsyncSession) -> RepoConfig:
     res = await db.execute(select(RepoConfig).limit(1))
     row = res.scalar_one_or_none()
@@ -48,8 +61,8 @@ async def _load_repo_config(db: AsyncSession) -> RepoConfig:
     return row
 
 
-async def _load_apps(db: AsyncSession, *, include_private: bool) -> list[App]:
-    stmt = (
+def _published_app_query():
+    return (
         select(App)
         .options(
             selectinload(App.apks),
@@ -57,17 +70,47 @@ async def _load_apps(db: AsyncSession, *, include_private: bool) -> list[App]:
             selectinload(App.localizations),
             selectinload(App.screenshots),
         )
-        .where(App.status == "published")
+        .where(App.status == AppStatus.PUBLISHED)
     )
-    if not include_private:
-        stmt = stmt.where(App.visibility == AppVisibility.PUBLIC)
-    result = await db.execute(stmt)
-    apps = list(result.scalars().unique().all())
-    # Filter at python level: keep only apps that have at least one published APK
-    return [
-        a for a in apps
-        if any(apk.status == ApkStatus.PUBLISHED for apk in a.apks)
-    ]
+
+
+def _keep_with_published_apk(apps: list[App]) -> list[App]:
+    return [a for a in apps if any(apk.status == ApkStatus.PUBLISHED for apk in a.apks)]
+
+
+async def _load_public_apps(db: AsyncSession) -> list[App]:
+    result = await db.execute(
+        _published_app_query().where(App.visibility == AppVisibility.PUBLIC)
+    )
+    return _keep_with_published_apk(list(result.scalars().unique().all()))
+
+
+async def _load_user_private_apps(db: AsyncSession, owner_id: uuid_module.UUID) -> list[App]:
+    """PRIVATE + PUBLISHED apps owned by ``owner_id``."""
+    result = await db.execute(
+        _published_app_query().where(
+            App.visibility == AppVisibility.PRIVATE,
+            App.owner_id == owner_id,
+        )
+    )
+    return _keep_with_published_apk(list(result.scalars().unique().all()))
+
+
+async def _load_private_app_owners(db: AsyncSession) -> list[uuid_module.UUID]:
+    """Owner ids that have at least one PRIVATE + PUBLISHED app with a published APK."""
+    apps = _keep_with_published_apk(list((
+        await db.execute(
+            _published_app_query().where(App.visibility == AppVisibility.PRIVATE)
+        )
+    ).scalars().unique().all()))
+    owners: list[uuid_module.UUID] = []
+    seen: set[uuid_module.UUID] = set()
+    for a in apps:
+        if a.owner_id is None or a.owner_id in seen:
+            continue
+        seen.add(a.owner_id)
+        owners.append(a.owner_id)
+    return owners
 
 
 async def _write_jar(
@@ -187,8 +230,22 @@ async def _build_one(
     )
 
 
+async def _delete_user_private_index(storage: Storage, owner_id: str) -> None:
+    """Best-effort cleanup of stale per-user index files."""
+    prefix = user_private_prefix(owner_id)
+    for name in _INDEX_FILENAMES:
+        try:
+            await storage.delete(f"{prefix}/{name}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "could not delete stale per-user private index file",
+                key=f"{prefix}/{name}",
+                error=str(exc),
+            )
+
+
 async def rebuild_repo_index(db: AsyncSession) -> None:
-    """Regenerate both public and private indexes from current DB state."""
+    """Regenerate public + per-user private indexes from current DB state."""
     storage = get_storage()
     repo_config = await _load_repo_config(db)
 
@@ -201,18 +258,45 @@ async def rebuild_repo_index(db: AsyncSession) -> None:
 
     log.info("rebuilding repo index", repo=repo_config.name)
 
-    apps_public = await _load_apps(db, include_private=False)
-    apps_private = await _load_apps(db, include_private=True)
+    apps_public = await _load_public_apps(db)
+    await _build_one(
+        storage, repo_config=repo_config, apps=apps_public, prefix=REPO_PUBLIC_PREFIX,
+    )
 
-    await _build_one(storage, repo_config=repo_config, apps=apps_public, prefix=REPO_PUBLIC_PREFIX)
-    await _build_one(storage, repo_config=repo_config, apps=apps_private, prefix=REPO_PRIVATE_PREFIX)
+    # One private index per owner that currently has a private published app.
+    # The index bundles that owner's private apps with the shared public set so
+    # the F-Droid client only ever sees apps the API key user is allowed to
+    # install.
+    current_owners = await _load_private_app_owners(db)
+    private_total = 0
+    for owner_id in current_owners:
+        owner_private = await _load_user_private_apps(db, owner_id)
+        merged = apps_public + owner_private
+        await _build_one(
+            storage,
+            repo_config=repo_config,
+            apps=merged,
+            prefix=user_private_prefix(owner_id),
+        )
+        private_total += len(owner_private)
 
+    # Delete index files for owners that had one previously but no longer do.
+    try:
+        previous = set(json.loads(repo_config.private_index_owner_ids or "[]"))
+    except json.JSONDecodeError:
+        previous = set()
+    current_set = {str(oid) for oid in current_owners}
+    for stale in previous - current_set:
+        await _delete_user_private_index(storage, stale)
+
+    repo_config.private_index_owner_ids = json.dumps(sorted(current_set))
     repo_config.last_index_version += 1
     repo_config.last_indexed_at = datetime.now(UTC)
     await db.flush()
     log.info(
         "repo index rebuilt",
         public_apps=len(apps_public),
-        total_apps=len(apps_private),
+        private_owners=len(current_owners),
+        private_apps=private_total,
         version=repo_config.last_index_version,
     )
