@@ -52,6 +52,10 @@ class User(Base, IdMixin, TimestampMixin):
     # behind a confirmation interstitial. Flipping this triggers a reindex
     # so the F-Droid client view stays in sync with the web one.
     show_nsfw: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # BCP47 tag used to pick the right ``Localization`` row when serving
+    # catalogue / detail / public-profile responses. NULL = the app's
+    # default (en-US) fields are returned, matching the anonymous experience.
+    preferred_locale: Mapped[str | None] = mapped_column(String(16))
     # Set on every password change. The JWT decoder rejects access /
     # refresh tokens whose ``iat`` predates this value, so a stolen
     # token stops working the moment the victim rotates their password.

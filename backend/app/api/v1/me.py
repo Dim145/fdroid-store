@@ -39,6 +39,10 @@ async def update_me(
     if payload.show_nsfw is not None and payload.show_nsfw != user.show_nsfw:
         user.show_nsfw = payload.show_nsfw
         nsfw_changed = True
+    # ``preferred_locale`` accepts an explicit null to clear the
+    # preference, so we key off ``model_fields_set`` rather than ``is not None``.
+    if "preferred_locale" in payload.model_fields_set:
+        user.preferred_locale = payload.preferred_locale
     await db.flush()
     if nsfw_changed:
         # The F-Droid index served to this user's API keys must be rebuilt

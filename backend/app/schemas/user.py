@@ -21,11 +21,22 @@ class UserRead(BaseModel):
     last_login_at: datetime | None
     created_at: datetime
     show_nsfw: bool = False
+    preferred_locale: str | None = None
+
+
+# BCP47-ish locale tag — keep tight enough to reject obvious garbage but
+# permissive enough to accept the long tail (script subtags, regional
+# variants, etc.). Same shape as the apps endpoint accepts.
+_LOCALE_PATTERN = r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,4})?$"
 
 
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, max_length=255)
     show_nsfw: bool | None = None
+    # ``"null"`` (JSON null) clears the preference; an empty string is
+    # rejected so the API doesn't store junk values that won't match
+    # anything in the resolver.
+    preferred_locale: str | None = Field(default=None, max_length=16, pattern=_LOCALE_PATTERN)
 
 
 class AdminUserCreate(BaseModel):

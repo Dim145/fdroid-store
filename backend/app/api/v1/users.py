@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, require_browse_access
+from app.api.v1.apps import _apply_locale
 from app.models.app import App, AppStatus, AppVisibility
 from app.models.user import User
 from app.schemas.app import AppRead
@@ -56,7 +57,11 @@ async def get_public_profile(
 
     apps_stmt = (
         select(App)
-        .options(selectinload(App.categories), selectinload(App.apks))
+        .options(
+            selectinload(App.categories),
+            selectinload(App.apks),
+            selectinload(App.localizations),
+        )
         .where(
             App.owner_id == target.id,
             App.visibility == AppVisibility.PUBLIC,
@@ -72,9 +77,13 @@ async def get_public_profile(
         # used to probe which usernames are registered.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
+    preferred_locale = caller.preferred_locale if caller else None
     return PublicProfile(
         username=target.username,
         full_name=target.full_name,
         member_since=target.created_at,
-        apps=[AppRead.model_validate(a) for a in apps],
+        apps=[
+            _apply_locale(AppRead.model_validate(a), a, preferred_locale)
+            for a in apps
+        ],
     )

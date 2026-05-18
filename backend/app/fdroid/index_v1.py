@@ -75,11 +75,25 @@ def _serialize_app(app: App) -> dict[str, Any]:
         obj["icon"] = app.icon_path.split("/")[-1]
 
     # Localized block (v1 keys locales at the app level, not per version):
+    #   - name/summary/description/video: per-locale overrides on top of the
+    #     en-US defaults (those still live at the obj root for v1 clients
+    #     that don't read the localized block).
     #   - whatsNew: taken from the highest-versionCode published APK that has
     #     one. F-Droid clients display it as "What's new in <latest>".
     #   - phoneScreenshots: list of basenames; the client builds the full URL
     #     ``<repo-url>/<package>/<locale>/phoneScreenshots/<basename>``.
     localized: dict[str, dict[str, Any]] = {}
+
+    for loc in app.localizations:
+        bucket = localized.setdefault(loc.locale, {})
+        if loc.name:
+            bucket["name"] = loc.name
+        if loc.summary:
+            bucket["summary"] = loc.summary
+        if loc.description:
+            bucket["description"] = loc.description
+        if loc.video:
+            bucket["video"] = loc.video
 
     shots_by_locale: dict[str, list[str]] = {}
     for s in app.screenshots:

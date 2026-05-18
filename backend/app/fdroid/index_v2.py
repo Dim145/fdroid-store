@@ -82,14 +82,30 @@ def _build_package(
     cats = [c.name for c in app.categories]
     if cats:
         metadata["categories"] = cats
-    for src_value, dst_key in (
-        (app.name, "name"),
-        (app.summary, "summary"),
-        (app.description, "description"),
-    ):
-        loc = _localized(src_value)
-        if loc is not None:
-            metadata[dst_key] = loc
+    # App-level fields seed the en-US entry; any Localization row layers its
+    # overrides on top so F-Droid clients can pick the closest match per
+    # user-locale. We only include keys that have at least one non-empty
+    # value, mirroring fdroidserver's behaviour (empty strings make clients
+    # render a blank field instead of falling back).
+    field_to_attr: dict[str, str] = {
+        "name": "name",
+        "summary": "summary",
+        "description": "description",
+        "video": "video",
+    }
+    localized_fields: dict[str, dict[str, str]] = {k: {} for k in field_to_attr}
+    for dst_key in ("name", "summary", "description"):
+        seed = getattr(app, field_to_attr[dst_key])
+        if seed:
+            localized_fields[dst_key][DEFAULT_LOCALE] = seed
+    for loc in app.localizations:
+        for dst_key, attr in field_to_attr.items():
+            override = getattr(loc, attr, None)
+            if override:
+                localized_fields[dst_key][loc.locale] = override
+    for dst_key, by_locale in localized_fields.items():
+        if by_locale:
+            metadata[dst_key] = by_locale
     if app.author_name:
         metadata["authorName"] = app.author_name
     if app.author_email:

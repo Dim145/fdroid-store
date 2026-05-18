@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, Copy, EyeOff, Key, Trash2, User as UserIcon, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, Copy, EyeOff, Globe2, Key, Trash2, User as UserIcon, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { AuthGuard } from "@/components/auth-guard";
 import { RepoQrCode } from "@/components/repo-qr-code";
@@ -11,15 +11,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { api, type ApiKey } from "@/lib/api";
+import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { useAuth } from "@/lib/auth-store";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 function AccountInner() {
   const { user, fetchMe } = useAuth();
   const [fullName, setFullName] = useState(user?.full_name || "");
   const [showNsfw, setShowNsfw] = useState(user?.show_nsfw ?? false);
   const [nsfwBusy, setNsfwBusy] = useState(false);
+  const [preferredLocale, setPreferredLocale] = useState<string | null>(user?.preferred_locale ?? null);
+  const [localeBusy, setLocaleBusy] = useState(false);
+  const [localePickerOpen, setLocalePickerOpen] = useState(false);
+  const [customLocale, setCustomLocale] = useState("");
+  const localePickerRef = useRef<HTMLDivElement>(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -34,6 +40,43 @@ function AccountInner() {
 
   useEffect(() => setFullName(user?.full_name || ""), [user]);
   useEffect(() => setShowNsfw(user?.show_nsfw ?? false), [user]);
+  useEffect(() => setPreferredLocale(user?.preferred_locale ?? null), [user]);
+
+  // Click-outside dismisses the locale dropdown.
+  useEffect(() => {
+    if (!localePickerOpen) return;
+    function onClick(e: MouseEvent) {
+      if (!localePickerRef.current?.contains(e.target as Node)) {
+        setLocalePickerOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", onClick);
+    return () => window.removeEventListener("mousedown", onClick);
+  }, [localePickerOpen]);
+
+  async function setLocale(next: string | null) {
+    if (next === preferredLocale) return;
+    const previous = preferredLocale;
+    setPreferredLocale(next);
+    setLocalePickerOpen(false);
+    setCustomLocale("");
+    setLocaleBusy(true);
+    setMsg(null); setErr(null);
+    try {
+      await api.updateMe({ preferred_locale: next });
+      await fetchMe();
+      setMsg(
+        next
+          ? `Language set to ${localeLabel(next).label}.`
+          : "Language preference cleared.",
+      );
+    } catch (e) {
+      setPreferredLocale(previous);
+      setErr(e instanceof Error ? e.message : "Could not update language");
+    } finally {
+      setLocaleBusy(false);
+    }
+  }
 
   async function toggleNsfw(next: boolean) {
     setMsg(null); setErr(null);
@@ -163,9 +206,119 @@ function AccountInner() {
         </div>
       </Section>
 
+      {/* Language */}
+      <Section
+        step="03"
+        title="Language"
+        subtitle="Pick the language the catalogue will use when an app has a matching translation."
+      >
+        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-outline-soft bg-surface-2 p-4 transition-colors hover:border-outline">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface text-ink-soft">
+            <Globe2 className="h-4 w-4" strokeWidth={2.2} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-ink">
+              Preferred language
+            </div>
+            <p className="mt-0.5 text-xs text-ink-mute">
+              When an app ships a translation matching your language, you'll
+              see its name, summary and description in that language. Anything
+              else falls back to the publisher's defaults.
+            </p>
+          </div>
+          <div ref={localePickerRef} className="relative shrink-0">
+            <Button
+              type="button"
+              variant="outlined"
+              size="md"
+              onClick={() => setLocalePickerOpen((o) => !o)}
+              disabled={localeBusy}
+              className="min-w-[10rem] justify-between"
+            >
+              <span className="truncate">
+                {preferredLocale ? localeLabel(preferredLocale).label : "Default (en-US)"}
+              </span>
+              <span className="ml-2 font-mono text-[10px] text-ink-mute">
+                {preferredLocale ?? "—"}
+              </span>
+            </Button>
+            {localePickerOpen && (
+              <div className="absolute right-0 top-12 z-20 w-80 rounded-2xl border border-outline-soft bg-surface p-3 shadow-e3">
+                <div className="mb-2 flex items-center justify-between gap-2 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
+                  <span>Pick a language</span>
+                  {preferredLocale && (
+                    <button
+                      type="button"
+                      onClick={() => setLocale(null)}
+                      className="font-mono normal-case tracking-tight text-ink-mute hover:text-danger"
+                    >
+                      reset to default
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-72 space-y-0.5 overflow-y-auto">
+                  {COMMON_LOCALES.map((l) => {
+                    const active = l.code === preferredLocale;
+                    return (
+                      <button
+                        key={l.code}
+                        type="button"
+                        onClick={() => setLocale(l.code)}
+                        className={cn(
+                          "flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors",
+                          active
+                            ? "bg-primary-container text-primary-on-container"
+                            : "hover:bg-surface-2",
+                        )}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">
+                            {l.label}
+                          </span>
+                          {l.native !== l.label && (
+                            <span className="block truncate text-xs opacity-70">
+                              {l.native}
+                            </span>
+                          )}
+                        </span>
+                        <span className="font-mono text-[10px] opacity-70">
+                          {l.code}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 border-t border-outline-soft pt-2">
+                  <div className="mb-1 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
+                    Other (BCP47)
+                  </div>
+                  <div className="flex gap-1.5 px-1">
+                    <Input
+                      placeholder="e.g. zh-Hant"
+                      value={customLocale}
+                      onChange={(e) => setCustomLocale(e.target.value)}
+                      className="h-9"
+                    />
+                    <Button
+                      type="button"
+                      variant="outlined"
+                      size="sm"
+                      onClick={() => setLocale(customLocale.trim() || null)}
+                      disabled={!customLocale.trim()}
+                    >
+                      Use
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </Section>
+
       {/* Password */}
       {user.auth_provider === "local" && (
-        <Section step="03" title="Password">
+        <Section step="04" title="Password">
           <form onSubmit={changePassword} className="grid gap-4 md:grid-cols-2">
             <Field label="Current password" htmlFor="cur">
               <Input id="cur" type="password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
@@ -180,7 +333,7 @@ function AccountInner() {
 
       {/* API keys */}
       <Section
-        step="04"
+        step="05"
         title="API keys"
         subtitle="Use them as the Basic-auth password in your F-Droid client to access private apps."
       >

@@ -185,6 +185,7 @@ export type CurrentUser = {
   last_login_at: string | null;
   created_at: string;
   show_nsfw: boolean;
+  preferred_locale: string | null;
 };
 
 export const api = {
@@ -202,7 +203,11 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   me: () => apiFetch<CurrentUser>("/api/v1/me"),
-  updateMe: (payload: { full_name?: string; show_nsfw?: boolean }) =>
+  updateMe: (payload: {
+    full_name?: string;
+    show_nsfw?: boolean;
+    preferred_locale?: string | null;
+  }) =>
     apiFetch<CurrentUser>("/api/v1/me", { method: "PATCH", body: JSON.stringify(payload) }),
   changePassword: (payload: { current_password: string; new_password: string }) =>
     apiFetch<void>("/api/v1/me/change-password", {
@@ -224,10 +229,11 @@ export const api = {
       apiFetch<Array<AppSummary>>(`/api/v1/apps${q ? `?q=${encodeURIComponent(q)}` : ""}`, {
         anonymous: !getAccessToken(),
       }),
-    get: (ref: string) =>
-      apiFetch<AppDetail>(`/api/v1/apps/${encodeURIComponent(ref)}`, {
-        anonymous: !getAccessToken(),
-      }),
+    get: (ref: string, opts: { raw?: boolean } = {}) =>
+      apiFetch<AppDetail>(
+        `/api/v1/apps/${encodeURIComponent(ref)}${opts.raw ? "?raw=true" : ""}`,
+        { anonymous: !getAccessToken() },
+      ),
     create: (payload: AppCreate) =>
       apiFetch<AppSummary>("/api/v1/apps", { method: "POST", body: JSON.stringify(payload) }),
     createWithApk: (payload: AppCreateWithApk) => {
@@ -316,6 +322,20 @@ export const api = {
           method: "PATCH",
           body: JSON.stringify({ ordered_ids: orderedIds }),
         },
+      ),
+    upsertLocalization: (
+      appId: string,
+      locale: string,
+      payload: LocalizationUpsert,
+    ) =>
+      apiFetch<Localization>(
+        `/api/v1/apps/${appId}/localizations/${encodeURIComponent(locale)}`,
+        { method: "PUT", body: JSON.stringify(payload) },
+      ),
+    deleteLocalization: (appId: string, locale: string) =>
+      apiFetch<void>(
+        `/api/v1/apps/${appId}/localizations/${encodeURIComponent(locale)}`,
+        { method: "DELETE" },
       ),
   },
 
@@ -511,9 +531,25 @@ export type Apk = {
   created_at: string;
 };
 
+export type Localization = {
+  locale: string;
+  name: string | null;
+  summary: string | null;
+  description: string | null;
+  video: string | null;
+};
+
+export type LocalizationUpsert = {
+  name?: string | null;
+  summary?: string | null;
+  description?: string | null;
+  video?: string | null;
+};
+
 export type AppDetail = AppSummary & {
   apks: Apk[];
   screenshots: Screenshot[];
+  localizations: Localization[];
   owner_username: string | null;
   download_count: number;
 };

@@ -25,6 +25,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
 import { AuthGuard } from "@/components/auth-guard";
+import { LocalizationsEditor } from "@/components/localizations-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,7 +82,10 @@ function ManageAppInner() {
 
   async function load() {
     try {
-      const detail = await api.apps.get(id);
+      // raw=true returns canonical en-US fields, not the localized overlay —
+      // otherwise editing the Title field would prefill the user's preferred-
+      // locale translation and saving would write it back into the default.
+      const detail = await api.apps.get(id, { raw: true });
       setApp(detail);
       setName(detail.name);
       setSummary(detail.summary || "");
@@ -517,15 +521,28 @@ function ManageAppInner() {
         )}
       </Section>
 
+      {/* ──── Translations ──── */}
+      <Section
+        step="04"
+        title="Translations"
+        subtitle="Per-locale overrides of the listing fields. F-Droid clients pick the closest match for the user's device locale."
+      >
+        <LocalizationsEditor
+          appId={app.id}
+          localizations={app.localizations}
+          onSaved={load}
+        />
+      </Section>
+
       {/* ──── Permissions ──── */}
       {latest && (
-        <Section step="04" title="Permissions" subtitle={`Declared by v${latest.version_name} (${latest.version_code})`}>
+        <Section step="05" title="Permissions" subtitle={`Declared by v${latest.version_name} (${latest.version_code})`}>
           <AppPermissions permissions={latest.permissions} />
         </Section>
       )}
 
       {/* ──── Versions ──── */}
-      <Section step="05" title="Versions" subtitle="Upload a new APK to publish a new version. The signer must match.">
+      <Section step="06" title="Versions" subtitle="Upload a new APK to publish a new version. The signer must match.">
         <label className="mb-4 inline-flex">
           <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary px-4 text-sm font-semibold text-primary-fg shadow-e1 hover:brightness-[1.04]">
             <Upload className="h-4 w-4" /> Upload new version

@@ -21,14 +21,73 @@ from app.api.v1.apks import (
     parse_or_400,
     save_upload_to_temp,
 )
-from app.models.app import App, AppStatus, AppVisibility, Category
+from app.models.app import App, AppStatus, AppVisibility, Category, Localization
 from app.models.apk import ApkStatus
 from app.models.audit import DownloadEvent
 from app.models.user import User, UserRole
-from app.schemas.app import AppCreate, AppDetail, AppRead, AppUpdate
+from app.schemas.app import (
+    AppCreate,
+    AppDetail,
+    AppRead,
+    AppUpdate,
+    LocalizationRead,
+    LocalizationUpsert,
+)
 from app.services.queue import enqueue_reindex
 
 router = APIRouter()
+
+
+def _pick_locale_overrides(
+    app: App, preferred_locale: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Resolve the caller's preferred locale against ``app.localizations``.
+
+    Returns ``(name, summary, description)`` overrides — values may be None
+    individually when a partial localization only sets some fields, in
+    which case the caller leaves that field at the app-level default.
+
+    Resolution order:
+      1. Exact locale match (``fr-CA`` → fr-CA).
+      2. Language-only match (``fr-CA`` → first row whose primary subtag
+         is ``fr``).
+      3. None — caller should keep the en-US defaults.
+    """
+    if not preferred_locale or not app.localizations:
+        return None, None, None
+    exact = next(
+        (loc for loc in app.localizations if loc.locale == preferred_locale),
+        None,
+    )
+    if exact is None:
+        primary = preferred_locale.split("-", 1)[0].lower()
+        exact = next(
+            (
+                loc for loc in app.localizations
+                if loc.locale.split("-", 1)[0].lower() == primary
+            ),
+            None,
+        )
+    if exact is None:
+        return None, None, None
+    return exact.name, exact.summary, exact.description
+
+
+def _apply_locale(payload, app: App, preferred_locale: str | None):
+    """Overlay localized strings on a freshly serialized AppRead/AppDetail.
+
+    Each field is replaced only when the resolution actually surfaced a
+    non-empty value, so a partial localization that only sets the summary
+    keeps the default name and description.
+    """
+    name, summary, description = _pick_locale_overrides(app, preferred_locale)
+    if name:
+        payload.name = name
+    if summary:
+        payload.summary = summary
+    if description:
+        payload.description = description
+    return payload
 
 
 def _app_visible_to(app: App, user: User | None) -> bool:
@@ -57,7 +116,11 @@ async def list_apps(
     apps are hidden unless the caller has opted in via ``show_nsfw``."""
     stmt = (
         select(App)
-        .options(selectinload(App.categories), selectinload(App.apks))
+        .options(
+            selectinload(App.categories),
+            selectinload(App.apks),
+            selectinload(App.localizations),
+        )
         .order_by(App.last_published_at.desc().nullslast(), App.name)
     )
     if user is None or user.role != UserRole.ADMIN:
@@ -78,7 +141,11 @@ async def list_apps(
     show_nsfw = bool(user and user.show_nsfw)
     if not show_nsfw:
         rows = [a for a in rows if not a.is_nsfw]
-    return [AppRead.model_validate(a) for a in rows]
+    preferred_locale = user.preferred_locale if user else None
+    return [
+        _apply_locale(AppRead.model_validate(a), a, preferred_locale)
+        for a in rows
+    ]
 
 
 @router.post("/with-apk", response_model=AppDetail, status_code=status.HTTP_201_CREATED)
@@ -256,6 +323,7 @@ async def _load_app_or_404(db, app_id_or_pkg: str) -> App:
         selectinload(App.apks),
         selectinload(App.owner),
         selectinload(App.screenshots),
+        selectinload(App.localizations),
     )
     try:
         pk = uuid.UUID(app_id_or_pkg)
@@ -273,6 +341,12 @@ async def get_app(
     app_ref: str,
     db: DbSession,
     user: Annotated[User | None, Depends(require_browse_access)],
+    raw: bool = Query(
+        default=False,
+        description="Skip preferred-locale overlay and return the canonical "
+        "en-US fields. Used by the owner edit form so saving doesn't write "
+        "the localized strings back into the default columns.",
+    ),
 ) -> AppDetail:
     app = await _load_app_or_404(db, app_ref)
     if not _app_visible_to(app, user):
@@ -287,6 +361,8 @@ async def get_app(
     payload = AppDetail.model_validate(app)
     payload.owner_username = app.owner.username if app.owner else None
     payload.download_count = download_count
+    if not raw:
+        _apply_locale(payload, app, user.preferred_locale if user else None)
     return payload
 
 
@@ -354,3 +430,93 @@ async def delete_app(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     await db.delete(app)
     await db.flush()
+
+
+# --------------------------------------------------------------------------
+# Localizations — per-locale overrides on top of the app-level defaults.
+# --------------------------------------------------------------------------
+
+# BCP47 locale tag: a primary subtag (2-3 letters or 4-letter script-like),
+# optionally followed by a region subtag. Kept tight enough to reject obvious
+# garbage in the URL while still accepting anything F-Droid clients honour
+# (e.g. ``en``, ``en-US``, ``pt-BR``, ``zh-Hans``).
+_LOCALE_RE = re.compile(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,4})?$")
+
+
+async def _require_owner_or_admin(db, app_id: uuid.UUID, user: User) -> App:
+    app = await _load_app_or_404(db, str(app_id))
+    if app.owner_id != user.id and user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return app
+
+
+@router.put("/{app_id}/localizations/{locale}", response_model=LocalizationRead)
+async def upsert_localization(
+    app_id: uuid.UUID,
+    locale: str,
+    payload: LocalizationUpsert,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> LocalizationRead:
+    """Create or replace a per-locale override row.
+
+    ``locale`` is a BCP47 tag like ``fr-FR``. At least one of the payload
+    fields must be non-null — an empty PUT means "delete me", so we ask the
+    caller to use DELETE instead.
+    """
+    if not _LOCALE_RE.match(locale):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Locale must look like 'en' or 'en-US' (BCP47).",
+        )
+    if not any(
+        getattr(payload, f) is not None and getattr(payload, f) != ""
+        for f in ("name", "summary", "description", "video")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one of name / summary / description / video must be set.",
+        )
+    app = await _require_owner_or_admin(db, app_id, user)
+    existing = next((loc for loc in app.localizations if loc.locale == locale), None)
+    if existing is None:
+        row = Localization(
+            app_id=app.id,
+            locale=locale,
+            name=payload.name,
+            summary=payload.summary,
+            description=payload.description,
+            video=payload.video,
+        )
+        db.add(row)
+    else:
+        existing.name = payload.name
+        existing.summary = payload.summary
+        existing.description = payload.description
+        existing.video = payload.video
+        row = existing
+    await db.flush()
+    await enqueue_reindex()
+    return LocalizationRead.model_validate(row)
+
+
+@router.delete(
+    "/{app_id}/localizations/{locale}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_localization(
+    app_id: uuid.UUID,
+    locale: str,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    if not _LOCALE_RE.match(locale):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bad locale")
+    app = await _require_owner_or_admin(db, app_id, user)
+    target = next((loc for loc in app.localizations if loc.locale == locale), None)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    await db.delete(target)
+    await db.flush()
+    await enqueue_reindex()

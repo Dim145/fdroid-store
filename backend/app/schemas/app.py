@@ -177,9 +177,31 @@ class AppRead(BaseModel):
     is_nsfw: bool = False
 
 
+class LocalizationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    locale: str
+    name: str | None = None
+    summary: str | None = None
+    description: str | None = None
+    video: str | None = None
+
+
+class LocalizationUpsert(BaseModel):
+    """Per-locale overrides. Locale comes from the URL — anything you can
+    leave blank you should (an unset field falls back to the app's default
+    values in the F-Droid client). At least one field has to be set so an
+    empty PUT doesn't create an empty row."""
+    name: str | None = Field(default=None, max_length=255)
+    summary: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=20_000)
+    video: str | None = Field(default=None, max_length=512)
+
+
 class AppDetail(AppRead):
     apks: list[ApkRead] = Field(default_factory=list)
     screenshots: list["ScreenshotRead"] = Field(default_factory=list)
+    localizations: list[LocalizationRead] = Field(default_factory=list)
     owner_username: str | None = None
     # Total successful APK downloads across every version of this app,
     # counting both authenticated and anonymous traffic.
