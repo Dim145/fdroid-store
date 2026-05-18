@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
+import pkg from "@/package.json";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -203,7 +204,7 @@ function AuthShell({
             A modern F-Droid repo with the polish of a real app store.
           </p>
         </div>
-        <div className="relative font-mono text-xs text-primary-on-container/60">vol. 01</div>
+        <div className="relative font-mono text-xs text-primary-on-container/60">v{pkg.version}</div>
       </aside>
 
       <section className="flex items-center justify-center p-6 md:p-12">

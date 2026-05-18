@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import pkg from "@/package.json";
 import { useRepoInfo } from "@/lib/repo-store";
 
 export function SiteFooter() {
@@ -42,7 +43,7 @@ export function SiteFooter() {
         </div>
         <div className="mt-10 flex flex-col items-start justify-between gap-2 border-t border-outline-soft pt-5 text-xs text-ink-mute md:flex-row md:items-center">
           <span>© {new Date().getFullYear()} fdroid-store · self-hosted</span>
-          <span className="font-mono">vol. 01</span>
+          <span className="font-mono">v{pkg.version}</span>
         </div>
       </div>
     </footer>
