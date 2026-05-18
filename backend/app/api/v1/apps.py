@@ -11,7 +11,7 @@ from typing import Annotated
 _PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, require_browse_access
@@ -23,6 +23,7 @@ from app.api.v1.apks import (
 )
 from app.models.app import App, AppStatus, AppVisibility, Category
 from app.models.apk import ApkStatus
+from app.models.audit import DownloadEvent
 from app.models.user import User, UserRole
 from app.schemas.app import AppCreate, AppDetail, AppRead, AppUpdate
 from app.services.queue import enqueue_reindex
@@ -276,8 +277,16 @@ async def get_app(
     app = await _load_app_or_404(db, app_ref)
     if not _app_visible_to(app, user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+    download_count = int(
+        (
+            await db.execute(
+                select(func.count(DownloadEvent.id)).where(DownloadEvent.app_id == app.id)
+            )
+        ).scalar_one()
+    )
     payload = AppDetail.model_validate(app)
     payload.owner_username = app.owner.username if app.owner else None
+    payload.download_count = download_count
     return payload
 
 

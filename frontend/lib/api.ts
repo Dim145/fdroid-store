@@ -507,6 +507,7 @@ export type AppDetail = AppSummary & {
   apks: Apk[];
   screenshots: Screenshot[];
   owner_username: string | null;
+  download_count: number;
 };
 
 export type PublicProfile = {

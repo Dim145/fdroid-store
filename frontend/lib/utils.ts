@@ -25,3 +25,23 @@ export function formatDate(iso: string | null | undefined): string {
     return iso;
   }
 }
+
+/** Compact integer formatter — ``1234 → "1.2k"`` ``12345 → "12k"``. Keeps a
+ *  decimal only when it changes the reading (i.e. under 10× the unit). */
+export function formatCount(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  const abs = Math.abs(n);
+  if (abs < 1000) return n.toString();
+  const units = [
+    { value: 1_000_000_000, suffix: "B" },
+    { value: 1_000_000, suffix: "M" },
+    { value: 1_000, suffix: "k" },
+  ];
+  for (const u of units) {
+    if (abs >= u.value) {
+      const v = n / u.value;
+      return `${v.toFixed(v < 10 ? 1 : 0)}${u.suffix}`;
+    }
+  }
+  return n.toString();
+}

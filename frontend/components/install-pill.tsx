@@ -9,6 +9,8 @@ import { useAuth } from "@/lib/auth-store";
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { cn } from "@/lib/utils";
 
+type Mode = "deeplink" | "download";
+
 type Props = {
   /** Direct-download fallback for the latest APK file. */
   apkFileName?: string;
@@ -17,13 +19,25 @@ type Props = {
   apkId?: string;
   /** Visual emphasis — XL is the detail-page hero pill. */
   size?: "md" | "lg" | "xl";
+  /** ``deeplink`` (default) renders the F-Droid Install pill plus a small
+   *  "Or download .apk" fallback — the right shape on a mobile device that
+   *  actually has an F-Droid client. ``download`` renders a single big pill
+   *  that directly downloads the APK — the only useful action on desktop,
+   *  where the fdroidrepo:// scheme is a dead end. */
+  mode?: Mode;
   className?: string;
 };
 
 /* Signature install CTA. The deep-link scheme matches the configured repo
  * URL (fdroidrepo:// for HTTP, fdroidrepos:// for HTTPS) so we never hand
  * F-Droid a URL on the wrong port. */
-export function InstallPill({ apkFileName, apkId, size = "lg", className }: Props) {
+export function InstallPill({
+  apkFileName,
+  apkId,
+  size = "lg",
+  mode = "deeplink",
+  className,
+}: Props) {
   const repo = useRepoInfo();
   const { user } = useAuth();
   const [hover, setHover] = useState(false);
@@ -55,6 +69,38 @@ export function InstallPill({ apkFileName, apkId, size = "lg", className }: Prop
     } finally {
       setBusy(false);
     }
+  }
+
+  // Desktop / "download-only" mode: a single big green pill that fires the
+  // same signed-URL flow as the small fallback button.
+  if (mode === "download") {
+    if (!apkLink) return null;
+    return (
+      <Button
+        asChild
+        variant="filled"
+        size={size}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        disabled={busy}
+        className={cn(
+          "group relative overflow-hidden",
+          size === "xl" && "h-14 px-8 text-base",
+          className,
+        )}
+      >
+        <a href={apkLink} onClick={onClickApk} download>
+          <Download
+            className={cn(
+              "h-4 w-4 transition-transform duration-300",
+              hover ? "translate-y-0.5" : "",
+            )}
+            strokeWidth={2.4}
+          />
+          <span>{busy ? "…" : "Download .apk"}</span>
+        </a>
+      </Button>
+    );
   }
 
   return (

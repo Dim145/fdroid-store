@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { api, mediaUrl, type Apk, type AppDetail } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { useRepoInfo } from "@/lib/repo-store";
-import { cn, formatBytes, formatDate } from "@/lib/utils";
+import { cn, formatBytes, formatCount, formatDate } from "@/lib/utils";
 
 /* ============================================================================
  * App detail — the conversion page. Hero with the big Install pill at top,
@@ -184,22 +184,38 @@ export default function AppDetailClient() {
               <Stat label="Version" value={latest ? `v${latest.version_name}` : "—"} mono />
               <Stat label="Size" value={latest ? formatBytes(latest.size_bytes) : "—"} mono />
               <Stat
-                label="Min SDK"
-                value={latest?.min_sdk ? String(latest.min_sdk) : "—"}
+                label="Downloads"
+                value={formatCount(app.download_count)}
                 mono
+                title={`${app.download_count.toLocaleString()} total downloads`}
               />
             </dl>
           </div>
 
-          {/* Install pill column (desktop) */}
-          <div className="hidden md:block">
-            <InstallPill apkFileName={latest?.file_name} apkId={latest?.id} size="xl" />
+          {/* Desktop: a direct ".apk" download is the only useful action since
+              the fdroidrepo:// scheme is a dead end without an Android device.
+              The column is forced to the AppIcon's 140px height + items-center
+              so the pill sits at the icon's vertical midpoint — centring on the
+              row would drop it next to the stats line instead. */}
+          <div className="hidden md:flex md:h-[140px] md:items-center">
+            <InstallPill
+              apkFileName={latest?.file_name}
+              apkId={latest?.id}
+              size="xl"
+              mode="download"
+            />
           </div>
         </div>
 
-        {/* Install pill (mobile) */}
+        {/* Mobile: the F-Droid deep-link is the primary CTA, with a small
+            fallback for users who'd rather grab the raw APK. */}
         <div className="mt-6 md:hidden">
-          <InstallPill apkFileName={latest?.file_name} apkId={latest?.id} size="lg" />
+          <InstallPill
+            apkFileName={latest?.file_name}
+            apkId={latest?.id}
+            size="lg"
+            mode="deeplink"
+          />
         </div>
 
         {app.owner_username && (
@@ -418,13 +434,15 @@ function Stat({
   label,
   value,
   mono,
+  title,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  title?: string;
 }) {
   return (
-    <div>
+    <div title={title}>
       <div className="text-[10px] uppercase tracking-wider text-ink-mute">{label}</div>
       <div className={cn("mt-0.5 text-base font-semibold text-ink", mono && "font-mono text-sm")}>
         {value}
