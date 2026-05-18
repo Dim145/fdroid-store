@@ -1,16 +1,18 @@
 "use client";
 
-import { LayoutDashboard, AppWindow, Users, Settings2, Wand2, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, AppWindow, Tags, Users, Settings2, Wand2, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { AuthGuard } from "@/components/auth-guard";
 import { SiteHeader } from "@/components/site-header";
+import { Toaster } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/apps", label: "Apps & APKs", icon: AppWindow },
+  { href: "/admin/categories", label: "Categories", icon: Tags },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/access", label: "Access", icon: ShieldCheck },
   { href: "/admin/repo", label: "Repo config", icon: Settings2 },
@@ -53,6 +55,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </aside>
           <main className="min-w-0 flex-1">{children}</main>
         </div>
+        <Toaster />
       </div>
     </AuthGuard>
   );

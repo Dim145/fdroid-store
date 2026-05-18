@@ -16,8 +16,21 @@ class CategoryRead(BaseModel):
     description: str | None
 
 
+class CategoryWithCount(CategoryRead):
+    """List-view variant that also reports how many apps reference the row.
+
+    Used by the admin categories page to surface usage before a deletion.
+    """
+    app_count: int = 0
+
+
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=255)
+
+
+class CategoryUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=255)
 
 

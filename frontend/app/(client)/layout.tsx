@@ -1,6 +1,7 @@
 import { PrivateAccessGuard } from "@/components/private-access-guard";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { Toaster } from "@/components/toaster";
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -10,6 +11,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         <PrivateAccessGuard>{children}</PrivateAccessGuard>
       </main>
       <SiteFooter />
+      <Toaster />
     </div>
   );
 }

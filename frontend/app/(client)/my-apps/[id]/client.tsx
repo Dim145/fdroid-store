@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Eye, ImagePlus, RotateCcw, ShieldAlert, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, Eye, ImagePlus, Plus, RotateCcw, ShieldAlert, Trash2, Upload, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -12,7 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, mediaUrl, type Apk, type AppDetail } from "@/lib/api";
+import { api, mediaUrl, type Apk, type AppDetail, type Category } from "@/lib/api";
+import { toast } from "@/lib/toast-store";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 
 function ManageAppInner() {
@@ -26,8 +27,10 @@ function ManageAppInner() {
   const router = useRouter();
 
   const [app, setApp] = useState<AppDetail | null>(null);
+  // The page-load error is the one case where we keep an inline state: a
+  // failed initial fetch needs to replace the form with an error block, not
+  // pop a toast that disappears.
   const [error, setError] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [summary, setSummary] = useState("");
@@ -44,6 +47,8 @@ function ManageAppInner() {
   const [openCollective, setOpenCollective] = useState("");
   const [translation, setTranslation] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [availableCategories, setAvailableCategories] = useState<Category[]>([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -70,16 +75,35 @@ function ManageAppInner() {
       setOpenCollective(detail.open_collective || "");
       setTranslation(detail.translation || "");
       setVisibility(detail.visibility);
+      setSelectedCategoryIds(detail.categories.map((c) => c.id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load app");
     }
   }
   useEffect(() => { if (id) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+  useEffect(() => {
+    let cancelled = false;
+    api.categories.list()
+      .then((cs) => {
+        if (cancelled) return;
+        // Keep a stable alphabetical order so the chip layout doesn't reflow
+        // every time we re-render.
+        setAvailableCategories([...cs].sort((a, b) => a.name.localeCompare(b.name)));
+      })
+      .catch(() => {/* non-fatal — the rest of the form still works */});
+    return () => { cancelled = true; };
+  }, []);
+
+  function toggleCategory(catId: string) {
+    setSelectedCategoryIds((prev) =>
+      prev.includes(catId) ? prev.filter((id) => id !== catId) : [...prev, catId],
+    );
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!app) return;
-    setSaving(true); setError(null); setMsg(null);
+    setSaving(true);
     try {
       await api.apps.update(app.id, {
         name,
@@ -97,76 +121,74 @@ function ManageAppInner() {
         open_collective: openCollective || undefined,
         translation: translation || undefined,
         visibility,
+        category_ids: selectedCategoryIds,
       });
-      setMsg("Saved.");
+      toast.success("Listing saved.");
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      toast.error("Save failed", e instanceof Error ? e.message : undefined);
     } finally { setSaving(false); }
   }
   async function uploadVersion(file: File) {
     if (!app) return;
-    setUploading(true); setError(null); setMsg(null);
+    setUploading(true);
     try {
       await api.apps.uploadApk(app.id, file);
-      setMsg("New version uploaded.");
+      toast.success("New version uploaded.");
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
+      toast.error("Upload failed", e instanceof Error ? e.message : undefined);
     } finally { setUploading(false); }
   }
   async function deleteApk(apk: Apk) {
     if (!confirm(`Delete version ${apk.version_name} (${apk.version_code})?`)) return;
-    try { await api.apps.deleteApk(apk.id); setMsg("Version deleted."); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
+    try { await api.apps.deleteApk(apk.id); toast.success("Version deleted."); await load(); }
+    catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
   }
   async function deleteApp() {
     if (!app) return;
     if (!confirm(`Delete ${app.name} and ALL versions? Permanent.`)) return;
     try { await api.apps.remove(app.id); router.replace("/my-apps"); }
-    catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
+    catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
   }
   async function saveChangelog() {
     if (!editingChangelog) return;
-    setError(null); setMsg(null); setSavingChangelog(true);
+    setSavingChangelog(true);
     try {
       await api.apps.updateApk(editingChangelog.apkId, { whats_new: editingChangelog.text || null });
-      setMsg("Changelog saved.");
+      toast.success("Changelog saved.");
       setEditingChangelog(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      toast.error("Save failed", e instanceof Error ? e.message : undefined);
     } finally { setSavingChangelog(false); }
   }
   async function clearChangelog(apkId: string) {
     setSavingChangelog(true);
     try {
       await api.apps.updateApk(apkId, { whats_new: null });
-      setMsg("Changelog cleared.");
+      toast.success("Changelog cleared.");
       setEditingChangelog(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Clear failed");
+      toast.error("Clear failed", e instanceof Error ? e.message : undefined);
     } finally { setSavingChangelog(false); }
   }
   async function uploadCustomIcon(file: File) {
     if (!app) return;
-    setError(null); setMsg(null);
-    try { await api.apps.uploadIcon(app.id, file); setMsg("Custom icon uploaded."); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Icon upload failed"); }
+    try { await api.apps.uploadIcon(app.id, file); toast.success("Custom icon uploaded."); await load(); }
+    catch (e) { toast.error("Icon upload failed", e instanceof Error ? e.message : undefined); }
   }
   async function uploadFeatureGraphic(file: File) {
     if (!app) return;
-    setError(null); setMsg(null);
-    try { await api.apps.uploadFeatureGraphic(app.id, file); setMsg("Featured graphic uploaded."); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Upload failed"); }
+    try { await api.apps.uploadFeatureGraphic(app.id, file); toast.success("Featured graphic uploaded."); await load(); }
+    catch (e) { toast.error("Upload failed", e instanceof Error ? e.message : undefined); }
   }
   async function clearFeatureGraphic() {
     if (!app) return;
     if (!confirm("Remove the featured graphic?")) return;
-    setError(null); setMsg(null);
-    try { await api.apps.deleteFeatureGraphic(app.id); setMsg("Featured graphic removed."); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
+    try { await api.apps.deleteFeatureGraphic(app.id); toast.success("Featured graphic removed."); await load(); }
+    catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
   }
   async function toggleApkAntiFeature(apk: Apk, flag: string) {
     // Toggle locally then save. Optimistic + reload to stay in sync with the
@@ -175,12 +197,12 @@ function ManageAppInner() {
     const next = current.includes(flag)
       ? current.filter((f) => f !== flag)
       : [...current, flag];
-    setSavingApkId(apk.id); setError(null); setMsg(null);
+    setSavingApkId(apk.id);
     try {
       await api.apps.updateApk(apk.id, { anti_features: next });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      toast.error("Save failed", e instanceof Error ? e.message : undefined);
     } finally {
       setSavingApkId(null);
     }
@@ -188,26 +210,24 @@ function ManageAppInner() {
   async function revertIcon() {
     if (!app) return;
     if (!confirm("Revert to the icon extracted from the latest APK?")) return;
-    setError(null); setMsg(null);
-    try { await api.apps.revertIcon(app.id); setMsg("Icon reverted."); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Revert failed"); }
+    try { await api.apps.revertIcon(app.id); toast.success("Icon reverted."); await load(); }
+    catch (e) { toast.error("Revert failed", e instanceof Error ? e.message : undefined); }
   }
   async function uploadScreenshots(files: FileList | null) {
     if (!app || !files || files.length === 0) return;
-    setError(null); setMsg(null);
     try {
       await api.apps.uploadScreenshots(app.id, Array.from(files));
-      setMsg(`${files.length} screenshot${files.length === 1 ? "" : "s"} uploaded.`);
+      toast.success(`${files.length} screenshot${files.length === 1 ? "" : "s"} uploaded.`);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
+      toast.error("Upload failed", e instanceof Error ? e.message : undefined);
     }
   }
   async function deleteScreenshot(screenshotId: string) {
     if (!app) return;
     if (!confirm("Delete this screenshot?")) return;
     try { await api.apps.deleteScreenshot(app.id, screenshotId); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
+    catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
   }
 
   if (!app && !error) {
@@ -243,12 +263,6 @@ function ManageAppInner() {
         </Button>
       </header>
 
-      {msg && (
-        <p className="rounded-xl border border-primary bg-primary-container px-3 py-2 text-sm text-primary-on-container">{msg}</p>
-      )}
-      {error && (
-        <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
-      )}
 
       {/* ──── Listing ──── */}
       <Section step="01" title="Listing" subtitle="Package name is locked to the signing certificate.">
@@ -280,6 +294,14 @@ function ManageAppInner() {
               onChange={(e) => setDescription(e.target.value)}
               rows={6}
               className="w-full rounded-xl border border-outline bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
+            />
+          </FormField>
+          <FormField label="Categories" className="md:col-span-2">
+            <CategoryPicker
+              available={availableCategories}
+              selectedIds={selectedCategoryIds}
+              onToggle={toggleCategory}
+              onClear={() => setSelectedCategoryIds([])}
             />
           </FormField>
           <FormField label="Author" htmlFor="author"><Input id="author" value={authorName} onChange={(e) => setAuthorName(e.target.value)} /></FormField>
@@ -600,6 +622,99 @@ function FormField({
 function Spinner() {
   return (
     <div className="h-6 w-6 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label="Loading" />
+  );
+}
+
+/* Two-track category picker: top row shows what's currently on the app
+ * (chip-pills with an X), bottom row shows the rest of the taxonomy as
+ * outlined chips. Splitting the two states stops the chip cloud from
+ * becoming a "where is what again?" puzzle when the list grows past a
+ * dozen entries. */
+function CategoryPicker({
+  available,
+  selectedIds,
+  onToggle,
+  onClear,
+}: {
+  available: Category[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  onClear: () => void;
+}) {
+  if (available.length === 0) {
+    return <p className="text-xs italic text-ink-mute">Loading…</p>;
+  }
+  const selected = available.filter((c) => selectedIds.includes(c.id));
+  const rest = available.filter((c) => !selectedIds.includes(c.id));
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-outline-soft bg-surface-2/40 p-3">
+        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] uppercase tracking-wider text-ink-mute">
+          <span>
+            On this app · <span className="font-mono normal-case text-ink-soft">{selected.length}</span>
+          </span>
+          {selected.length > 0 && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="font-mono text-[10px] text-ink-mute hover:text-danger"
+            >
+              clear all
+            </button>
+          )}
+        </div>
+        {selected.length === 0 ? (
+          <p className="px-1 py-2 text-xs italic text-ink-mute">
+            Nothing selected. Pick one or more below — F-Droid clients use
+            this to group your app in their catalogue.
+          </p>
+        ) : (
+          <ul role="group" aria-label="Selected categories" className="flex flex-wrap gap-1.5">
+            {selected.map((c) => (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  onClick={() => onToggle(c.id)}
+                  className="group inline-flex items-center gap-1.5 rounded-pill bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg shadow-e1 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
+                  aria-label={`Remove ${c.name}`}
+                >
+                  {c.name}
+                  <X className="h-3 w-3 opacity-75 transition-opacity group-hover:opacity-100" strokeWidth={2.6} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div>
+        <div className="mb-2 px-1 text-[11px] uppercase tracking-wider text-ink-mute">
+          Available · <span className="font-mono normal-case text-ink-soft">{rest.length}</span>
+        </div>
+        {rest.length === 0 ? (
+          <p className="px-1 py-2 text-xs italic text-ink-mute">
+            All available categories are already selected.
+          </p>
+        ) : (
+          <ul role="group" aria-label="Available categories" className="flex flex-wrap gap-1.5">
+            {rest.map((c) => (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  onClick={() => onToggle(c.id)}
+                  className="inline-flex items-center gap-1.5 rounded-pill border border-outline-soft bg-surface px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-primary hover:bg-primary-container hover:text-primary-on-container focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
+                  aria-label={`Add ${c.name}`}
+                >
+                  <Plus className="h-3 w-3 opacity-70" strokeWidth={2.6} />
+                  {c.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 

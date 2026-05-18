@@ -313,6 +313,18 @@ export const api = {
 
   categories: {
     list: () => apiFetch<Array<Category>>("/api/v1/categories", { anonymous: !getAccessToken() }),
+    create: (payload: { name: string; description?: string | null }) =>
+      apiFetch<Category>("/api/v1/categories", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    update: (id: string, payload: { name?: string; description?: string | null }) =>
+      apiFetch<Category>(`/api/v1/categories/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    remove: (id: string) =>
+      apiFetch<void>(`/api/v1/categories/${id}`, { method: "DELETE" }),
   },
 
   users: {
@@ -418,7 +430,15 @@ export type ApiKeyCreate = {
 };
 export type ApiKeyCreated = ApiKey & { full_key: string };
 
-export type Category = { id: string; name: string; description: string | null };
+export type Category = {
+  id: string;
+  name: string;
+  description: string | null;
+  /** Number of apps that reference this category. Populated by the admin
+   *  list endpoint; defaulted to 0 when the category comes back embedded
+   *  in another payload (e.g. ``AppRead.categories``). */
+  app_count?: number;
+};
 
 export type AppSummary = {
   id: string;
