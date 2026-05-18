@@ -129,14 +129,20 @@ def _build_package(
     icon_entry = _file_entry(app.icon_path, file_meta)
     if icon_entry is not None:
         metadata["icon"] = {DEFAULT_LOCALE: icon_entry}
-    # Featured graphic — same {locale: File} shape as the icon. The locale
-    # comes from the storage path so per-locale variants could slot in later
-    # without changing the index code.
-    fg_entry = _file_entry(app.feature_graphic_path, file_meta)
-    if fg_entry is not None:
-        fg_parts = (app.feature_graphic_path or "").split("/")
-        fg_locale = fg_parts[-2] if len(fg_parts) >= 2 else DEFAULT_LOCALE
-        metadata["featureGraphic"] = {fg_locale: fg_entry}
+    # Featured / promo / TV banner — same {locale: File} shape as the icon.
+    # The locale comes from the storage path so per-locale variants could
+    # slot in later without changing the index code.
+    for path, dst_key in (
+        (app.feature_graphic_path, "featureGraphic"),
+        (app.promo_graphic_path, "promoGraphic"),
+        (app.tv_banner_path, "tvBanner"),
+    ):
+        entry = _file_entry(path, file_meta)
+        if entry is None:
+            continue
+        parts = (path or "").split("/")
+        locale = parts[-2] if len(parts) >= 2 else DEFAULT_LOCALE
+        metadata[dst_key] = {locale: entry}
 
     # Screenshots — v2 nests them as ``screenshots.<deviceType>.<locale>[]``.
     # We currently only emit the "phone" device type.

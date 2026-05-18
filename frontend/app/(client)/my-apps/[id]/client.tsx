@@ -220,6 +220,28 @@ function ManageAppInner() {
     try { await api.apps.deleteFeatureGraphic(app.id); toast.success("Featured graphic removed."); await load(); }
     catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
   }
+  async function uploadPromoGraphic(file: File) {
+    if (!app) return;
+    try { await api.apps.uploadPromoGraphic(app.id, file); toast.success("Promo graphic uploaded."); await load(); }
+    catch (e) { toast.error("Upload failed", e instanceof Error ? e.message : undefined); }
+  }
+  async function clearPromoGraphic() {
+    if (!app) return;
+    if (!confirm("Remove the promo graphic?")) return;
+    try { await api.apps.deletePromoGraphic(app.id); toast.success("Promo graphic removed."); await load(); }
+    catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
+  }
+  async function uploadTvBanner(file: File) {
+    if (!app) return;
+    try { await api.apps.uploadTvBanner(app.id, file); toast.success("TV banner uploaded."); await load(); }
+    catch (e) { toast.error("Upload failed", e instanceof Error ? e.message : undefined); }
+  }
+  async function clearTvBanner() {
+    if (!app) return;
+    if (!confirm("Remove the TV banner?")) return;
+    try { await api.apps.deleteTvBanner(app.id); toast.success("TV banner removed."); await load(); }
+    catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
+  }
   async function toggleApkAntiFeature(apk: Apk, flag: string) {
     // Toggle locally then save. Optimistic + reload to stay in sync with the
     // server (the index rebuild is async so we want the canonical state back).
@@ -432,43 +454,37 @@ function ManageAppInner() {
         </div>
       </Section>
 
-      {/* ──── Featured graphic ──── */}
+      {/* ──── Banners ──── */}
       <Section
         step="2b"
-        title="Featured graphic"
-        subtitle="Wide banner the F-Droid client shows above the description. 1024×500 max, JPEG/PNG/WebP."
+        title="Banners"
+        subtitle="Optional promotional graphics. F-Droid clients pick the right one per surface — feature on phones, TV banner on Android TV, promo as a tablet tile."
       >
-        <div className="flex flex-wrap items-center gap-5">
-          {app.feature_graphic_path ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={mediaUrl(app.feature_graphic_path) || ""}
-              alt="featured graphic"
-              className="h-32 w-auto rounded-2xl border border-outline-soft bg-surface-2 object-cover shadow-e1"
-            />
-          ) : (
-            <div className="flex h-32 w-64 items-center justify-center rounded-2xl border border-dashed border-outline bg-surface-2 text-xs italic text-ink-mute">
-              No banner yet
-            </div>
-          )}
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex">
-              <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary-container px-4 text-sm font-semibold text-primary-on-container hover:brightness-[1.04]">
-                <ImagePlus className="h-4 w-4" /> Upload banner
-              </span>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFeatureGraphic(f); e.target.value = ""; }}
-                className="sr-only"
-              />
-            </label>
-            {app.feature_graphic_path && (
-              <Button type="button" variant="outlined" size="md" onClick={clearFeatureGraphic}>
-                <Trash2 className="h-4 w-4" /> Remove
-              </Button>
-            )}
-          </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          <BannerSlot
+            label="Featured"
+            hint="1024 × 500 — shown above the description on phones."
+            aspect="aspect-[1024/500]"
+            url={mediaUrl(app.feature_graphic_path) || null}
+            onUpload={uploadFeatureGraphic}
+            onClear={clearFeatureGraphic}
+          />
+          <BannerSlot
+            label="Promo"
+            hint="320 × 180 — tablet & sidebar promo tile."
+            aspect="aspect-[320/180]"
+            url={mediaUrl(app.promo_graphic_path) || null}
+            onUpload={uploadPromoGraphic}
+            onClear={clearPromoGraphic}
+          />
+          <BannerSlot
+            label="TV banner"
+            hint="1280 × 720 — Android TV launcher card."
+            aspect="aspect-video"
+            url={mediaUrl(app.tv_banner_path) || null}
+            onUpload={uploadTvBanner}
+            onClear={clearTvBanner}
+          />
         </div>
       </Section>
 
@@ -706,6 +722,82 @@ function FormField({
 function Spinner() {
   return (
     <div className="h-6 w-6 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label="Loading" />
+  );
+}
+
+/* One panel inside the Banners section. Renders the current asset (or a
+ * dashed placeholder), an upload button, and a Remove button when one is
+ * already set. Aspect ratio is forced so the preview always matches the
+ * shape the F-Droid client expects, even if the source was off-ratio. */
+function BannerSlot({
+  label,
+  hint,
+  aspect,
+  url,
+  onUpload,
+  onClear,
+}: {
+  label: string;
+  hint: string;
+  aspect: string;
+  url: string | null;
+  onUpload: (file: File) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold text-ink">{label}</span>
+        {url && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="inline-flex items-center gap-1 text-xs text-ink-mute transition-colors hover:text-danger"
+          >
+            <Trash2 className="h-3 w-3" /> remove
+          </button>
+        )}
+      </div>
+      <label
+        className={cn(
+          "group relative block overflow-hidden rounded-2xl border bg-surface-2 transition-colors",
+          aspect,
+          url
+            ? "border-outline-soft shadow-e1 cursor-pointer"
+            : "border-dashed border-outline cursor-pointer hover:border-primary hover:bg-primary-container/30",
+        )}
+      >
+        {url ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt={`${label} banner`}
+              className="h-full w-full object-cover"
+            />
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55 text-xs font-semibold uppercase tracking-wider text-white opacity-0 transition-opacity group-hover:opacity-100">
+              Replace
+            </span>
+          </>
+        ) : (
+          <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-ink-mute">
+            <ImagePlus className="h-5 w-5" strokeWidth={2} />
+            <span className="text-[11px] font-medium">Upload {label.toLowerCase()}</span>
+          </span>
+        )}
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUpload(f);
+            e.target.value = "";
+          }}
+          className="sr-only"
+        />
+      </label>
+      <p className="text-[11px] text-ink-mute">{hint}</p>
+    </div>
   );
 }
 

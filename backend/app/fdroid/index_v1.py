@@ -101,15 +101,21 @@ def _serialize_app(app: App) -> dict[str, Any]:
     for locale, files in shots_by_locale.items():
         localized.setdefault(locale, {})["phoneScreenshots"] = files
 
-    # Featured graphic is stored at ``<package>/<locale>/featureGraphic.png``;
-    # v1 expects just the basename inside the per-locale block (the client
-    # rebuilds the URL using the app's package + the locale key).
-    if app.feature_graphic_path:
-        fg_basename = app.feature_graphic_path.rsplit("/", 1)[-1]
-        # Pick locale from the storage key — second-to-last segment.
-        parts = app.feature_graphic_path.split("/")
-        fg_locale = parts[-2] if len(parts) >= 2 else DEFAULT_LOCALE
-        localized.setdefault(fg_locale, {})["featureGraphic"] = fg_basename
+    # Featured / promo / TV banner are all stored at
+    # ``<package>/<locale>/<filename>.png``; v1 expects just the basename
+    # inside the per-locale block (the client rebuilds the URL using the
+    # app's package + the locale key).
+    for path, key_in_block in (
+        (app.feature_graphic_path, "featureGraphic"),
+        (app.promo_graphic_path, "promoGraphic"),
+        (app.tv_banner_path, "tvBanner"),
+    ):
+        if not path:
+            continue
+        basename = path.rsplit("/", 1)[-1]
+        parts = path.split("/")
+        locale = parts[-2] if len(parts) >= 2 else DEFAULT_LOCALE
+        localized.setdefault(locale, {})[key_in_block] = basename
 
     latest_with_notes = next(
         iter(

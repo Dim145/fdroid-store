@@ -76,6 +76,12 @@ class App(Base, IdMixin, TimestampMixin):
     # MUST NOT overwrite the icon. Cleared when the admin reverts to auto.
     icon_is_custom: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     feature_graphic_path: Mapped[str | None] = mapped_column(String(512))
+    # F-Droid v2 also ships ``promoGraphic`` (a smaller advertising tile) and
+    # ``tvBanner`` (Android TV launcher banner). Same locale-aware storage
+    # layout as the feature graphic; emitted in both index variants so the
+    # client can surface them on the right device.
+    promo_graphic_path: Mapped[str | None] = mapped_column(String(512))
+    tv_banner_path: Mapped[str | None] = mapped_column(String(512))
 
     visibility: Mapped[AppVisibility] = mapped_column(
         Enum(AppVisibility, name="app_visibility"),

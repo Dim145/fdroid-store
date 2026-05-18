@@ -62,6 +62,8 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS private_index_owner_ids TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS show_nsfw BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_locale VARCHAR(16)",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS promo_graphic_path VARCHAR(512)",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS tv_banner_path VARCHAR(512)",
         ):
             try:
                 await conn.execute(text(stmt))

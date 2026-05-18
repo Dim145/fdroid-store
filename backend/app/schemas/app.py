@@ -166,6 +166,8 @@ class AppRead(BaseModel):
     icon_path: str | None
     icon_is_custom: bool = False
     feature_graphic_path: str | None = None
+    promo_graphic_path: str | None = None
+    tv_banner_path: str | None = None
     visibility: AppVisibility
     status: AppStatus
     suggested_version_code: int | None

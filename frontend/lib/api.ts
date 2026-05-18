@@ -299,6 +299,26 @@ export const api = {
     },
     deleteFeatureGraphic: (appId: string) =>
       apiFetch<void>(`/api/v1/apps/${appId}/feature-graphic`, { method: "DELETE" }),
+    uploadPromoGraphic: (appId: string, file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch<{ promo_graphic_path: string }>(
+        `/api/v1/apps/${appId}/promo-graphic`,
+        { method: "POST", body: fd },
+      );
+    },
+    deletePromoGraphic: (appId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/promo-graphic`, { method: "DELETE" }),
+    uploadTvBanner: (appId: string, file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch<{ tv_banner_path: string }>(
+        `/api/v1/apps/${appId}/tv-banner`,
+        { method: "POST", body: fd },
+      );
+    },
+    deleteTvBanner: (appId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/tv-banner`, { method: "DELETE" }),
     listScreenshots: (appId: string) =>
       apiFetch<Screenshot[]>(`/api/v1/apps/${appId}/screenshots`, {
         anonymous: !getAccessToken(),
@@ -488,6 +508,8 @@ export type AppSummary = {
   icon_path: string | null;
   icon_is_custom: boolean;
   feature_graphic_path: string | null;
+  promo_graphic_path: string | null;
+  tv_banner_path: string | null;
   visibility: "public" | "private";
   status: "draft" | "pending_review" | "published" | "rejected" | "archived";
   suggested_version_code: number | null;

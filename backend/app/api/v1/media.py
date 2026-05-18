@@ -147,6 +147,113 @@ async def delete_feature_graphic(
     await enqueue_reindex()
 
 
+# --------------------------------------------------------------------------
+# promoGraphic + tvBanner — same shape as featureGraphic, different sizes
+# and different storage filenames. The F-Droid v2 spec uses these on
+# different surfaces (tablet promo strips, Android TV launchers); shipping
+# them gives clients the assets they expect without forcing them to use the
+# featureGraphic as a stand-in.
+# --------------------------------------------------------------------------
+_MAX_PROMO_GRAPHIC_BYTES = 4 * 1024 * 1024   # 4 MiB — promo is small (320×180-ish)
+_MAX_TV_BANNER_BYTES = 12 * 1024 * 1024      # 12 MiB — TV banner is the biggest of the three
+
+
+@router.post("/{app_id}/promo-graphic", response_model=dict)
+async def upload_promo_graphic(
+    app_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+    file: UploadFile = File(...),
+) -> dict:
+    """A smaller promo tile (Play Store style ~320×180). F-Droid v2 clients
+    use it on tablet layouts."""
+    app = await _load_owned_app(db, app_id, user)
+    raw = await read_capped(file, _MAX_PROMO_GRAPHIC_BYTES)
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    png = await normalize_image(raw, (320, 180))
+
+    storage = get_storage()
+    key = f"{app.package_name}/{_DEFAULT_FG_LOCALE}/promoGraphic.png"
+    await storage.put(key, png, content_type="image/png")
+    app.promo_graphic_path = key
+    await db.flush()
+    await enqueue_reindex()
+    return {"promo_graphic_path": key}
+
+
+@router.delete(
+    "/{app_id}/promo-graphic",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
+async def delete_promo_graphic(
+    app_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    app = await _load_owned_app(db, app_id, user)
+    if not app.promo_graphic_path:
+        return
+    storage = get_storage()
+    try:
+        await storage.delete(app.promo_graphic_path)
+    except Exception:  # noqa: BLE001
+        pass
+    app.promo_graphic_path = None
+    await db.flush()
+    await enqueue_reindex()
+
+
+@router.post("/{app_id}/tv-banner", response_model=dict)
+async def upload_tv_banner(
+    app_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+    file: UploadFile = File(...),
+) -> dict:
+    """Android TV banner — 16:9 wide. Capped at 1280×720 which is what the
+    Android TV launcher actually renders."""
+    app = await _load_owned_app(db, app_id, user)
+    raw = await read_capped(file, _MAX_TV_BANNER_BYTES)
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    png = await normalize_image(raw, (1280, 720))
+
+    storage = get_storage()
+    key = f"{app.package_name}/{_DEFAULT_FG_LOCALE}/tvBanner.png"
+    await storage.put(key, png, content_type="image/png")
+    app.tv_banner_path = key
+    await db.flush()
+    await enqueue_reindex()
+    return {"tv_banner_path": key}
+
+
+@router.delete(
+    "/{app_id}/tv-banner",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
+async def delete_tv_banner(
+    app_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    app = await _load_owned_app(db, app_id, user)
+    if not app.tv_banner_path:
+        return
+    storage = get_storage()
+    try:
+        await storage.delete(app.tv_banner_path)
+    except Exception:  # noqa: BLE001
+        pass
+    app.tv_banner_path = None
+    await db.flush()
+    await enqueue_reindex()
+
+
 @router.delete(
     "/{app_id}/icon",
     status_code=status.HTTP_204_NO_CONTENT,

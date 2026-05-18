@@ -195,6 +195,10 @@ async def _collect_file_meta(
             file_keys.add(app.icon_path)
         if app.feature_graphic_path:
             file_keys.add(app.feature_graphic_path)
+        if app.promo_graphic_path:
+            file_keys.add(app.promo_graphic_path)
+        if app.tv_banner_path:
+            file_keys.add(app.tv_banner_path)
     for key in file_keys:
         try:
             if not await storage.exists(key):
