@@ -309,6 +309,14 @@ export const api = {
       apiFetch<void>(`/api/v1/apps/${appId}/screenshots/${screenshotId}`, {
         method: "DELETE",
       }),
+    reorderScreenshots: (appId: string, orderedIds: string[]) =>
+      apiFetch<Array<{ id: string; display_order: number }>>(
+        `/api/v1/apps/${appId}/screenshots/reorder`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ ordered_ids: orderedIds }),
+        },
+      ),
   },
 
   categories: {

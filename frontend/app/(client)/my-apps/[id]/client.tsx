@@ -1,6 +1,23 @@
 "use client";
 
-import { ArrowLeft, Eye, ImagePlus, Plus, RotateCcw, ShieldAlert, Trash2, Upload, X } from "lucide-react";
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  rectSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { ArrowLeft, Eye, GripVertical, ImagePlus, Plus, RotateCcw, ShieldAlert, Trash2, Upload, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -12,7 +29,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, mediaUrl, type Apk, type AppDetail, type Category } from "@/lib/api";
+import { api, mediaUrl, type Apk, type AppDetail, type Category, type Screenshot } from "@/lib/api";
 import { toast } from "@/lib/toast-store";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 
@@ -49,6 +66,12 @@ function ManageAppInner() {
   const [visibility, setVisibility] = useState<"public" | "private">("public");
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [availableCategories, setAvailableCategories] = useState<Category[]>([]);
+  // Mirrors ``app.screenshots`` but holds the local drag-and-drop order. The
+  // server is the source of truth; we sync from it on load and after each
+  // successful reorder, but mutate it optimistically on drag end so the UI
+  // doesn't flash through "old order → server → new order".
+  const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+  const [reorderingScreenshots, setReorderingScreenshots] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -76,6 +99,9 @@ function ManageAppInner() {
       setTranslation(detail.translation || "");
       setVisibility(detail.visibility);
       setSelectedCategoryIds(detail.categories.map((c) => c.id));
+      setScreenshots(
+        [...detail.screenshots].sort((a, b) => a.display_order - b.display_order),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load app");
     }
@@ -228,6 +254,38 @@ function ManageAppInner() {
     if (!confirm("Delete this screenshot?")) return;
     try { await api.apps.deleteScreenshot(app.id, screenshotId); await load(); }
     catch (e) { toast.error("Delete failed", e instanceof Error ? e.message : undefined); }
+  }
+
+  // dnd-kit sensors. A 6px activation distance prevents accidental drags on
+  // click — important because the tile itself is the drag handle, and we
+  // don't want a tap on the close button to be misread as the start of a
+  // swipe.
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  async function onScreenshotDragEnd(e: DragEndEvent) {
+    if (!app) return;
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const fromIndex = screenshots.findIndex((s) => s.id === active.id);
+    const toIndex = screenshots.findIndex((s) => s.id === over.id);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const previous = screenshots;
+    const next = arrayMove(screenshots, fromIndex, toIndex);
+    setScreenshots(next);
+    setReorderingScreenshots(true);
+    try {
+      await api.apps.reorderScreenshots(app.id, next.map((s) => s.id));
+      toast.success("Screenshot order saved.");
+    } catch (err) {
+      // Revert to the server-known state so the UI doesn't lie.
+      setScreenshots(previous);
+      toast.error("Reorder failed", err instanceof Error ? err.message : undefined);
+    } finally {
+      setReorderingScreenshots(false);
+    }
   }
 
   if (!app && !error) {
@@ -411,7 +469,15 @@ function ManageAppInner() {
       </Section>
 
       {/* ──── Screenshots ──── */}
-      <Section step="03" title="Screenshots" subtitle="PNG / JPEG / WebP, resized to 1080×1920 max.">
+      <Section
+        step="03"
+        title="Screenshots"
+        subtitle={
+          screenshots.length > 1
+            ? "PNG / JPEG / WebP, resized to 1080×1920 max. Drag tiles to reorder."
+            : "PNG / JPEG / WebP, resized to 1080×1920 max."
+        }
+      >
         <label className="inline-flex">
           <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary-container px-4 text-sm font-semibold text-primary-on-container hover:brightness-[1.04]">
             <ImagePlus className="h-4 w-4" /> Add screenshots
@@ -424,29 +490,30 @@ function ManageAppInner() {
             className="sr-only"
           />
         </label>
-        {app.screenshots.length === 0 ? (
+        {screenshots.length === 0 ? (
           <p className="mt-4 text-sm italic text-ink-mute">No screenshots yet.</p>
         ) : (
-          <div className="mt-4 flex flex-wrap gap-3">
-            {[...app.screenshots].sort((a, b) => a.display_order - b.display_order).map((s) => {
-              const url = mediaUrl(s.storage_key);
-              if (!url) return null;
-              return (
-                <div key={s.id} className="group relative overflow-hidden rounded-xl border border-outline-soft bg-surface-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt="screenshot" className="h-44 w-auto object-contain" />
-                  <button
-                    type="button"
-                    onClick={() => deleteScreenshot(s.id)}
-                    aria-label="Delete screenshot"
-                    className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-pill bg-danger text-danger-fg opacity-0 transition-opacity group-hover:opacity-100"
-                  >
-                    <X className="h-3.5 w-3.5" strokeWidth={2.6} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+          <DndContext
+            sensors={dndSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onScreenshotDragEnd}
+          >
+            <SortableContext
+              items={screenshots.map((s) => s.id)}
+              strategy={rectSortingStrategy}
+            >
+              <div className={cn("mt-4 flex flex-wrap gap-3", reorderingScreenshots && "opacity-90")}>
+                {screenshots.map((s, i) => (
+                  <SortableScreenshot
+                    key={s.id}
+                    screenshot={s}
+                    index={i}
+                    onDelete={deleteScreenshot}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         )}
       </Section>
 
@@ -622,6 +689,82 @@ function FormField({
 function Spinner() {
   return (
     <div className="h-6 w-6 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label="Loading" />
+  );
+}
+
+/* A single screenshot tile inside the sortable grid. The tile itself acts as
+ * the drag handle (via the dedicated grab affordance pinned to its top-left
+ * — keeps drag intent obvious and stops a wandering pointer from triggering
+ * a reorder on the X button). A small ordinal in the bottom-left hints the
+ * current position and gives screen readers something to anchor onto. */
+function SortableScreenshot({
+  screenshot,
+  index,
+  onDelete,
+}: {
+  screenshot: Screenshot;
+  index: number;
+  onDelete: (id: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: screenshot.id });
+
+  const url = mediaUrl(screenshot.storage_key);
+  if (!url) return null;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+      className={cn(
+        "group relative overflow-hidden rounded-xl border border-outline-soft bg-surface-2",
+        isDragging
+          ? "z-10 cursor-grabbing shadow-e3 ring-2 ring-primary"
+          : "shadow-e1 transition-shadow hover:shadow-e2",
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={`Screenshot ${index + 1}`}
+        className="h-44 w-auto select-none object-contain"
+        draggable={false}
+      />
+      <button
+        type="button"
+        aria-label={`Drag screenshot ${index + 1}`}
+        {...attributes}
+        {...listeners}
+        className={cn(
+          "absolute left-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-pill bg-surface/85 text-ink-soft backdrop-blur",
+          "cursor-grab opacity-0 transition-opacity group-hover:opacity-100",
+          "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30",
+          isDragging && "cursor-grabbing opacity-100",
+        )}
+      >
+        <GripVertical className="h-3.5 w-3.5" strokeWidth={2.4} />
+      </button>
+      <span className="absolute bottom-1.5 left-1.5 flex h-6 min-w-[1.5rem] items-center justify-center rounded-pill bg-surface/85 px-2 font-mono text-[10px] font-semibold text-ink-soft backdrop-blur">
+        {index + 1}
+      </span>
+      <button
+        type="button"
+        onClick={() => onDelete(screenshot.id)}
+        aria-label="Delete screenshot"
+        className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-pill bg-danger text-danger-fg opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-danger/30"
+      >
+        <X className="h-3.5 w-3.5" strokeWidth={2.6} />
+      </button>
+    </div>
   );
 }
 

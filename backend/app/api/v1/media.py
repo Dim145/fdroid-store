@@ -19,6 +19,7 @@ from typing import Annotated
 
 from PIL import Image
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -324,12 +325,20 @@ async def delete_screenshot(
     await enqueue_reindex()
 
 
+class ScreenshotReorderRequest(BaseModel):
+    ordered_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description="Screenshot ids in the desired display order. Unknown ids are "
+        "skipped, omitted ones keep their current relative order at the end.",
+    )
+
+
 @router.patch("/{app_id}/screenshots/reorder", response_model=list[dict])
 async def reorder_screenshots(
     app_id: uuid.UUID,
+    payload: ScreenshotReorderRequest,
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
-    ordered_ids: list[uuid.UUID] = [],
 ) -> list[dict]:
     """Apply the order from a UI drag-and-drop. Missing or unknown ids are
     ignored — IDs not in the input keep their current relative order at the
@@ -339,7 +348,7 @@ async def reorder_screenshots(
     by_id = {s.id: s for s in app.screenshots}
     seen: set[uuid.UUID] = set()
     order = 0
-    for sid in ordered_ids:
+    for sid in payload.ordered_ids:
         s = by_id.get(sid)
         if s is None:
             continue
