@@ -39,13 +39,14 @@ class PublicProfile(BaseModel):
 async def get_public_profile(
     username: str,
     db: DbSession,
-    _user: Annotated[User | None, Depends(require_browse_access)],
+    caller: Annotated[User | None, Depends(require_browse_access)],
 ) -> PublicProfile:
     """Return an uploader's public profile + their PUBLIC published apps.
 
     The endpoint honours public_mode like the catalogue: anonymous callers
     are allowed when the repo is in public mode, otherwise rejected upstream
-    by ``require_browse_access``.
+    by ``require_browse_access``. NSFW apps are filtered out unless the
+    caller has opted in via ``show_nsfw``.
     """
     target = (
         await db.execute(select(User).where(User.username == username))
@@ -63,7 +64,9 @@ async def get_public_profile(
         )
         .order_by(App.last_published_at.desc().nullslast(), App.name)
     )
-    apps = (await db.execute(apps_stmt)).scalars().unique().all()
+    apps = list((await db.execute(apps_stmt)).scalars().unique().all())
+    if not bool(caller and caller.show_nsfw):
+        apps = [a for a in apps if not a.is_nsfw]
     if not apps:
         # Indistinguishable from "user doesn't exist" so the route can't be
         # used to probe which usernames are registered.

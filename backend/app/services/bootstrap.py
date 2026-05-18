@@ -60,6 +60,7 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS upload_max_apk_mb INTEGER NOT NULL DEFAULT 200",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP WITH TIME ZONE",
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS private_index_owner_ids TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS show_nsfw BOOLEAN NOT NULL DEFAULT FALSE",
         ):
             try:
                 await conn.execute(text(stmt))

@@ -68,6 +68,9 @@ function ListItem({
           {app.visibility === "private" && (
             <Badge variant="accent" className="px-1.5 py-0 text-[9px]">private</Badge>
           )}
+          {app.is_nsfw && (
+            <Badge variant="destructive" className="px-1.5 py-0 text-[9px]">NSFW</Badge>
+          )}
         </div>
       </div>
       <ArrowRight
@@ -135,7 +138,10 @@ function Feature({ app, className }: { app: AppSummary; className?: string }) {
           <Badge variant="primary" className="uppercase tracking-wider">
             Featured
           </Badge>
-          {app.visibility === "private" && <Badge variant="accent">private</Badge>}
+          <div className="flex items-center gap-1.5">
+            {app.visibility === "private" && <Badge variant="accent">private</Badge>}
+            {app.is_nsfw && <Badge variant="destructive">NSFW</Badge>}
+          </div>
         </div>
         <AppIcon
           iconPath={app.icon_path}

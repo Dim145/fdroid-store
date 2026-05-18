@@ -35,7 +35,17 @@ async def update_me(
 ) -> UserRead:
     if payload.full_name is not None:
         user.full_name = payload.full_name
+    nsfw_changed = False
+    if payload.show_nsfw is not None and payload.show_nsfw != user.show_nsfw:
+        user.show_nsfw = payload.show_nsfw
+        nsfw_changed = True
     await db.flush()
+    if nsfw_changed:
+        # The F-Droid index served to this user's API keys must be rebuilt
+        # so the new NSFW preference takes effect there too. Best-effort —
+        # we don't fail the request if the queue is down.
+        from app.services.queue import enqueue_reindex
+        await enqueue_reindex()
     return UserRead.model_validate(user)
 
 

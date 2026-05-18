@@ -35,6 +35,7 @@ from app.fdroid.signing import build_and_sign_jar
 from app.models.app import App, AppStatus, AppVisibility
 from app.models.apk import ApkStatus
 from app.models.repo_config import RepoConfig
+from app.models.user import User
 from app.storage import Storage, get_storage
 
 log = get_logger(__name__)
@@ -83,6 +84,32 @@ async def _load_public_apps(db: AsyncSession) -> list[App]:
         _published_app_query().where(App.visibility == AppVisibility.PUBLIC)
     )
     return _keep_with_published_apk(list(result.scalars().unique().all()))
+
+
+def _strip_nsfw(apps: list[App]) -> list[App]:
+    return [a for a in apps if not a.is_nsfw]
+
+
+async def _load_nsfw_users(db: AsyncSession) -> list[uuid_module.UUID]:
+    """User ids that have opted into seeing NSFW apps.
+
+    These users need a per-user F-Droid index even when they don't own a
+    private app — their view of the catalogue is wider than the default
+    public one, so the shared filtered public index would short-change them.
+    """
+    rows = (
+        await db.execute(
+            select(User.id).where(User.show_nsfw.is_(True), User.is_active.is_(True))
+        )
+    ).all()
+    return [row[0] for row in rows]
+
+
+async def _user_show_nsfw(db: AsyncSession, user_id: uuid_module.UUID) -> bool:
+    val = (
+        await db.execute(select(User.show_nsfw).where(User.id == user_id))
+    ).scalar_one_or_none()
+    return bool(val)
 
 
 async def _load_user_private_apps(db: AsyncSession, owner_id: uuid_module.UUID) -> list[App]:
@@ -258,34 +285,44 @@ async def rebuild_repo_index(db: AsyncSession) -> None:
 
     log.info("rebuilding repo index", repo=repo_config.name)
 
-    apps_public = await _load_public_apps(db)
+    apps_public_all = await _load_public_apps(db)
+    apps_public_sfw = _strip_nsfw(apps_public_all)
+
+    # The shared public index is the default-view: no NSFW. Anonymous F-Droid
+    # clients and API keys for users without an opt-in fall through here.
     await _build_one(
-        storage, repo_config=repo_config, apps=apps_public, prefix=REPO_PUBLIC_PREFIX,
+        storage, repo_config=repo_config, apps=apps_public_sfw, prefix=REPO_PUBLIC_PREFIX,
     )
 
-    # One private index per owner that currently has a private published app.
-    # The index bundles that owner's private apps with the shared public set so
-    # the F-Droid client only ever sees apps the API key user is allowed to
-    # install.
-    current_owners = await _load_private_app_owners(db)
+    # Per-user indexes cover two divergences from the default public view:
+    #   1. The user owns a private app (only they can see it).
+    #   2. The user toggled ``show_nsfw=True`` (their public view is wider).
+    private_owners = await _load_private_app_owners(db)
+    nsfw_users = await _load_nsfw_users(db)
+    per_user_ids = {*private_owners, *nsfw_users}
+
     private_total = 0
-    for owner_id in current_owners:
-        owner_private = await _load_user_private_apps(db, owner_id)
-        merged = apps_public + owner_private
+    for user_id in per_user_ids:
+        show_nsfw = await _user_show_nsfw(db, user_id)
+        base_public = apps_public_all if show_nsfw else apps_public_sfw
+        owner_private = await _load_user_private_apps(db, user_id)
+        if not show_nsfw:
+            owner_private = _strip_nsfw(owner_private)
         await _build_one(
             storage,
             repo_config=repo_config,
-            apps=merged,
-            prefix=user_private_prefix(owner_id),
+            apps=base_public + owner_private,
+            prefix=user_private_prefix(user_id),
         )
         private_total += len(owner_private)
 
-    # Delete index files for owners that had one previously but no longer do.
+    # Delete index files for users that had a per-user index previously but no
+    # longer do (private apps removed AND nsfw toggle flipped off).
     try:
         previous = set(json.loads(repo_config.private_index_owner_ids or "[]"))
     except json.JSONDecodeError:
         previous = set()
-    current_set = {str(oid) for oid in current_owners}
+    current_set = {str(uid) for uid in per_user_ids}
     for stale in previous - current_set:
         await _delete_user_private_index(storage, stale)
 
@@ -295,8 +332,9 @@ async def rebuild_repo_index(db: AsyncSession) -> None:
     await db.flush()
     log.info(
         "repo index rebuilt",
-        public_apps=len(apps_public),
-        private_owners=len(current_owners),
+        public_apps=len(apps_public_sfw),
+        public_nsfw_hidden=len(apps_public_all) - len(apps_public_sfw),
+        per_user_indexes=len(per_user_ids),
         private_apps=private_total,
         version=repo_config.last_index_version,
     )

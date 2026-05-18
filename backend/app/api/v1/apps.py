@@ -52,7 +52,8 @@ async def list_apps(
     offset: int = Query(default=0, ge=0),
 ) -> list[AppRead]:
     """Browse apps. Anonymous callers only see PUBLIC + PUBLISHED apps; they
-    are rejected outright when the repo is not in public mode."""
+    are rejected outright when the repo is not in public mode. NSFW-flagged
+    apps are hidden unless the caller has opted in via ``show_nsfw``."""
     stmt = (
         select(App)
         .options(selectinload(App.categories), selectinload(App.apks))
@@ -73,6 +74,9 @@ async def list_apps(
 
     stmt = stmt.limit(min(limit, 200)).offset(offset)
     rows = (await db.execute(stmt)).scalars().unique().all()
+    show_nsfw = bool(user and user.show_nsfw)
+    if not show_nsfw:
+        rows = [a for a in rows if not a.is_nsfw]
     return [AppRead.model_validate(a) for a in rows]
 
 

@@ -184,6 +184,7 @@ export type CurrentUser = {
   is_active: boolean;
   last_login_at: string | null;
   created_at: string;
+  show_nsfw: boolean;
 };
 
 export const api = {
@@ -201,7 +202,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   me: () => apiFetch<CurrentUser>("/api/v1/me"),
-  updateMe: (payload: { full_name?: string }) =>
+  updateMe: (payload: { full_name?: string; show_nsfw?: boolean }) =>
     apiFetch<CurrentUser>("/api/v1/me", { method: "PATCH", body: JSON.stringify(payload) }),
   changePassword: (payload: { current_password: string; new_password: string }) =>
     apiFetch<void>("/api/v1/me/change-password", {
@@ -447,6 +448,7 @@ export type AppSummary = {
   created_at: string;
   updated_at: string;
   categories: Category[];
+  is_nsfw: boolean;
 };
 
 export type Screenshot = {

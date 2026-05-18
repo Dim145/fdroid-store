@@ -161,6 +161,7 @@ class AppRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     categories: list[CategoryRead] = Field(default_factory=list)
+    is_nsfw: bool = False
 
 
 class AppDetail(AppRead):

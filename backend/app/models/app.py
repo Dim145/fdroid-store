@@ -120,6 +120,19 @@ class App(Base, IdMixin, TimestampMixin):
         order_by="AppScreenshot.display_order",
     )
 
+    @property
+    def is_nsfw(self) -> bool:
+        """True if any APK is flagged NSFW.
+
+        F-Droid anti-feature labels are free-form strings, so we match case-
+        insensitively — admins typing "nsfw", "NSFW", or "NSfw" all count.
+        """
+        for apk in self.apks:
+            for flag in apk.anti_features or ():
+                if isinstance(flag, str) and flag.strip().lower() == "nsfw":
+                    return True
+        return False
+
 
 class Category(Base, IdMixin, TimestampMixin):
     __tablename__ = "categories"

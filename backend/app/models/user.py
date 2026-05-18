@@ -46,6 +46,12 @@ class User(Base, IdMixin, TimestampMixin):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When False (default), NSFW-flagged apps are hidden from this user's
+    # discovery surfaces — catalogue, search, public profiles, and the
+    # F-Droid index served to their API keys. The detail page still opens
+    # behind a confirmation interstitial. Flipping this triggers a reindex
+    # so the F-Droid client view stays in sync with the web one.
+    show_nsfw: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Set on every password change. The JWT decoder rejects access /
     # refresh tokens whose ``iat`` predates this value, so a stolen
     # token stops working the moment the victim rotates their password.

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Key, Trash2, User as UserIcon, X } from "lucide-react";
+import { Check, Copy, EyeOff, Key, Trash2, User as UserIcon, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AuthGuard } from "@/components/auth-guard";
@@ -17,6 +17,8 @@ import { formatDate } from "@/lib/utils";
 function AccountInner() {
   const { user, fetchMe } = useAuth();
   const [fullName, setFullName] = useState(user?.full_name || "");
+  const [showNsfw, setShowNsfw] = useState(user?.show_nsfw ?? false);
+  const [nsfwBusy, setNsfwBusy] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -30,6 +32,24 @@ function AccountInner() {
   const [newlyCreated, setNewlyCreated] = useState<string | null>(null);
 
   useEffect(() => setFullName(user?.full_name || ""), [user]);
+  useEffect(() => setShowNsfw(user?.show_nsfw ?? false), [user]);
+
+  async function toggleNsfw(next: boolean) {
+    setMsg(null); setErr(null);
+    setShowNsfw(next);
+    setNsfwBusy(true);
+    try {
+      await api.updateMe({ show_nsfw: next });
+      await fetchMe();
+      setMsg(next ? "NSFW content is now shown." : "NSFW content is now hidden.");
+    } catch (e) {
+      // Revert on failure so the UI doesn't lie about server state.
+      setShowNsfw(!next);
+      setErr(e instanceof Error ? e.message : "Could not update preference");
+    } finally {
+      setNsfwBusy(false);
+    }
+  }
 
   async function refreshKeys() {
     try { setKeys(await api.apiKeys.list()); }
@@ -111,9 +131,40 @@ function AccountInner() {
         </form>
       </Section>
 
+      {/* Content preferences */}
+      <Section
+        step="02"
+        title="Content"
+        subtitle="Control what shows up on the catalogue and in your F-Droid client."
+      >
+        <label className="flex cursor-pointer items-start gap-4 rounded-2xl border border-outline-soft bg-surface-2 p-4 transition-colors hover:border-outline">
+          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface text-ink-soft">
+            <EyeOff className="h-4 w-4" strokeWidth={2.2} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-ink">
+              Show NSFW apps
+            </span>
+            <span className="mt-0.5 block text-xs text-ink-mute">
+              When off, apps flagged with the F-Droid <span className="font-mono">NSFW</span>{" "}
+              anti-feature are hidden from the catalogue, search, and public
+              profiles. Direct links still open behind a confirmation screen.
+              Toggling rebuilds the F-Droid index served to your API keys.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 shrink-0 accent-primary"
+            checked={showNsfw}
+            disabled={nsfwBusy}
+            onChange={(e) => toggleNsfw(e.target.checked)}
+          />
+        </label>
+      </Section>
+
       {/* Password */}
       {user.auth_provider === "local" && (
-        <Section step="02" title="Password">
+        <Section step="03" title="Password">
           <form onSubmit={changePassword} className="grid gap-4 md:grid-cols-2">
             <Field label="Current password" htmlFor="cur">
               <Input id="cur" type="password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
@@ -128,7 +179,7 @@ function AccountInner() {
 
       {/* API keys */}
       <Section
-        step="03"
+        step="04"
         title="API keys"
         subtitle="Use them as the Basic-auth password in your F-Droid client to access private apps."
       >

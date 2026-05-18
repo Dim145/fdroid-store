@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert, UserCircle2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, EyeOff, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert, UserCircle2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -33,6 +33,10 @@ export default function AppDetailClient() {
   const [app, setApp] = useState<AppDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandDesc, setExpandDesc] = useState(false);
+  // NSFW interstitial: once consented for this navigation, stay open. Reset
+  // when ``pkg`` changes so jumping between apps re-asks.
+  const [nsfwAck, setNsfwAck] = useState(false);
+  useEffect(() => { setNsfwAck(false); }, [pkg]);
 
   useEffect(() => {
     if (!pkg) return;
@@ -82,6 +86,53 @@ export default function AppDetailClient() {
   for (let i = 0; i < app.name.length; i++) h = (h * 31 + app.name.charCodeAt(i)) | 0;
   const hue = Math.abs(h) % 360;
 
+  // Interstitial: NSFW apps need an explicit "Continue" tap unless the user
+  // has globally opted in via account settings. Owner + admin bypass it
+  // (they already see this app everywhere else).
+  const userOptedIn = !!user?.show_nsfw;
+  const isOwnerOrAdmin =
+    !!user && (user.role === "admin" || user.username === app.owner_username);
+  const nsfwGate = app.is_nsfw && !userOptedIn && !isOwnerOrAdmin && !nsfwAck;
+  if (nsfwGate) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-5 py-20 text-center">
+        <div
+          className="flex h-16 w-16 items-center justify-center rounded-pill"
+          style={{ background: `hsl(${hue} 70% 50% / 0.18)` }}
+        >
+          <EyeOff className="h-7 w-7 text-danger" strokeWidth={2} />
+        </div>
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-2 rounded-pill bg-danger-container px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-danger-on-container">
+            NSFW content
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink">
+            This app is flagged as adult content.
+          </h1>
+          <p className="mx-auto max-w-md text-sm text-ink-soft">
+            <span className="font-mono text-ink">{app.name}</span> is hidden
+            from the catalogue by default. Confirm you want to see it for this
+            session, or change your preference in{" "}
+            <Link href="/account" className="text-primary hover:underline">
+              account settings
+            </Link>
+            .
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Button variant="outlined" asChild>
+            <Link href="/apps">
+              <ArrowLeft className="h-4 w-4" /> Back to catalogue
+            </Link>
+          </Button>
+          <Button variant="filled" onClick={() => setNsfwAck(true)}>
+            Continue
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <article className="animate-fade-in">
       {/* ──── Hero ──── */}
@@ -111,6 +162,9 @@ export default function AppDetailClient() {
             <div className="flex flex-wrap items-center gap-2">
               {app.visibility === "private" && (
                 <Badge variant="accent">private</Badge>
+              )}
+              {app.is_nsfw && (
+                <Badge variant="destructive">NSFW</Badge>
               )}
               {app.categories.slice(0, 2).map((c) => (
                 <Badge key={c.id} variant="outline">{c.name}</Badge>

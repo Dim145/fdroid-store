@@ -20,10 +20,12 @@ class UserRead(BaseModel):
     is_active: bool
     last_login_at: datetime | None
     created_at: datetime
+    show_nsfw: bool = False
 
 
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, max_length=255)
+    show_nsfw: bool | None = None
 
 
 class AdminUserCreate(BaseModel):
