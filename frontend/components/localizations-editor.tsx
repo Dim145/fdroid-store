@@ -2,6 +2,7 @@
 
 import { Globe2, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +47,7 @@ type Props = {
  * the flag); deleting a draft is just removing it from state, with no API
  * call. Saved rows go through DELETE on the server when removed. */
 export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
+  const { t } = useTranslation();
   const [rows, setRows] = useState<Draft[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [customLocale, setCustomLocale] = useState("");
@@ -92,11 +94,11 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
 
   function addLocale(code: string) {
     if (usedLocales.has(code)) {
-      toast.error("Already added", `A ${code} translation already exists.`);
+      toast.error(t("myApps.edit.translations.alreadyAdded"), t("myApps.edit.translations.alreadyAddedBody", { code }));
       return;
     }
     if (!BCP47.test(code)) {
-      toast.error("Bad locale tag", "Use a BCP47 tag like 'fr-FR' or 'pt-BR'.");
+      toast.error(t("myApps.edit.translations.badTag"), t("myApps.edit.translations.badTagBody"));
       return;
     }
     setRows((prev) => [
@@ -132,8 +134,8 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
       !row.video.trim()
     ) {
       toast.error(
-        "Nothing to save",
-        "Fill in at least one of Title, Summary, Description or Video URL.",
+        t("myApps.edit.translations.nothingToSave"),
+        t("myApps.edit.translations.nothingToSaveBody"),
       );
       return;
     }
@@ -145,10 +147,10 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
         description: row.description.trim() || null,
         video: row.video.trim() || null,
       });
-      toast.success(`Saved ${localeLabel(row.locale).label}.`);
+      toast.success(t("myApps.edit.translations.savedToast", { label: localeLabel(row.locale).label }));
       await onSaved();
     } catch (e) {
-      toast.error("Save failed", e instanceof Error ? e.message : undefined);
+      toast.error(t("myApps.edit.translations.saveFailed"), e instanceof Error ? e.message : undefined);
     } finally {
       updateRow(row.locale, { saving: false });
     }
@@ -159,14 +161,14 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
       setRows((prev) => prev.filter((r) => r.locale !== row.locale));
       return;
     }
-    if (!confirm(`Remove the ${localeLabel(row.locale).label} translation?`)) return;
+    if (!confirm(t("myApps.edit.translations.removeConfirm", { label: localeLabel(row.locale).label }))) return;
     updateRow(row.locale, { saving: true });
     try {
       await api.apps.deleteLocalization(appId, row.locale);
-      toast.success(`Removed ${localeLabel(row.locale).label}.`);
+      toast.success(t("myApps.edit.translations.removedToast", { label: localeLabel(row.locale).label }));
       await onSaved();
     } catch (e) {
-      toast.error("Delete failed", e instanceof Error ? e.message : undefined);
+      toast.error(t("myApps.edit.translations.deleteFailed"), e instanceof Error ? e.message : undefined);
       updateRow(row.locale, { saving: false });
     }
   }
@@ -185,11 +187,10 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-ink-soft">
-          Override the listing for a specific language. The fields at the
-          top of the page (Title, Summary, Description) ship as your{" "}
-          <span className="font-mono">en-US</span> defaults. F-Droid clients
-          show whichever locale matches the device, falling back to the
-          defaults when no override exists.
+          <Trans
+            i18nKey="myApps.edit.translations.description"
+            components={{ code: <span className="font-mono" /> }}
+          />
         </p>
 
         <div ref={pickerRef} className="relative shrink-0">
@@ -200,17 +201,17 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
             onClick={() => setPickerOpen((o) => !o)}
             disabled={availableCommon.length === 0 && rows.length >= COMMON_LOCALES.length}
           >
-            <Plus className="h-4 w-4" /> Add translation
+            <Plus className="h-4 w-4" /> {t("myApps.edit.translations.addTranslation")}
           </Button>
           {pickerOpen && (
             <div className="absolute right-0 top-12 z-20 w-80 rounded-2xl border border-outline-soft bg-surface p-3 shadow-e3">
               <div className="mb-2 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
-                Pick a locale
+                {t("myApps.edit.translations.pickLocale")}
               </div>
               <div className="max-h-72 space-y-0.5 overflow-y-auto">
                 {availableCommon.length === 0 ? (
                   <p className="px-2 py-2 text-xs italic text-ink-mute">
-                    Every common locale is already on the app.
+                    {t("myApps.edit.translations.everyCovered")}
                   </p>
                 ) : (
                   availableCommon.map((l) => (
@@ -239,11 +240,11 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
               </div>
               <div className="mt-2 border-t border-outline-soft pt-2">
                 <div className="mb-1 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
-                  Other (BCP47)
+                  {t("myApps.edit.translations.other")}
                 </div>
                 <div className="flex gap-1.5 px-1">
                   <Input
-                    placeholder="e.g. zh-Hant"
+                    placeholder={t("myApps.edit.translations.otherPlaceholder")}
                     value={customLocale}
                     onChange={(e) => setCustomLocale(e.target.value)}
                     className="h-9"
@@ -255,7 +256,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                     onClick={() => addLocale(customLocale.trim())}
                     disabled={!customLocale.trim()}
                   >
-                    Add
+                    {t("myApps.edit.translations.addBtn")}
                   </Button>
                 </div>
               </div>
@@ -268,7 +269,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
         <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-outline-soft bg-surface-2/40 px-6 py-10 text-center">
           <Globe2 className="h-6 w-6 text-ink-mute" />
           <p className="text-sm text-ink-soft">
-            No translations yet — only your default fields will be served.
+            {t("myApps.edit.translations.noTranslations")}
           </p>
         </div>
       ) : (
@@ -299,7 +300,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                       </span>
                       {row.isDraft && (
                         <span className="rounded-pill bg-primary-container px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-on-container">
-                          Draft
+                          {t("myApps.edit.translations.draft")}
                         </span>
                       )}
                     </div>
@@ -321,21 +322,21 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                     disabled={row.saving}
                     className="text-danger hover:bg-danger-container hover:text-danger-on-container"
                   >
-                    <Trash2 className="h-3.5 w-3.5" /> Remove
+                    <Trash2 className="h-3.5 w-3.5" /> {t("myApps.edit.translations.remove")}
                   </Button>
                 </header>
 
                 <div className="grid gap-3 md:grid-cols-2">
-                  <FormField label="Title" htmlFor={`loc-name-${row.locale}`}>
+                  <FormField label={t("myApps.edit.translations.fields.title")} htmlFor={`loc-name-${row.locale}`}>
                     <Input
                       id={`loc-name-${row.locale}`}
                       value={row.name}
                       maxLength={255}
                       onChange={(e) => updateRow(row.locale, { name: e.target.value })}
-                      placeholder="(falls back to the default Title)"
+                      placeholder={t("myApps.edit.translations.fields.titlePlaceholder")}
                     />
                   </FormField>
-                  <FormField label="Video URL" htmlFor={`loc-video-${row.locale}`}>
+                  <FormField label={t("myApps.edit.translations.fields.video")} htmlFor={`loc-video-${row.locale}`}>
                     <Input
                       id={`loc-video-${row.locale}`}
                       type="url"
@@ -345,23 +346,23 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                       placeholder="https://…"
                     />
                   </FormField>
-                  <FormField label="Summary" htmlFor={`loc-summary-${row.locale}`} className="md:col-span-2">
+                  <FormField label={t("myApps.edit.translations.fields.summary")} htmlFor={`loc-summary-${row.locale}`} className="md:col-span-2">
                     <Input
                       id={`loc-summary-${row.locale}`}
                       value={row.summary}
                       maxLength={255}
                       onChange={(e) => updateRow(row.locale, { summary: e.target.value })}
-                      placeholder="(falls back to the default Summary)"
+                      placeholder={t("myApps.edit.translations.fields.summaryPlaceholder")}
                     />
                   </FormField>
-                  <FormField label="Description" htmlFor={`loc-desc-${row.locale}`} className="md:col-span-2">
+                  <FormField label={t("myApps.edit.translations.fields.description")} htmlFor={`loc-desc-${row.locale}`} className="md:col-span-2">
                     <textarea
                       id={`loc-desc-${row.locale}`}
                       value={row.description}
                       maxLength={20000}
                       onChange={(e) => updateRow(row.locale, { description: e.target.value })}
                       rows={5}
-                      placeholder="(falls back to the default Description)"
+                      placeholder={t("myApps.edit.translations.fields.descriptionPlaceholder")}
                       className="w-full rounded-xl border border-outline bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                     />
                   </FormField>
@@ -375,7 +376,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                     onClick={() => saveRow(row)}
                     disabled={row.saving || !dirty}
                   >
-                    {row.saving ? "Saving…" : row.isDraft ? "Save translation" : "Update"}
+                    {row.saving ? t("myApps.edit.translations.saving") : row.isDraft ? t("myApps.edit.translations.save") : t("myApps.edit.translations.update")}
                   </Button>
                 </div>
               </li>
