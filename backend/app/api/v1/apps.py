@@ -205,6 +205,11 @@ async def create_app_with_apk(
     tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
         await ensure_can_upload_apk(db, user, incoming_size_bytes=tmp_path.stat().st_size)
+        # Apply the same opt-in clamd scan as ``/apks/upload`` so the
+        # combined "create + upload" endpoint can't be used to bypass it.
+        from app.api.v1.apks import _maybe_scan_upload as _apks_scan
+
+        await _apks_scan(db, tmp_path=tmp_path)
         meta = await parse_or_400(tmp_path)
         pkg = (package_name or meta.package_name).strip()
         # Enforce the same package-name regex used on the JSON path; an

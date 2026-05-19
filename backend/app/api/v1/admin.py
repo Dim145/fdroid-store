@@ -515,6 +515,51 @@ async def admin_jobs(
     return await queue_snapshot()
 
 
+@router.get("/clamav/ping", response_model=dict)
+async def admin_clamav_ping(
+    _: Annotated[User, Depends(get_current_admin)],
+) -> dict:
+    """Send ``PING`` to clamd. Returns ``{ok: bool, configured: bool}``
+    so the admin UI can render a status pill next to the toggle."""
+    from app.core.config import settings as _settings
+    from app.services.clamav import ping
+
+    if not _settings.clamav_available:
+        return {"ok": False, "configured": False}
+    return {"ok": await ping(), "configured": True}
+
+
+@router.get("/scans", response_model=list[dict])
+async def admin_recent_scans(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+    limit: int = Query(default=50, ge=1, le=200),
+    only_infected: bool = Query(default=False),
+) -> list[dict]:
+    """Most recent ApkScan rows, newest first. The admin UI uses this to
+    surface signatures hit during the periodic rescan or rejected
+    uploads."""
+    from app.models.apk_scan import ApkScan, ApkScanStatus
+
+    stmt = select(ApkScan).order_by(desc(ApkScan.created_at)).limit(limit)
+    if only_infected:
+        stmt = stmt.where(ApkScan.status == ApkScanStatus.INFECTED)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "apk_id": str(r.apk_id),
+            "scanner": r.scanner,
+            "status": r.status.value,
+            "signatures": r.signatures,
+            "error": r.error,
+            "scanned_at": r.scanned_at.isoformat() if r.scanned_at else None,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+
 @router.post("/apks/rescan", response_model=dict)
 async def rescan_all_apks(
     db: DbSession,

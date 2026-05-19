@@ -7,10 +7,14 @@ from sqlalchemy import select
 from app.api.deps import DbSession
 from app.core.config import settings
 from app.core.rate_limit import limiter
+from app.core.security import create_mfa_challenge_token, decode_token
 from app.models.repo_config import RepoConfig
+from app.models.user import User, UserRole
 from app.schemas.auth import (
     AuthMethodsInfo,
     LoginRequest,
+    MfaChallenge,
+    MfaVerifyRequest,
     RefreshRequest,
     SignupRequest,
     TokenPair,
@@ -18,11 +22,14 @@ from app.schemas.auth import (
 from app.services.auth_service import (
     AuthError,
     authenticate_local,
+    issue_tokens_for_user,
     link_or_create_oidc_user,
     refresh_tokens,
     signup_local,
+    verify_local_credentials,
 )
 from app.services.oidc_service import claim_indicates_admin, get_oauth
+from app.services.totp import is_enrolled, verify_login as totp_verify_login
 
 router = APIRouter()
 
@@ -81,17 +88,88 @@ def _request_meta(request: Request) -> tuple[str | None, str | None]:
     return ip_hash, ua
 
 
-@router.post("/login", response_model=TokenPair)
+@router.post("/login")
 @limiter.limit("5/minute")
-async def login(request: Request, payload: LoginRequest, db: DbSession) -> TokenPair:
+async def login(request: Request, payload: LoginRequest, db: DbSession):
+    """Password step. Returns either a ``TokenPair`` (no MFA) or an
+    ``MfaChallenge`` the client passes to ``/auth/login/mfa`` alongside
+    the user's 6-digit code (or recovery code).
+
+    The MFA gate fires when:
+      * the user has confirmed TOTP enrolment, OR
+      * the user is an admin and ``RepoConfig.require_admin_2fa`` is on.
+
+    The latter case yields a challenge even without TOTP enrolled — the
+    SPA detects the unenrolled state from /me/totp/status and routes the
+    user through enrolment instead of accepting the challenge.
+    """
     if not settings.local_auth_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local auth disabled")
     try:
-        _, access, refresh = await authenticate_local(
-            db, payload.email, payload.password, request_meta=_request_meta(request)
-        )
+        user = await verify_local_credentials(db, payload.email, payload.password)
     except AuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    repo = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+    enrolled = await is_enrolled(db, user.id)
+    admin_must_mfa = (
+        repo is not None
+        and repo.require_admin_2fa
+        and user.role == UserRole.ADMIN
+    )
+    if enrolled or admin_must_mfa:
+        return MfaChallenge(
+            mfa_required=True,
+            mfa_token=create_mfa_challenge_token(str(user.id)),
+        )
+
+    access, refresh = await issue_tokens_for_user(
+        db, user, request_meta=_request_meta(request)
+    )
+    return _pair(access, refresh)
+
+
+@router.post("/login/mfa", response_model=TokenPair)
+@limiter.limit("10/minute")
+async def login_mfa(
+    request: Request,
+    payload: MfaVerifyRequest,
+    db: DbSession,
+) -> TokenPair:
+    """Second step of the MFA login flow. Accepts the challenge token from
+    /auth/login plus a 6-digit TOTP or 8-char recovery code."""
+    try:
+        claims = decode_token(payload.mfa_token)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid MFA challenge",
+        ) from exc
+    if claims.get("type") != "mfa_challenge":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not an MFA challenge token",
+        )
+    sub = claims.get("sub")
+    import uuid
+
+    try:
+        user_id = uuid.UUID(sub) if sub else None
+    except ValueError:
+        user_id = None
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid challenge")
+    user = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account unavailable")
+    ok = await totp_verify_login(db, user, code=payload.code)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code")
+    access, refresh = await issue_tokens_for_user(
+        db, user, request_meta=_request_meta(request)
+    )
     return _pair(access, refresh)
 
 

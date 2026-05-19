@@ -152,6 +152,40 @@ async def _revoke_refresh_chain(db: AsyncSession, jti: str) -> None:
     )
 
 
+async def verify_local_credentials(
+    db: AsyncSession,
+    email: str,
+    password: str,
+) -> User:
+    """Just check the password; no tokens minted yet. Used by the login
+    flow when MFA needs to gate the token issuance step."""
+    user = (
+        await db.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none()
+    if user is None or user.hashed_password is None:
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        raise AuthError("Invalid credentials")
+    if not user.is_active:
+        raise AuthError("Account disabled")
+    if not verify_password(password, user.hashed_password):
+        raise AuthError("Invalid credentials")
+    return user
+
+
+async def issue_tokens_for_user(
+    db: AsyncSession,
+    user: User,
+    *,
+    request_meta: tuple[str | None, str | None] | None = None,
+) -> tuple[str, str]:
+    """Mint an access+refresh pair for an already-authenticated user.
+    The MFA flow uses this after the second-factor check; the regular
+    login path goes through ``authenticate_local`` (which calls this
+    indirectly via ``_issue_token_pair``)."""
+    user.last_login_at = datetime.now(UTC)
+    return await _issue_token_pair(db, user, request_meta=request_meta)
+
+
 async def authenticate_local(
     db: AsyncSession,
     email: str,

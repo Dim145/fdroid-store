@@ -95,6 +95,19 @@ def create_refresh_token(subject: str, jti: str) -> str:
     )
 
 
+def create_mfa_challenge_token(subject: str, expires_minutes: int = 5) -> str:
+    """Short-lived token issued by /auth/login when the account has TOTP
+    enrolled. The client returns it alongside the 6-digit code to
+    /auth/login/mfa. The token is stateless: the only data we need to
+    re-bind the request to the user is ``sub``, plus the type discriminator
+    so it can't be replayed against /auth/refresh or /auth/login."""
+    return _create_token(
+        subject,
+        timedelta(minutes=expires_minutes),
+        "mfa_challenge",
+    )
+
+
 def decode_token(token: str) -> dict[str, Any]:
     """Decode + validate a JWT. Raises ``JWTError`` on failure."""
     return _jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
@@ -148,6 +161,7 @@ def _hash_api_secret(secret: str) -> str:
 __all__ = [
     "JWTError",
     "create_access_token",
+    "create_mfa_challenge_token",
     "create_refresh_token",
     "decode_token",
     "generate_api_key",

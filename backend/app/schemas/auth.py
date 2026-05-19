@@ -26,6 +26,22 @@ class TokenPair(BaseModel):
     expires_in: int  # seconds
 
 
+class MfaChallenge(BaseModel):
+    """Returned by /auth/login when the password check passed but the
+    account has TOTP enrolled. The client posts the matching 6-digit code
+    (or a recovery code) plus ``mfa_token`` to /auth/login/mfa to finish
+    the login."""
+
+    mfa_required: bool = True
+    mfa_token: str
+    expires_in: int = 300  # seconds — matches the token's exp
+
+
+class MfaVerifyRequest(BaseModel):
+    mfa_token: str
+    code: str = Field(min_length=4, max_length=20)
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 

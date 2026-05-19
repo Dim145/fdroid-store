@@ -86,6 +86,11 @@ class ApkInspect(BaseModel):
     permissions: list[str]
     native_code: list[str]
     has_icon: bool
+    # Heuristic anti-feature detection: ``{flag: [human label, …]}``. The
+    # frontend renders these as pre-selected chips that the uploader can
+    # toggle off if they're a false positive. Empty dict = no signatures
+    # hit (or scanning was skipped).
+    detected_anti_features: dict[str, list[str]] = {}
 
 
 class ScreenshotRead(BaseModel):

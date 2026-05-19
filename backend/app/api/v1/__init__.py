@@ -13,6 +13,7 @@ from app.api.v1 import (
     me,
     media,
     setup,
+    totp,
     users,
 )
 
@@ -22,6 +23,7 @@ api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(setup.router, prefix="/setup", tags=["setup"])
 api_router.include_router(me.router, prefix="/me", tags=["me"])
 api_router.include_router(api_keys.router, prefix="/me/api-keys", tags=["api-keys"])
+api_router.include_router(totp.router, prefix="/me/totp", tags=["totp"])
 # media must be registered BEFORE apps so that /apps/{id}/icon does not match
 # the apps router's catch-all /{app_ref} path parameter
 api_router.include_router(media.router, prefix="/apps", tags=["media"])

@@ -79,6 +79,41 @@ async def _apk_size_cap_bytes(db) -> int:
     return mb * 1024 * 1024
 
 
+async def _maybe_scan_upload(db, *, tmp_path) -> None:
+    """Run clamd against the uploaded APK if the operator opted in.
+
+    Three branches:
+      * env knob unset → no-op (feature disabled at deployment)
+      * admin toggled scan_on_upload off → no-op
+      * scanner returns INFECTED → 422 with the signature name, refuse
+        the upload before any DB write
+    A scanner *error* (unreachable, timeout) is treated as a hard fail —
+    blocking is safer than silently letting a maybe-malicious APK through
+    when the operator explicitly asked for synchronous scanning.
+    """
+    from app.core.config import settings as _settings
+
+    if not _settings.clamav_available:
+        return
+    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+    if config is None or not config.clamav_scan_on_upload:
+        return
+    from app.services.clamav import scan_path
+
+    result = await scan_path(tmp_path)
+    if result.clean:
+        return
+    if result.signature:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Malware detected: {result.signature}",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"Malware scanner unavailable: {result.error}",
+    )
+
+
 async def parse_or_400(path: Path) -> ApkMetadata:
     try:
         return await parse_apk(path)
@@ -245,6 +280,15 @@ async def inspect_apk(
     tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
         meta = await parse_or_400(tmp_path)
+        # Run the lightweight DEX/class-name scan to suggest anti-feature
+        # chips. Failures here are non-fatal — inspect just returns the
+        # metadata it has and an empty suggestions dict.
+        try:
+            from app.fdroid.anti_feature_scan import scan_apk, summarise
+
+            detected = summarise(scan_apk(tmp_path))
+        except Exception:  # noqa: BLE001
+            detected = {}
         return ApkInspect(
             package_name=meta.package_name,
             app_name=meta.app_name,
@@ -258,6 +302,7 @@ async def inspect_apk(
             permissions=meta.permissions,
             native_code=meta.native_code,
             has_icon=bool(meta.icon_data),
+            detected_anti_features=detected,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -295,6 +340,7 @@ async def upload_apk(
         size_bytes = tmp_path.stat().st_size
         await ensure_can_upload_apk(db, app.owner, incoming_size_bytes=size_bytes)
         meta = await parse_or_400(tmp_path)
+        await _maybe_scan_upload(db, tmp_path=tmp_path)
         apk = await attach_apk_to_app(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
         )
