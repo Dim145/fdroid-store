@@ -299,7 +299,8 @@ function Skeleton() {
 }
 
 function Spinner() {
+  const { t } = useTranslation();
   return (
-    <div className="h-7 w-7 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label="Loading" />
+    <div className="h-7 w-7 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label={t("common.loading")} />
   );
 }
