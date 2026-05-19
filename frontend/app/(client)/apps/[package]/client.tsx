@@ -4,6 +4,7 @@ import { ArrowLeft, ChevronDown, ChevronUp, EyeOff, ExternalLink, Globe, GitBran
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
@@ -23,6 +24,7 @@ import { localeLabel } from "@/lib/locales";
  * versions list, repo info footer.
  * ============================================================================ */
 export default function AppDetailClient() {
+  const { t } = useTranslation();
   // Static export bakes ``useParams`` to the placeholder used at build time
   // (``__dynamic``), so reading the real segment requires the live URL.
   const pathname = usePathname();
@@ -44,8 +46,8 @@ export default function AppDetailClient() {
     if (!pkg) return;
     api.apps.get(decodeURIComponent(pkg))
       .then(setApp)
-      .catch((e) => setError(e instanceof Error ? e.message : "Not found"));
-  }, [pkg]);
+      .catch((e) => setError(e instanceof Error ? e.message : t("appDetail.appNotFound")));
+  }, [pkg, t]);
 
   const published = useMemo(
     () =>
@@ -66,11 +68,11 @@ export default function AppDetailClient() {
   if (error) {
     return (
       <div className="flex flex-col items-center gap-3 py-24 text-center">
-        <div className="text-3xl font-bold tracking-tight">App not found</div>
+        <div className="text-3xl font-bold tracking-tight">{t("appDetail.appNotFound")}</div>
         <p className="text-ink-soft">{error}</p>
         <Button asChild variant="filled" className="mt-4">
           <Link href="/apps">
-            <ArrowLeft className="h-4 w-4" /> Back to catalogue
+            <ArrowLeft className="h-4 w-4" /> {t("profile.backToCatalogue")}
           </Link>
         </Button>
       </div>
@@ -106,29 +108,30 @@ export default function AppDetailClient() {
         </div>
         <div className="space-y-2">
           <div className="inline-flex items-center gap-2 rounded-pill bg-danger-container px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-danger-on-container">
-            NSFW content
+            {t("appDetail.nsfw.tagline")}
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-ink">
-            This app is flagged as adult content.
+            {t("appDetail.nsfw.title")}
           </h1>
           <p className="mx-auto max-w-md text-sm text-ink-soft">
-            <span className="font-mono text-ink">{app.name}</span> is hidden
-            from the catalogue by default. Confirm you want to see it for this
-            session, or change your preference in{" "}
-            <Link href="/account" className="text-primary hover:underline">
-              account settings
-            </Link>
-            .
+            <Trans
+              i18nKey="appDetail.nsfw.body"
+              values={{ name: app.name }}
+              components={{
+                bold: <span className="font-mono text-ink" />,
+                link: <Link href="/account" className="text-primary hover:underline" />,
+              }}
+            />
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Button variant="outlined" asChild>
             <Link href="/apps">
-              <ArrowLeft className="h-4 w-4" /> Back to catalogue
+              <ArrowLeft className="h-4 w-4" /> {t("appDetail.nsfw.backToCatalogue")}
             </Link>
           </Button>
           <Button variant="filled" onClick={() => setNsfwAck(true)}>
-            Continue
+            {t("appDetail.nsfw.continue")}
           </Button>
         </div>
       </div>
@@ -148,7 +151,7 @@ export default function AppDetailClient() {
           href="/apps"
           className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-ink-soft hover:text-ink"
         >
-          <ArrowLeft className="h-4 w-4" /> Back to apps
+          <ArrowLeft className="h-4 w-4" /> {t("appDetail.backToApps")}
         </Link>
 
         <div className="grid items-start gap-6 md:grid-cols-[auto_1fr_auto] md:gap-10">
@@ -166,7 +169,7 @@ export default function AppDetailClient() {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               {app.visibility === "private" && (
-                <Badge variant="accent">private</Badge>
+                <Badge variant="accent">{t("appCard.private")}</Badge>
               )}
               {app.categories.slice(0, 2).map((c) => (
                 <Badge key={c.id} variant="outline">{c.name}</Badge>
@@ -176,19 +179,19 @@ export default function AppDetailClient() {
               {app.name}
             </h1>
             <p className="mt-1 text-base text-ink-soft">
-              {app.author_name || "Self-hosted release"}
+              {app.author_name || t("appDetail.selfHostedRelease")}
             </p>
             <p className="mt-0.5 font-mono text-xs text-ink-mute">{app.package_name}</p>
 
             {/* Stats row */}
             <dl className="mt-5 grid max-w-md grid-cols-3 gap-4 border-t border-outline-soft pt-4 text-center">
-              <Stat label="Version" value={latest ? `v${latest.version_name}` : "—"} mono />
-              <Stat label="Size" value={latest ? formatBytes(latest.size_bytes) : "—"} mono />
+              <Stat label={t("appDetail.stats.version")} value={latest ? `v${latest.version_name}` : "—"} mono />
+              <Stat label={t("appDetail.stats.size")} value={latest ? formatBytes(latest.size_bytes) : "—"} mono />
               <Stat
-                label="Downloads"
+                label={t("appDetail.stats.downloads")}
                 value={formatCount(app.download_count)}
                 mono
-                title={`${app.download_count.toLocaleString()} total downloads`}
+                title={t("appDetail.totalDownloads", { count: app.download_count.toLocaleString() })}
               />
             </dl>
           </div>
@@ -222,7 +225,7 @@ export default function AppDetailClient() {
         {app.owner_username && (
           <div className="mt-6 flex items-center justify-end gap-1.5 text-xs text-ink-mute md:absolute md:bottom-4 md:right-6 md:mt-0">
             <UserCircle2 className="h-3.5 w-3.5" strokeWidth={2.2} />
-            Uploaded by{" "}
+            {t("appDetail.uploadedBy")}{" "}
             <Link
               href={`/u/${encodeURIComponent(app.owner_username)}`}
               className="font-mono font-semibold text-ink underline-offset-4 transition-colors hover:text-primary hover:underline"
@@ -248,7 +251,7 @@ export default function AppDetailClient() {
       {/* ──── Screenshots ──── */}
       {screenshots.length > 0 && (
         <section className="mt-10">
-          <h2 className="section-title mb-3">Screenshots</h2>
+          <h2 className="section-title mb-3">{t("appDetail.screenshots")}</h2>
           <div className="rail -mx-4 px-4 md:-mx-2 md:px-2">
             {screenshots.map((s) => {
               const url = mediaUrl(s.storage_key);
@@ -283,11 +286,11 @@ export default function AppDetailClient() {
           !!user?.preferred_locale && notes.locale !== user.preferred_locale;
         return (
           <section className="mt-10">
-            <h2 className="section-title mb-3">What&apos;s new</h2>
+            <h2 className="section-title mb-3">{t("appDetail.whatsNew")}</h2>
             <div className="surface p-6">
               <div className="flex flex-wrap items-baseline gap-3 border-b border-outline-soft pb-3">
                 <span className="text-xl font-bold tracking-tight text-ink">v{latest.version_name}</span>
-                <Badge variant="primary">latest</Badge>
+                <Badge variant="primary">{t("appDetail.latest")}</Badge>
                 {latest.published_at && (
                   <span className="text-xs text-ink-mute">
                     <Calendar className="mr-1 inline-block h-3 w-3" />
@@ -298,8 +301,8 @@ export default function AppDetailClient() {
                   className="ml-auto font-mono text-[10px] text-ink-mute"
                   title={
                     fellBack
-                      ? `No notes in ${localeLabel(user!.preferred_locale!).label} — showing ${localeLabel(notes.locale).label} instead.`
-                      : `Locale: ${localeLabel(notes.locale).label}`
+                      ? `${localeLabel(user!.preferred_locale!).label} → ${localeLabel(notes.locale).label}`
+                      : localeLabel(notes.locale).label
                   }
                 >
                   {notes.locale}
@@ -316,7 +319,7 @@ export default function AppDetailClient() {
       {/* ──── About + side specs ──── */}
       <section className="mt-10 grid gap-6 md:grid-cols-[1.6fr_1fr]">
         <div>
-          <h2 className="section-title mb-3">About this app</h2>
+          <h2 className="section-title mb-3">{t("appDetail.aboutThisApp")}</h2>
           <div className="surface p-6">
             {app.description ? (
               <>
@@ -336,41 +339,41 @@ export default function AppDetailClient() {
                     className="mt-2 px-0"
                   >
                     {expandDesc ? (
-                      <>Show less <ChevronUp className="h-3.5 w-3.5" /></>
+                      <>{t("common.showLess")} <ChevronUp className="h-3.5 w-3.5" /></>
                     ) : (
-                      <>Read more <ChevronDown className="h-3.5 w-3.5" /></>
+                      <>{t("common.showMore")} <ChevronDown className="h-3.5 w-3.5" /></>
                     )}
                   </Button>
                 )}
               </>
             ) : (
-              <p className="italic text-ink-mute">No description provided.</p>
+              <p className="italic text-ink-mute">{t("appDetail.noDescription")}</p>
             )}
           </div>
         </div>
 
         <aside>
-          <h2 className="section-title mb-3">Info</h2>
+          <h2 className="section-title mb-3">{t("appDetail.info")}</h2>
           <dl className="surface divide-y divide-outline-soft">
-            <SpecRow icon={<Globe className="h-4 w-4" />} label="Website" value={app.website} link={app.website} />
-            <SpecRow icon={<GitBranch className="h-4 w-4" />} label="Source" value={app.source_code} link={app.source_code} />
-            <SpecRow icon={<Bug className="h-4 w-4" />} label="Issues" value={app.issue_tracker} link={app.issue_tracker} />
-            <SpecRow icon={<Languages className="h-4 w-4" />} label="Translate" value={app.translation} link={app.translation} />
-            <SpecRow icon={<Mail className="h-4 w-4" />} label="Author" value={app.author_email} link={app.author_email ? `mailto:${app.author_email}` : null} />
-            <SpecRow label="License" value={app.license} />
-            <SpecRow label="Added" value={formatDate(app.created_at)} />
+            <SpecRow icon={<Globe className="h-4 w-4" />} label={t("appDetail.fields.website")} value={app.website} link={app.website} />
+            <SpecRow icon={<GitBranch className="h-4 w-4" />} label={t("appDetail.fields.source")} value={app.source_code} link={app.source_code} />
+            <SpecRow icon={<Bug className="h-4 w-4" />} label={t("appDetail.fields.issues")} value={app.issue_tracker} link={app.issue_tracker} />
+            <SpecRow icon={<Languages className="h-4 w-4" />} label={t("appDetail.fields.translate")} value={app.translation} link={app.translation} />
+            <SpecRow icon={<Mail className="h-4 w-4" />} label={t("appDetail.fields.author")} value={app.author_email} link={app.author_email ? `mailto:${app.author_email}` : null} />
+            <SpecRow label={t("appDetail.fields.license")} value={app.license} />
+            <SpecRow label={t("appDetail.fields.added")} value={formatDate(app.created_at)} />
           </dl>
           {(app.donate || app.liberapay || app.bitcoin || app.open_collective) && (
             <div className="surface mt-3 p-5">
               <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-wider text-ink-mute">
                 <HandHeart className="h-3.5 w-3.5" />
-                Support the developer
+                {t("appDetail.supportDeveloper")}
               </div>
               <div className="flex flex-wrap gap-2">
-                {app.donate && <FundingChip label="Donate" href={app.donate} />}
-                {app.liberapay && <FundingChip label="Liberapay" href={app.liberapay} />}
-                {app.open_collective && <FundingChip label="Open Collective" href={app.open_collective} />}
-                {app.bitcoin && <FundingChip label="Bitcoin" href={app.bitcoin.startsWith("bitcoin:") ? app.bitcoin : `bitcoin:${app.bitcoin}`} />}
+                {app.donate && <FundingChip label={t("appDetail.funding.donate")} href={app.donate} />}
+                {app.liberapay && <FundingChip label={t("appDetail.funding.liberapay")} href={app.liberapay} />}
+                {app.open_collective && <FundingChip label={t("appDetail.funding.openCollective")} href={app.open_collective} />}
+                {app.bitcoin && <FundingChip label={t("appDetail.funding.bitcoin")} href={app.bitcoin.startsWith("bitcoin:") ? app.bitcoin : `bitcoin:${app.bitcoin}`} />}
               </div>
             </div>
           )}
@@ -380,9 +383,9 @@ export default function AppDetailClient() {
       {/* ──── Permissions ──── */}
       {latest && (
         <section className="mt-10">
-          <h2 className="section-title mb-1">Permissions</h2>
+          <h2 className="section-title mb-1">{t("appDetail.permissions")}</h2>
           <p className="mb-3 text-sm text-ink-mute">
-            Requested by v{latest.version_name} ({latest.version_code})
+            {t("appDetail.permissionsForVersion", { name: latest.version_name, code: latest.version_code })}
           </p>
           <div className="surface p-6">
             <AppPermissions permissions={latest.permissions} />
@@ -393,11 +396,11 @@ export default function AppDetailClient() {
       {/* ──── Versions ──── */}
       <section className="mt-10">
         <h2 className="section-title mb-3">
-          {published.length} version{published.length === 1 ? "" : "s"}
+          {t("appDetail.versionsCount", { count: published.length })}
         </h2>
         <div className="surface overflow-hidden">
           {published.length === 0 ? (
-            <div className="px-6 py-10 text-center italic text-ink-mute">No published versions.</div>
+            <div className="px-6 py-10 text-center italic text-ink-mute">{t("appDetail.noPublishedVersions")}</div>
           ) : (
             <ul>
               {published.map((apk, i) => (
@@ -411,7 +414,7 @@ export default function AppDetailClient() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-lg font-semibold text-ink">v{apk.version_name}</span>
-                      {i === 0 && <Badge variant="primary">latest</Badge>}
+                      {i === 0 && <Badge variant="primary">{t("appDetail.latest")}</Badge>}
                     </div>
                     <div className="mt-0.5 text-xs text-ink-mute">
                       Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk ?? "?"}–{apk.target_sdk ?? "?"}

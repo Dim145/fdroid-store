@@ -2,6 +2,7 @@
 
 import { Check, Copy, EyeOff, Globe2, Key, Trash2, User as UserIcon, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { AuthGuard } from "@/components/auth-guard";
 import { RepoQrCode } from "@/components/repo-qr-code";
@@ -17,6 +18,7 @@ import { useAuth } from "@/lib/auth-store";
 import { cn, formatDate } from "@/lib/utils";
 
 function AccountInner() {
+  const { t } = useTranslation();
   const { user, fetchMe } = useAuth();
   const [fullName, setFullName] = useState(user?.full_name || "");
   const [showNsfw, setShowNsfw] = useState(user?.show_nsfw ?? false);
@@ -67,12 +69,12 @@ function AccountInner() {
       await fetchMe();
       setMsg(
         next
-          ? `Language set to ${localeLabel(next).label}.`
-          : "Language preference cleared.",
+          ? t("account.languagePicker.saved", { name: localeLabel(next).label })
+          : t("account.languagePicker.cleared"),
       );
     } catch (e) {
       setPreferredLocale(previous);
-      setErr(e instanceof Error ? e.message : "Could not update language");
+      setErr(e instanceof Error ? e.message : t("account.languagePicker.updateFailed"));
     } finally {
       setLocaleBusy(false);
     }
@@ -85,11 +87,11 @@ function AccountInner() {
     try {
       await api.updateMe({ show_nsfw: next });
       await fetchMe();
-      setMsg(next ? "NSFW content is now shown." : "NSFW content is now hidden.");
+      setMsg(next ? t("account.nsfwToggle.shown") : t("account.nsfwToggle.hidden"));
     } catch (e) {
       // Revert on failure so the UI doesn't lie about server state.
       setShowNsfw(!next);
-      setErr(e instanceof Error ? e.message : "Could not update preference");
+      setErr(e instanceof Error ? e.message : t("account.nsfwToggle.updateFailed"));
     } finally {
       setNsfwBusy(false);
     }
@@ -97,15 +99,15 @@ function AccountInner() {
 
   async function refreshKeys() {
     try { setKeys(await api.apiKeys.list()); }
-    catch (e) { setErr(e instanceof Error ? e.message : "Could not load keys"); }
+    catch (e) { setErr(e instanceof Error ? e.message : t("errors.loadFailed")); }
   }
-  useEffect(() => { refreshKeys(); }, []);
+  useEffect(() => { refreshKeys(); /* eslint-disable-next-line */ }, []);
 
   async function saveProfile(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null); setErr(null);
-    try { await api.updateMe({ full_name: fullName }); await fetchMe(); setMsg("Profile saved."); }
-    catch (e) { setErr(e instanceof Error ? e.message : "Save failed"); }
+    try { await api.updateMe({ full_name: fullName }); await fetchMe(); setMsg(t("account.saved")); }
+    catch (e) { setErr(e instanceof Error ? e.message : t("account.saveFailed")); }
   }
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
@@ -113,9 +115,9 @@ function AccountInner() {
     try {
       await api.changePassword({ current_password: currentPassword, new_password: newPassword });
       setCurrentPassword(""); setNewPassword("");
-      setMsg("Password changed.");
+      setMsg(t("account.passwordChanged"));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Change failed");
+      setErr(e instanceof Error ? e.message : t("account.saveFailed"));
     }
   }
   async function createKey(e: React.FormEvent) {
@@ -132,13 +134,13 @@ function AccountInner() {
       setKeyName("");
       await refreshKeys();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Create failed");
+      setErr(e instanceof Error ? e.message : t("account.apiKey.createFailed"));
     }
   }
   async function revokeKey(id: string) {
-    if (!confirm("Revoke this API key?")) return;
+    if (!confirm(t("account.apiKey.revokeConfirm"))) return;
     try { await api.apiKeys.revoke(id); await refreshKeys(); }
-    catch (e) { setErr(e instanceof Error ? e.message : "Revoke failed"); }
+    catch (e) { setErr(e instanceof Error ? e.message : t("account.apiKey.revokeFailed")); }
   }
 
   if (!user) return null;
@@ -156,7 +158,9 @@ function AccountInner() {
           <p className="font-mono text-xs text-ink-mute">{user.email}</p>
         </div>
         <div className="ml-auto">
-          <Badge variant={user.role === "admin" ? "primary" : "outline"}>{user.role}</Badge>
+          <Badge variant={user.role === "admin" ? "primary" : "outline"}>
+            {user.role === "admin" ? t("account.role.admin") : t("account.role.user")}
+          </Badge>
         </div>
       </header>
 
@@ -164,22 +168,22 @@ function AccountInner() {
       {err && <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{err}</p>}
 
       {/* Profile */}
-      <Section step="01" title="Profile">
+      <Section step="01" title={t("account.sections.profile")}>
         <form onSubmit={saveProfile} className="grid gap-4 md:grid-cols-2">
-          <Field label="Email" htmlFor="em"><Input id="em" value={user.email} disabled /></Field>
-          <Field label="Username" htmlFor="un"><Input id="un" value={user.username} disabled /></Field>
-          <Field label="Full name" htmlFor="fn" className="md:col-span-2">
+          <Field label={t("account.fields.email")} htmlFor="em"><Input id="em" value={user.email} disabled /></Field>
+          <Field label={t("account.fields.username")} htmlFor="un"><Input id="un" value={user.username} disabled /></Field>
+          <Field label={t("account.fields.fullName")} htmlFor="fn" className="md:col-span-2">
             <Input id="fn" value={fullName} onChange={(e) => setFullName(e.target.value)} />
           </Field>
-          <div className="md:col-span-2"><Button type="submit" variant="filled">Save profile</Button></div>
+          <div className="md:col-span-2"><Button type="submit" variant="filled">{t("account.saveProfile")}</Button></div>
         </form>
       </Section>
 
       {/* Content preferences */}
       <Section
         step="02"
-        title="Content"
-        subtitle="Control what shows up on the catalogue and in your F-Droid client."
+        title={t("account.sections.content")}
+        subtitle={t("account.sections.contentSubtitle")}
       >
         <div className="flex items-center gap-4 rounded-2xl border border-outline-soft bg-surface-2 p-4 transition-colors hover:border-outline">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface text-ink-soft">
@@ -187,18 +191,18 @@ function AccountInner() {
           </span>
           <label htmlFor="nsfw-switch" className="min-w-0 flex-1 cursor-pointer">
             <span className="block text-sm font-semibold text-ink">
-              Show NSFW apps
+              {t("account.nsfwToggle.title")}
             </span>
             <span className="mt-0.5 block text-xs text-ink-mute">
-              When off, apps flagged with the F-Droid <span className="font-mono">NSFW</span>{" "}
-              anti-feature are hidden from the catalogue, search, and public
-              profiles. Direct links still open behind a confirmation screen.
-              Toggling rebuilds the F-Droid index served to your API keys.
+              <Trans
+                i18nKey="account.nsfwToggle.body"
+                components={{ code: <span className="font-mono" /> }}
+              />
             </span>
           </label>
           <Switch
             id="nsfw-switch"
-            ariaLabel="Show NSFW apps"
+            ariaLabel={t("account.nsfwToggle.title")}
             checked={showNsfw}
             disabled={nsfwBusy}
             onCheckedChange={toggleNsfw}
@@ -209,8 +213,8 @@ function AccountInner() {
       {/* Language */}
       <Section
         step="03"
-        title="Language"
-        subtitle="Pick the language the catalogue will use when an app has a matching translation."
+        title={t("account.sections.language")}
+        subtitle={t("account.sections.languageSubtitle")}
       >
         <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-outline-soft bg-surface-2 p-4 transition-colors hover:border-outline">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface text-ink-soft">
@@ -218,12 +222,10 @@ function AccountInner() {
           </span>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-ink">
-              Preferred language
+              {t("account.languagePicker.title")}
             </div>
             <p className="mt-0.5 text-xs text-ink-mute">
-              When an app ships a translation matching your language, you'll
-              see its name, summary and description in that language. Anything
-              else falls back to the publisher's defaults.
+              {t("account.languagePicker.body")}
             </p>
           </div>
           <div ref={localePickerRef} className="relative shrink-0">
@@ -236,7 +238,7 @@ function AccountInner() {
               className="min-w-[10rem] justify-between"
             >
               <span className="truncate">
-                {preferredLocale ? localeLabel(preferredLocale).label : "Default (en-US)"}
+                {preferredLocale ? localeLabel(preferredLocale).label : t("account.languagePicker.defaultLabel")}
               </span>
               <span className="ml-2 font-mono text-[10px] text-ink-mute">
                 {preferredLocale ?? "—"}
@@ -245,14 +247,14 @@ function AccountInner() {
             {localePickerOpen && (
               <div className="absolute right-0 top-12 z-20 w-80 rounded-2xl border border-outline-soft bg-surface p-3 shadow-e3">
                 <div className="mb-2 flex items-center justify-between gap-2 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
-                  <span>Pick a language</span>
+                  <span>{t("account.languagePicker.pickPrompt")}</span>
                   {preferredLocale && (
                     <button
                       type="button"
                       onClick={() => setLocale(null)}
                       className="font-mono normal-case tracking-tight text-ink-mute hover:text-danger"
                     >
-                      reset to default
+                      {t("account.languagePicker.reset")}
                     </button>
                   )}
                 </div>
@@ -290,11 +292,11 @@ function AccountInner() {
                 </div>
                 <div className="mt-2 border-t border-outline-soft pt-2">
                   <div className="mb-1 px-1 text-[10px] uppercase tracking-wider text-ink-mute">
-                    Other (BCP47)
+                    {t("account.languagePicker.other")}
                   </div>
                   <div className="flex gap-1.5 px-1">
                     <Input
-                      placeholder="e.g. zh-Hant"
+                      placeholder={t("account.languagePicker.otherPlaceholder")}
                       value={customLocale}
                       onChange={(e) => setCustomLocale(e.target.value)}
                       className="h-9"
@@ -306,7 +308,7 @@ function AccountInner() {
                       onClick={() => setLocale(customLocale.trim() || null)}
                       disabled={!customLocale.trim()}
                     >
-                      Use
+                      {t("account.languagePicker.use")}
                     </Button>
                   </div>
                 </div>
@@ -318,15 +320,15 @@ function AccountInner() {
 
       {/* Password */}
       {user.auth_provider === "local" && (
-        <Section step="04" title="Password">
+        <Section step="04" title={t("account.sections.password")}>
           <form onSubmit={changePassword} className="grid gap-4 md:grid-cols-2">
-            <Field label="Current password" htmlFor="cur">
+            <Field label={t("account.fields.currentPassword")} htmlFor="cur">
               <Input id="cur" type="password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
             </Field>
-            <Field label="New password" htmlFor="new">
+            <Field label={t("account.fields.newPassword")} htmlFor="new">
               <Input id="new" type="password" minLength={8} required value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
             </Field>
-            <div className="md:col-span-2"><Button type="submit" variant="filled">Change password</Button></div>
+            <div className="md:col-span-2"><Button type="submit" variant="filled">{t("account.changePassword")}</Button></div>
           </form>
         </Section>
       )}
@@ -334,8 +336,8 @@ function AccountInner() {
       {/* API keys */}
       <Section
         step="05"
-        title="API keys"
-        subtitle="Use them as the Basic-auth password in your F-Droid client to access private apps."
+        title={t("account.sections.apiKeys")}
+        subtitle={t("account.sections.apiKeysSubtitle")}
       >
         {newlyCreated && (
           <NewKeyCelebration
@@ -345,31 +347,31 @@ function AccountInner() {
           />
         )}
         <form onSubmit={createKey} className="grid gap-3 md:grid-cols-[2fr_1fr_auto]">
-          <Field label="Label" htmlFor="kn">
-            <Input id="kn" required placeholder="e.g. My phone" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
+          <Field label={t("account.apiKey.label")} htmlFor="kn">
+            <Input id="kn" required placeholder={t("account.apiKey.labelPlaceholder")} value={keyName} onChange={(e) => setKeyName(e.target.value)} />
           </Field>
-          <Field label="Expires (days)" htmlFor="exp">
-            <Input id="exp" type="number" min={1} placeholder="never" value={expiresIn} onChange={(e) => setExpiresIn(e.target.value)} />
+          <Field label={t("account.apiKey.expiresDays")} htmlFor="exp">
+            <Input id="exp" type="number" min={1} placeholder={t("account.apiKey.neverExpires")} value={expiresIn} onChange={(e) => setExpiresIn(e.target.value)} />
           </Field>
           <div className="flex items-end">
             <Button type="submit" variant="filled" className="w-full">
-              <Key className="h-4 w-4" /> Create key
+              <Key className="h-4 w-4" /> {t("account.apiKey.create")}
             </Button>
           </div>
           <div className="md:col-span-3 flex flex-wrap items-center gap-4 text-sm text-ink-soft">
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={canDownloadPrivate} onChange={(e) => setCanDownloadPrivate(e.target.checked)} />
-              Can download private apps
+              {t("account.apiKey.canDownloadPrivate")}
             </label>
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={canManageApps} onChange={(e) => setCanManageApps(e.target.checked)} />
-              Can manage apps (API)
+              {t("account.apiKey.canManageApps")}
             </label>
           </div>
         </form>
 
         <ul className="mt-6 space-y-2">
-          {keys.length === 0 && <li className="rounded-xl border border-dashed border-outline px-4 py-8 text-center italic text-ink-mute">No API keys yet.</li>}
+          {keys.length === 0 && <li className="rounded-xl border border-dashed border-outline px-4 py-8 text-center italic text-ink-mute">{t("account.apiKey.noKeys")}</li>}
           {keys.map((k) => (
             <li key={k.id} className="surface flex flex-wrap items-center gap-3 p-4">
               <div className="flex h-10 w-10 items-center justify-center rounded-pill bg-surface-2">
@@ -380,19 +382,19 @@ function AccountInner() {
                 <div className="font-mono text-[11px] text-ink-mute">fdr_{k.prefix}_…</div>
               </div>
               <div className="flex flex-wrap items-center gap-1">
-                {k.can_download_private && <Badge variant="outline">private dl</Badge>}
-                {k.can_manage_apps && <Badge variant="outline">manage</Badge>}
+                {k.can_download_private && <Badge variant="outline">{t("account.apiKey.privateDl")}</Badge>}
+                {k.can_manage_apps && <Badge variant="outline">{t("account.apiKey.manage")}</Badge>}
                 {k.revoked_at
-                  ? <Badge variant="destructive">revoked</Badge>
-                  : <Badge variant="primary">active</Badge>}
+                  ? <Badge variant="destructive">{t("account.apiKey.revoked")}</Badge>
+                  : <Badge variant="primary">{t("account.apiKey.active")}</Badge>}
               </div>
               <div className="hidden text-right text-xs text-ink-mute md:block">
-                <div>used <span className="font-mono">{formatDate(k.last_used_at)}</span></div>
-                <div>expires <span className="font-mono">{formatDate(k.expires_at)}</span></div>
+                <div>{t("account.apiKey.used")} <span className="font-mono">{formatDate(k.last_used_at)}</span></div>
+                <div>{t("account.apiKey.expires")} <span className="font-mono">{formatDate(k.expires_at)}</span></div>
               </div>
               {!k.revoked_at && (
                 <Button size="sm" variant="outlined" onClick={() => revokeKey(k.id)}>
-                  <Trash2 className="h-3.5 w-3.5" /> Revoke
+                  <Trash2 className="h-3.5 w-3.5" /> {t("account.apiKey.revoke")}
                 </Button>
               )}
             </li>
@@ -419,6 +421,7 @@ function NewKeyCelebration({
   username: string;
   onDismiss: () => void;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   async function copyKey() {
@@ -429,8 +432,8 @@ function NewKeyCelebration({
   }
   useEffect(() => {
     if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 1800);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setCopied(false), 1800);
+    return () => clearTimeout(timer);
   }, [copied]);
 
   // The Basic-auth URL the QR encodes — same scheme the QR uses, so
@@ -456,7 +459,7 @@ function NewKeyCelebration({
       <button
         type="button"
         onClick={onDismiss}
-        aria-label="Dismiss"
+        aria-label={t("common.close")}
         className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-pill text-ink-mute transition-colors hover:bg-surface-2 hover:text-ink"
       >
         <X className="h-4 w-4" />
@@ -464,14 +467,13 @@ function NewKeyCelebration({
 
       <div className="relative flex flex-col gap-2">
         <div className="inline-flex w-fit items-center gap-2 rounded-pill bg-primary-container px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-primary-on-container">
-          ★ New API key — shown once
+          {t("account.apiKey.newKey")}
         </div>
         <h3 className="text-xl font-bold tracking-tight text-ink">
-          Add this repo to your F-Droid client now.
+          {t("account.apiKey.newKeyTitle")}
         </h3>
         <p className="text-sm text-ink-soft">
-          Scan the QR with your phone — credentials are embedded so private
-          apps are unlocked automatically. The key won&apos;t be shown again.
+          {t("account.apiKey.newKeyBody")}
         </p>
       </div>
 
@@ -484,12 +486,11 @@ function NewKeyCelebration({
         />
 
         <div className="space-y-3 text-sm">
-          <Credential label="Full key" value={secret} mono onCopy={copyKey} copied={copied} />
-          <Credential label="Username" value={username} mono />
-          <Credential label="Encoded URL" value={authUrl} mono small />
+          <Credential label={t("account.apiKey.fullKey")} value={secret} mono onCopy={copyKey} copied={copied} />
+          <Credential label={t("account.apiKey.username")} value={username} mono />
+          <Credential label={t("account.apiKey.encodedUrl")} value={authUrl} mono small />
           <p className="text-xs text-ink-mute">
-            In F-Droid the username can be anything; this one matches your
-            account so revoking it is easier to track.
+            {t("account.apiKey.usernameNote")}
           </p>
         </div>
       </div>
@@ -540,7 +541,7 @@ function Credential({
           variant="tonal"
           size="icon-sm"
           onClick={onCopy ?? fallbackCopy}
-          aria-label={`Copy ${label}`}
+          aria-label={label}
         >
           {visibleCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         </Button>
