@@ -28,6 +28,34 @@ services:
       timeout: 3s
       retries: 10
 
+  # Optional ClamAV scanner. The official image bundles ``freshclam``
+  # (signature updater) and ``clamd`` (the daemon) in one container. On a
+  # cold start, freshclam downloads ~250 MB of definitions; that's why
+  # ``clamav_db`` is persisted across restarts and the healthcheck has a
+  # generous ``start_period``.
+  #
+  # Opt-in: this service only runs when the ``clamav`` compose profile is
+  # active (``docker compose --profile clamav up -d``). When it's off, the
+  # backend's CLAMAV_HOST is unset and the feature stays disabled. The
+  # admin UI surfaces the toggles only after the env var is present, so
+  # forgetting to enable the profile won't break uploads.
+  clamav:
+    profiles: ["clamav"]
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    volumes:
+      - clamav_db:/var/lib/clamav
+    healthcheck:
+      # The image ships ``clamdcheck.sh`` which talks the clamd PING
+      # protocol on /run/clamav/clamd.sock and returns 0 on PONG.
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      # Definitions take 3-5 min to download on first launch; clamd won't
+      # accept connections until that completes.
+      start_period: 5m
+      retries: 5
+
   backend:
     image: ghcr.io/dim145/fdroid-store-backend:latest
     build:
@@ -38,6 +66,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
       REDIS_URL: redis://redis:6379/0
+      # ClamAV is opt-in: defaults to empty (feature off). To enable, set
+      # CLAMAV_HOST=clamav in .env and bring the stack up with
+      # ``docker compose --profile clamav up -d`` so the scanner container
+      # is actually scheduled.
+      CLAMAV_HOST: ${CLAMAV_HOST:-}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+      CLAMAV_MAX_STREAM_MB: ${CLAMAV_MAX_STREAM_MB:-100}
     # Lock the image down at runtime. ``read_only`` makes the entire root
     # filesystem immutable; the few paths the app legitimately writes to
     # are explicitly enumerated below as tmpfs (ephemeral, sized) or named
@@ -77,6 +112,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
       REDIS_URL: redis://redis:6379/0
+      # ClamAV is opt-in: defaults to empty (feature off). To enable, set
+      # CLAMAV_HOST=clamav in .env and bring the stack up with
+      # ``docker compose --profile clamav up -d`` so the scanner container
+      # is actually scheduled.
+      CLAMAV_HOST: ${CLAMAV_HOST:-}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+      CLAMAV_MAX_STREAM_MB: ${CLAMAV_MAX_STREAM_MB:-100}
     command: ["python", "-m", "arq", "app.workers.tasks.WorkerSettings"]
     read_only: true
     security_opt:
@@ -138,3 +180,6 @@ volumes:
   redis_data:
   storage_data:
   keystore_data:
+  # Persisted across restarts so freshclam doesn't re-download the full
+  # signature DB every time the container starts.
+  clamav_db:
