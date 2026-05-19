@@ -154,4 +154,7 @@ class WorkerSettings:
     # need a high concurrency.
     max_jobs = 2
     job_timeout = 600
-    keep_result = 30
+    # Keep finished-job results in Redis for 24h so the admin "Recent runs"
+    # page survives restarts and idle periods. 30s (the prior value) made
+    # the history vanish almost immediately after every run.
+    keep_result = 86400
