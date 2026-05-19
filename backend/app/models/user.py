@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, String
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -60,6 +60,14 @@ class User(Base, IdMixin, TimestampMixin):
     # refresh tokens whose ``iat`` predates this value, so a stolen
     # token stops working the moment the victim rotates their password.
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Per-user quota overrides. NULL = fall back to ``RepoConfig.default_*``
+    # (which itself can be NULL = unlimited). Stored on the user row so an
+    # admin can grant a generous individual cap without changing the repo
+    # default for everyone.
+    quota_max_apps: Mapped[int | None] = mapped_column(Integer)
+    quota_max_storage_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    quota_max_apks_per_month: Mapped[int | None] = mapped_column(Integer)
 
     # relationships
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")

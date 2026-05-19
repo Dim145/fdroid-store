@@ -29,6 +29,18 @@ class RepoConfigRead(BaseModel):
     registration_policy: RegistrationPolicy
     mirrors: list[str] = []
     upload_max_apk_mb: int = 200
+    # Repo-wide default quotas. NULL = unlimited (no cap). A per-user
+    # override on ``User.quota_*`` wins over the default.
+    default_quota_max_apps: int | None = None
+    default_quota_max_storage_bytes: int | None = None
+    default_quota_max_apks_per_month: int | None = None
+    # ClamAV scanner toggles. ``clamav_available`` is read off the env on
+    # the backend and only true when ``FDROID_CLAMAV_HOST`` is set — the
+    # frontend uses it to gate the admin toggles.
+    clamav_available: bool = False
+    clamav_scan_on_upload: bool = False
+    clamav_scan_periodic: bool = False
+    require_admin_2fa: bool = False
 
 
 class RepoConfigUpdate(BaseModel):
@@ -43,6 +55,19 @@ class RepoConfigUpdate(BaseModel):
     # F-Droid use; anything outside that range is almost certainly a
     # mis-configuration.
     upload_max_apk_mb: int | None = Field(default=None, ge=5, le=2000)
+    # Repo-wide quota defaults — same null-vs-reset semantics as the
+    # per-user fields on AdminUserUpdate.
+    default_quota_max_apps: int | None = Field(default=None, ge=0)
+    default_quota_max_storage_bytes: int | None = Field(default=None, ge=0)
+    default_quota_max_apks_per_month: int | None = Field(default=None, ge=0)
+    quota_reset_apps: bool = False
+    quota_reset_storage_bytes: bool = False
+    quota_reset_apks_per_month: bool = False
+    # ClamAV runtime toggles. Ignored when the env knob isn't set; the
+    # admin endpoint rejects them with a 400.
+    clamav_scan_on_upload: bool | None = None
+    clamav_scan_periodic: bool | None = None
+    require_admin_2fa: bool | None = None
 
 
 class SetupStatus(BaseModel):

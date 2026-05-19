@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -60,6 +60,35 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
     # has been built at ``repo/private/u_<id>/...``. Lets the rebuild clean up
     # stale per-user indexes when their owner no longer has private apps.
     private_index_owner_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+
+    # Repo-wide default quotas. NULL = unlimited. A user's quota_* column
+    # overrides the corresponding default; if both are NULL the action is
+    # unlimited for that user.
+    default_quota_max_apps: Mapped[int | None] = mapped_column(Integer)
+    default_quota_max_storage_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    default_quota_max_apks_per_month: Mapped[int | None] = mapped_column(Integer)
+
+    # Optional malware scanner. The feature is only enabled when
+    # ``FDROID_CLAMAV_HOST`` is set in the env (the backend reads that at
+    # import time). The three columns below let an admin toggle the modes
+    # at runtime without restarting:
+    #   ``clamav_scan_on_upload`` — scan synchronously inside the upload
+    #     request, fail the request on INFECTED.
+    #   ``clamav_scan_periodic`` — the worker re-scans every PUBLISHED apk
+    #     on a recurring schedule (catches signature updates).
+    clamav_scan_on_upload: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    clamav_scan_periodic: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
+    # When True, accounts with the ADMIN role MUST have a confirmed TOTP
+    # enrolment to log in. Existing admins without 2FA stay logged out at
+    # the post-password step until they enrol via the recovery flow.
+    require_admin_2fa: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     @property
     def mirrors(self) -> list[str]:

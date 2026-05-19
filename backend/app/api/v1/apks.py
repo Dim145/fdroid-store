@@ -280,11 +280,20 @@ async def upload_apk(
     ).scalar_one_or_none()
     if app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
-    if app.owner_id != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    from app.services.app_permissions import assert_can_manage_app
+    await assert_can_manage_app(db, user, app)
+
+    from app.services.quotas import ensure_can_upload_apk
 
     tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
+        # ``app.owner`` (loaded above) is the quota subject — not the
+        # uploader. A co-maintainer using their own session must not be
+        # blocked by their own quota when the owner still has headroom,
+        # and conversely they can't use their quota to bypass a strict
+        # owner cap.
+        size_bytes = tmp_path.stat().st_size
+        await ensure_can_upload_apk(db, app.owner, incoming_size_bytes=size_bytes)
         meta = await parse_or_400(tmp_path)
         apk = await attach_apk_to_app(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
@@ -317,8 +326,8 @@ async def update_apk(
     ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
-    if apk.app.owner_id != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    from app.services.app_permissions import assert_can_manage_app
+    await assert_can_manage_app(db, user, apk.app)
 
     # Distinguish "not provided" (don't touch) from "explicitly null/empty"
     # (clear it). Pydantic ``model_fields_set`` only contains keys the
@@ -424,8 +433,8 @@ async def delete_apk(
     ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
-    if apk.app.owner_id != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    from app.services.app_permissions import assert_can_manage_app
+    await assert_can_manage_app(db, user, apk.app)
 
     storage = get_storage()
     try:

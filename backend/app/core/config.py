@@ -94,6 +94,18 @@ class Settings(BaseSettings):
     # trusted proxy in front — otherwise a client can spoof their IP.
     trust_forwarded_headers: bool = True
 
+    # ----- ClamAV (optional malware scanning) -------------------------------
+    # When set, the backend exposes the "Malware scanning" section in the
+    # admin panel and the worker is allowed to run periodic rescans. The
+    # value is the ``host:port`` of a clamd-protocol server reachable from
+    # both the backend and the worker containers. Empty → feature disabled.
+    clamav_host: str | None = None
+    clamav_port: int = 3310
+    # Hard limit on the bytes the scanner will read before bailing. clamd's
+    # default StreamMaxLength is 25 MB; we mirror that here so a 200 MB APK
+    # doesn't hang the scanner thread.
+    clamav_max_stream_mb: int = 100
+
     # ----- Misc ---------------------------------------------------------------
     log_level: str = "INFO"
     environment: Literal["development", "production", "test"] = "development"
@@ -121,6 +133,12 @@ class Settings(BaseSettings):
     @property
     def local_auth_enabled(self) -> bool:
         return "local" in self.auth_methods_list
+
+    @property
+    def clamav_available(self) -> bool:
+        """True when an operator has wired a clamd endpoint in. Drives the
+        admin UI toggle and gates the scan code paths."""
+        return bool(self.clamav_host)
 
     @field_validator("secret_key")
     @classmethod

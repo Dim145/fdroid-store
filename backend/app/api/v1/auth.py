@@ -62,13 +62,34 @@ def _pair(access: str, refresh: str) -> TokenPair:
     )
 
 
+def _request_meta(request: Request) -> tuple[str | None, str | None]:
+    """Extract (ip_hash, user_agent) for the session row.
+
+    The IP is read from ``X-Forwarded-For`` (first hop only) when present,
+    falling back to the socket peer. We hash it on the way in — the raw
+    address is never persisted.
+    """
+    import hashlib
+
+    fwd = request.headers.get("x-forwarded-for")
+    ip = fwd.split(",", 1)[0].strip() if fwd else (
+        request.client.host if request.client else None
+    )
+    ip_hash = hashlib.sha256(ip.encode("utf-8")).hexdigest() if ip else None
+    ua = request.headers.get("user-agent")
+    ua = ua[:255] if ua else None
+    return ip_hash, ua
+
+
 @router.post("/login", response_model=TokenPair)
 @limiter.limit("5/minute")
 async def login(request: Request, payload: LoginRequest, db: DbSession) -> TokenPair:
     if not settings.local_auth_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local auth disabled")
     try:
-        _, access, refresh = await authenticate_local(db, payload.email, payload.password)
+        _, access, refresh = await authenticate_local(
+            db, payload.email, payload.password, request_meta=_request_meta(request)
+        )
     except AuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return _pair(access, refresh)
@@ -87,6 +108,7 @@ async def signup(request: Request, payload: SignupRequest, db: DbSession) -> Tok
             password=payload.password,
             full_name=payload.full_name,
             invite_code=payload.invite_code,
+            request_meta=_request_meta(request),
         )
     except AuthError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -97,7 +119,9 @@ async def signup(request: Request, payload: SignupRequest, db: DbSession) -> Tok
 @limiter.limit("20/minute")
 async def refresh(request: Request, payload: RefreshRequest, db: DbSession) -> TokenPair:
     try:
-        _, access, refresh_tok = await refresh_tokens(db, payload.refresh_token)
+        _, access, refresh_tok = await refresh_tokens(
+            db, payload.refresh_token, request_meta=_request_meta(request)
+        )
     except AuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return _pair(access, refresh_tok)
@@ -187,6 +211,7 @@ async def oidc_callback(request: Request, db: DbSession):
             full_name=full_name,
             is_admin=claim_indicates_admin(userinfo),
             invite_code=invite_code,
+            request_meta=_request_meta(request),
         )
     except AuthError as exc:
         # Bounce the user back to /login with the reason in a query param.

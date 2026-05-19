@@ -65,6 +65,19 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS promo_graphic_path VARCHAR(512)",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS tv_banner_path VARCHAR(512)",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS suggested_version_is_manual BOOLEAN NOT NULL DEFAULT FALSE",
+            # v0.14 — per-user quota overrides (NULL = fall back to repo default).
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_max_apps INTEGER",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_max_storage_bytes BIGINT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_max_apks_per_month INTEGER",
+            # v0.14 — repo-wide default quotas (NULL = unlimited).
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS default_quota_max_apps INTEGER",
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS default_quota_max_storage_bytes BIGINT",
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS default_quota_max_apks_per_month INTEGER",
+            # v0.14 — optional ClamAV malware scanning toggles.
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS clamav_scan_on_upload BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS clamav_scan_periodic BOOLEAN NOT NULL DEFAULT FALSE",
+            # v0.14 — require 2FA for the admin role.
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS require_admin_2fa BOOLEAN NOT NULL DEFAULT FALSE",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

@@ -22,6 +22,11 @@ class UserRead(BaseModel):
     created_at: datetime
     show_nsfw: bool = False
     preferred_locale: str | None = None
+    # Per-user quota overrides — NULL means "fall back to the repo default".
+    # Admins surface these in the user-edit drawer.
+    quota_max_apps: int | None = None
+    quota_max_storage_bytes: int | None = None
+    quota_max_apks_per_month: int | None = None
 
 
 # BCP47-ish locale tag — keep tight enough to reject obvious garbage but
@@ -52,3 +57,15 @@ class AdminUserUpdate(BaseModel):
     role: UserRole | None = None
     is_active: bool | None = None
     new_password: str | None = Field(default=None, min_length=8, max_length=128)
+    # Admin-only quota override knobs. ``None`` on the field = don't change;
+    # the caller sends an explicit ``0`` or a JSON ``null`` (the latter
+    # resets to "fall back to repo default") via a separate flag below.
+    quota_max_apps: int | None = Field(default=None, ge=0)
+    quota_max_storage_bytes: int | None = Field(default=None, ge=0)
+    quota_max_apks_per_month: int | None = Field(default=None, ge=0)
+    # When True for a given dimension, the corresponding column is cleared
+    # back to NULL (= follow repo default). Lets the admin UI distinguish
+    # "no change" from "reset" without overloading None.
+    quota_reset_apps: bool = False
+    quota_reset_storage_bytes: bool = False
+    quota_reset_apks_per_month: bool = False

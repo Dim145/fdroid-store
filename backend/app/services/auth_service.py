@@ -46,6 +46,7 @@ async def _issue_token_pair(
     user: User,
     *,
     parent_jti: str | None = None,
+    request_meta: tuple[str | None, str | None] | None = None,
 ) -> tuple[str, str]:
     """Mint a new (access, refresh) pair and persist the refresh-token row.
 
@@ -53,7 +54,14 @@ async def _issue_token_pair(
     on rotation, None on a fresh login). The DB row is the source of
     truth: only a row whose ``used_at IS NULL`` and ``revoked_at IS NULL``
     is still redeemable.
+
+    A login (``parent_jti is None``) also creates a ``UserSession`` row;
+    a rotation updates the existing session's ``jti`` and ``last_seen_at``
+    so the account page shows fresh activity timestamps without inflating
+    the session count.
     """
+    from app.models.user_session import UserSession
+
     extra = {"role": user.role.value, "username": user.username}
     access = create_access_token(str(user.id), extra=extra)
     refresh_jti = secrets.token_urlsafe(16)
@@ -66,6 +74,43 @@ async def _issue_token_pair(
             expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
         )
     )
+
+    ip_hash, user_agent = request_meta or (None, None)
+    now = datetime.now(UTC)
+    if parent_jti is None:
+        # Fresh login → new session row.
+        db.add(
+            UserSession(
+                user_id=user.id,
+                jti=refresh_jti,
+                ip_hash=ip_hash,
+                user_agent=user_agent,
+                last_seen_at=now,
+            )
+        )
+    else:
+        # Rotation → advance the existing session pointer. If we can't find
+        # the row (manual revoke, schema migration, etc.) we silently create
+        # a fresh one rather than dropping the rotation.
+        session = (
+            await db.execute(
+                select(UserSession).where(UserSession.jti == parent_jti)
+            )
+        ).scalar_one_or_none()
+        if session is not None:
+            session.jti = refresh_jti
+            session.last_seen_at = now
+        else:
+            db.add(
+                UserSession(
+                    user_id=user.id,
+                    jti=refresh_jti,
+                    ip_hash=ip_hash,
+                    user_agent=user_agent,
+                    last_seen_at=now,
+                )
+            )
+
     await db.flush()
     return access, refresh
 
@@ -107,7 +152,13 @@ async def _revoke_refresh_chain(db: AsyncSession, jti: str) -> None:
     )
 
 
-async def authenticate_local(db: AsyncSession, email: str, password: str) -> tuple[User, str, str]:
+async def authenticate_local(
+    db: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    request_meta: tuple[str | None, str | None] | None = None,
+) -> tuple[User, str, str]:
     user = (
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
@@ -124,7 +175,7 @@ async def authenticate_local(db: AsyncSession, email: str, password: str) -> tup
         raise AuthError("Invalid credentials")
 
     user.last_login_at = datetime.now(UTC)
-    access, refresh = await _issue_token_pair(db, user)
+    access, refresh = await _issue_token_pair(db, user, request_meta=request_meta)
     return user, access, refresh
 
 
@@ -136,6 +187,7 @@ async def signup_local(
     password: str,
     full_name: str | None = None,
     invite_code: str | None = None,
+    request_meta: tuple[str | None, str | None] | None = None,
 ) -> tuple[User, str, str]:
     # The env-level allow_signup is the master switch — if an operator pinned
     # it off, no DB policy can override that.
@@ -195,11 +247,16 @@ async def signup_local(
         if result.rowcount == 0:
             raise AuthError("Invite code has already been used or has expired")
         await db.flush()
-    access, refresh = await _issue_token_pair(db, user)
+    access, refresh = await _issue_token_pair(db, user, request_meta=request_meta)
     return user, access, refresh
 
 
-async def refresh_tokens(db: AsyncSession, refresh_token: str) -> tuple[User, str, str]:
+async def refresh_tokens(
+    db: AsyncSession,
+    refresh_token: str,
+    *,
+    request_meta: tuple[str | None, str | None] | None = None,
+) -> tuple[User, str, str]:
     """Exchange a refresh token for a fresh access + refresh pair.
 
     Implements rotation + reuse detection per RFC 9700 §2.2.2:
@@ -266,7 +323,9 @@ async def refresh_tokens(db: AsyncSession, refresh_token: str) -> tuple[User, st
         await db.commit()
         raise AuthError("Refresh token re-use detected; session revoked")
 
-    access, refresh = await _issue_token_pair(db, user, parent_jti=jti)
+    access, refresh = await _issue_token_pair(
+        db, user, parent_jti=jti, request_meta=request_meta
+    )
     return user, access, refresh
 
 
@@ -274,8 +333,13 @@ async def revoke_all_refresh_tokens(db: AsyncSession, user_id: uuid.UUID) -> Non
     """Mark every outstanding refresh token of ``user_id`` revoked.
 
     Called when the password changes (or an admin disables the account) so
-    a leaked refresh token stops working before its 30-day expiry.
+    a leaked refresh token stops working before its 30-day expiry. Also
+    revokes the matching ``UserSession`` rows so the account page reflects
+    the new state.
     """
+    from app.models.user_session import UserSession
+
+    now = datetime.now(UTC)
     await db.execute(
         update(RefreshToken)
         .where(
@@ -283,7 +347,15 @@ async def revoke_all_refresh_tokens(db: AsyncSession, user_id: uuid.UUID) -> Non
             RefreshToken.revoked_at.is_(None),
             RefreshToken.used_at.is_(None),
         )
-        .values(revoked_at=datetime.now(UTC))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(UserSession)
+        .where(
+            UserSession.user_id == user_id,
+            UserSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
     )
 
 
@@ -296,6 +368,7 @@ async def link_or_create_oidc_user(
     full_name: str | None,
     is_admin: bool,
     invite_code: str | None = None,
+    request_meta: tuple[str | None, str | None] | None = None,
 ) -> tuple[User, str, str]:
     """Find or create a user from an OIDC ID-token. ``subject`` is the IdP's sub claim.
 
@@ -379,5 +452,5 @@ async def link_or_create_oidc_user(
         invite.used_at = datetime.now(UTC)
         invite.used_by_user_id = user.id
         await db.flush()
-    access, refresh = await _issue_token_pair(db, user)
+    access, refresh = await _issue_token_pair(db, user, request_meta=request_meta)
     return user, access, refresh

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user
@@ -13,9 +13,12 @@ from app.core.security import hash_password, verify_password
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App
 from app.models.audit import DownloadEvent
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.schemas.app import AppRead
 from app.schemas.auth import ChangePasswordRequest
+from app.schemas.user_session import UserSessionRead
 from app.services.auth_service import revoke_all_refresh_tokens
 from app.schemas.user import UserRead, UserUpdate
 
@@ -208,15 +211,130 @@ async def my_apps(
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
 ) -> list[AppRead]:
+    """Apps the user can manage: those they own + those they co-maintain.
+
+    A union query: owner_id matches OR there exists a collaborator row
+    for this user. Deduplicated client-side via ``unique()``.
+    """
+    from sqlalchemy import or_
     from sqlalchemy.orm import selectinload
 
     from app.models.app import App
+    from app.models.app_collaborator import AppCollaborator
 
+    collab_app_ids = (
+        select(AppCollaborator.app_id).where(AppCollaborator.user_id == user.id)
+    )
     stmt = (
         select(App)
         .options(selectinload(App.categories), selectinload(App.apks))
-        .where(App.owner_id == user.id)
+        .where(or_(App.owner_id == user.id, App.id.in_(collab_app_ids)))
         .order_by(App.created_at.desc())
     )
     rows = (await db.execute(stmt)).scalars().unique().all()
     return [AppRead.model_validate(a) for a in rows]
+
+
+# --------------------------------------------------------------------------
+# Sessions
+# --------------------------------------------------------------------------
+@router.get("/sessions", response_model=list[UserSessionRead])
+async def list_my_sessions(
+    user: Annotated[User, Depends(get_current_user)],
+    db: DbSession,
+) -> list[UserSessionRead]:
+    """All sessions for the calling user, newest first. Includes revoked
+    rows so the UI can show "ended 5 minutes ago"; the frontend hides them
+    behind a toggle."""
+    rows = (
+        await db.execute(
+            select(UserSession)
+            .where(UserSession.user_id == user.id)
+            .order_by(desc(UserSession.last_seen_at))
+        )
+    ).scalars().all()
+    return [UserSessionRead.model_validate(r) for r in rows]
+
+
+async def _revoke_session_chain(
+    db,
+    *,
+    session: UserSession,
+) -> None:
+    """Revoke a session + its refresh-token chain in one go."""
+    now = datetime.now(UTC)
+    if session.revoked_at is None:
+        session.revoked_at = now
+    # The session.jti points at the live refresh token; mark every refresh
+    # row tied to it (and its descendants in the family) revoked.
+    await db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.jti == session.jti,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
+async def revoke_my_session(
+    session_id: uuid_module.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: DbSession,
+) -> None:
+    """Revoke one session of the calling user.
+
+    Revoking the session you're currently using is allowed; the next API
+    call that needs to refresh will fail and the SPA will redirect to
+    /login. We never enforce "you can't revoke yourself" — UI can't reliably
+    detect the current session anyway (the access JWT carries no session
+    id), and "boot myself out everywhere" is a legitimate user action."""
+    session = (
+        await db.execute(
+            select(UserSession).where(
+                UserSession.id == session_id,
+                UserSession.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    await _revoke_session_chain(db, session=session)
+
+
+@router.delete(
+    "/sessions",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
+async def revoke_all_my_sessions(
+    user: Annotated[User, Depends(get_current_user)],
+    db: DbSession,
+) -> None:
+    """Burn every session of the calling user. Equivalent to "log out
+    everywhere". The next request from any of those sessions will be
+    refused on its next refresh attempt."""
+    await revoke_all_refresh_tokens(db, user.id)
+
+
+# --------------------------------------------------------------------------
+# Quotas
+# --------------------------------------------------------------------------
+@router.get("/quotas")
+async def my_quota_usage(
+    user: Annotated[User, Depends(get_current_user)],
+    db: DbSession,
+) -> dict:
+    """Per-dimension usage + cap for the calling user. Admins see their own
+    row's caps (always None) for completeness, even though the enforcement
+    layer skips them."""
+    from app.services.quotas import usage_summary
+
+    return await usage_summary(db, user)

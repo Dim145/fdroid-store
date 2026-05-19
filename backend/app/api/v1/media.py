@@ -47,6 +47,12 @@ _DEFAULT_FG_LOCALE = "en-US"
 
 
 async def _load_owned_app(db, app_id: uuid.UUID, user: User) -> App:
+    """Despite the name, this helper accepts co-maintainers too — image
+    uploads are part of "managing the listing" and collaborators have
+    full rights on that. Renaming the function would touch a lot of
+    callers, so the doc note here is the contract."""
+    from app.services.app_permissions import assert_can_manage_app
+
     app = (
         await db.execute(
             select(App)
@@ -56,8 +62,7 @@ async def _load_owned_app(db, app_id: uuid.UUID, user: User) -> App:
     ).scalar_one_or_none()
     if app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
-    if app.owner_id != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    await assert_can_manage_app(db, user, app)
     return app
 
 

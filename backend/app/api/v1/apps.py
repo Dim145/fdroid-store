@@ -199,8 +199,12 @@ async def create_app_with_apk(
     source_code = _check_url(source_code, "source_code")
     issue_tracker = _check_url(issue_tracker, "issue_tracker")
 
+    from app.services.quotas import ensure_can_create_app, ensure_can_upload_apk
+
+    await ensure_can_create_app(db, user)
     tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
+        await ensure_can_upload_apk(db, user, incoming_size_bytes=tmp_path.stat().st_size)
         meta = await parse_or_400(tmp_path)
         pkg = (package_name or meta.package_name).strip()
         # Enforce the same package-name regex used on the JSON path; an
@@ -274,12 +278,41 @@ async def create_app_with_apk(
         tmp_path.unlink(missing_ok=True)
 
 
+@router.post("/import-metadata")
+async def import_metadata(
+    payload: dict,
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    """Parse a pasted ``metadata.yml`` (fdroiddata upstream format) and
+    return a flat dict the New App page can use to prefill its fields.
+
+    Body: ``{"yaml": "<the raw metadata.yml content>"}``.
+
+    Returns the parsed dict — no DB writes. The user is responsible for
+    reviewing the prefilled values before submitting the actual create
+    request. We don't try to match category names against the local
+    taxonomy here (the UI does that with its loaded category list).
+    """
+    from app.services.metadata_import import parse_metadata_yaml
+
+    raw = payload.get("yaml") if isinstance(payload, dict) else None
+    if not isinstance(raw, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Body must be {\"yaml\": \"...\"}",
+        )
+    return parse_metadata_yaml(raw)
+
+
 @router.post("", response_model=AppRead, status_code=status.HTTP_201_CREATED)
 async def create_app(
     payload: AppCreate,
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
 ) -> AppRead:
+    from app.services.quotas import ensure_can_create_app
+
+    await ensure_can_create_app(db, user)
     existing = (
         await db.execute(select(App).where(App.package_name == payload.package_name))
     ).scalar_one_or_none()
@@ -373,9 +406,17 @@ async def update_app(
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
 ) -> AppRead:
+    from app.services.app_permissions import assert_can_manage_app, is_owner_or_admin
+
     app = await _load_app_or_404(db, str(app_id))
-    if app.owner_id != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    await assert_can_manage_app(db, user, app)
+    # Visibility flips are owner-only — co-maintainers shouldn't be able to
+    # unpublish a public app or expose a private one.
+    if payload.visibility is not None and not is_owner_or_admin(user, app):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner can change visibility",
+        )
 
     if payload.name is not None:
         app.name = payload.name
@@ -470,9 +511,12 @@ async def delete_app(
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
 ) -> None:
+    from app.services.app_permissions import assert_owner_or_admin
+
     app = await _load_app_or_404(db, str(app_id))
-    if app.owner_id != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    # Delete is owner-only — co-maintainers must never be able to wipe an
+    # app they don't own. Admins still bypass.
+    assert_owner_or_admin(user, app)
     await db.delete(app)
     await db.flush()
 
@@ -489,9 +533,14 @@ _LOCALE_RE = re.compile(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,4})?$")
 
 
 async def _require_owner_or_admin(db, app_id: uuid.UUID, user: User) -> App:
+    """Despite the historical name, this now accepts co-maintainers too —
+    the helper is used by listing-edit endpoints (localizations,
+    screenshots, banners) where collaborators have full rights.
+    """
+    from app.services.app_permissions import assert_can_manage_app
+
     app = await _load_app_or_404(db, str(app_id))
-    if app.owner_id != user.id and user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    await assert_can_manage_app(db, user, app)
     return app
 
 

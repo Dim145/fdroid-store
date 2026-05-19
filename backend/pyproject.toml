@@ -49,6 +49,14 @@ dependencies = [
     # fine for single-instance deployments, and the docs show a Redis
     # back-end if we ever scale out workers.
     "slowapi>=0.1.9",
+    # Parsing pasted upstream metadata.yml (fdroiddata format) on the
+    # New App page. SafeLoader only, no arbitrary type instantiation.
+    "PyYAML>=6.0",
+    # TOTP (RFC 6238) two-factor authentication.
+    "pyotp>=2.9",
+    # QR code rendering for the TOTP enrolment screen. Tiny pure-Python
+    # dep, no native bindings.
+    "qrcode[pil]>=8.0",
 ]
 
 [project.optional-dependencies]

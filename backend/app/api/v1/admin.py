@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import aliased, selectinload
 
@@ -16,14 +16,17 @@ from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, Category
 from app.models.audit import DownloadEvent
+from app.models.audit_log import AuditLog
 from app.models.invite_code import InviteCode
 from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
 from app.schemas.app import AppAdminUpdate, AppRead
+from app.schemas.audit_log import AuditLogPage, AuditLogRead
 from app.schemas.invite import InviteCodeCreate, InviteCodeRead
 from app.schemas.repo import RepoConfigRead, RepoConfigUpdate
 from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserRead
+from app.services.audit import write_event
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
 
@@ -98,11 +101,14 @@ async def update_user(
     user_id: uuid.UUID,
     payload: AdminUserUpdate,
     db: DbSession,
-    _: Annotated[User, Depends(get_current_admin)],
+    request: Request,
+    admin: Annotated[User, Depends(get_current_admin)],
 ) -> UserRead:
     target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    before_role = target.role
+    before_active = target.is_active
     # Refuse the change if it would leave the repo with zero active admins
     # — there's no in-app recovery from that state (CWE-840).
     if await _would_orphan_admins(
@@ -122,6 +128,19 @@ async def update_user(
         target.role = payload.role
     if payload.is_active is not None:
         target.is_active = payload.is_active
+    # Quota overrides — set, leave alone, or reset to NULL.
+    if payload.quota_reset_apps:
+        target.quota_max_apps = None
+    elif payload.quota_max_apps is not None:
+        target.quota_max_apps = payload.quota_max_apps
+    if payload.quota_reset_storage_bytes:
+        target.quota_max_storage_bytes = None
+    elif payload.quota_max_storage_bytes is not None:
+        target.quota_max_storage_bytes = payload.quota_max_storage_bytes
+    if payload.quota_reset_apks_per_month:
+        target.quota_max_apks_per_month = None
+    elif payload.quota_max_apks_per_month is not None:
+        target.quota_max_apks_per_month = payload.quota_max_apks_per_month
     if payload.new_password:
         target.hashed_password = hash_password(payload.new_password)
         # Bump password_changed_at so every outstanding access / refresh
@@ -138,6 +157,24 @@ async def update_user(
 
         await revoke_all_refresh_tokens(db, target.id)
         target.password_changed_at = datetime.now(UTC)
+    diff: dict[str, object] = {}
+    if payload.role is not None and payload.role != before_role:
+        diff["role"] = {"from": before_role.value, "to": payload.role.value}
+    if payload.is_active is not None and payload.is_active != before_active:
+        diff["is_active"] = {"from": before_active, "to": payload.is_active}
+    if payload.new_password:
+        diff["password_reset"] = True
+    if diff:
+        await write_event(
+            db,
+            action="user.updated",
+            actor=admin,
+            target_type="user",
+            target_id=target.id,
+            summary=f"updated {target.username}",
+            payload=diff,
+            request=request,
+        )
     await db.flush()
     return UserRead.model_validate(target)
 
@@ -146,6 +183,7 @@ async def update_user(
 async def delete_user(
     user_id: uuid.UUID,
     db: DbSession,
+    request: Request,
     admin: Annotated[User, Depends(get_current_admin)],
 ) -> None:
     if user_id == admin.id:
@@ -158,6 +196,16 @@ async def delete_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Refusing delete: this would leave the repo without an active admin",
         )
+    await write_event(
+        db,
+        action="user.deleted",
+        actor=admin,
+        target_type="user",
+        target_id=target.id,
+        summary=f"deleted {target.username}",
+        payload={"username": target.username, "email": target.email},
+        request=request,
+    )
     await db.delete(target)
     await db.flush()
 
@@ -189,7 +237,8 @@ async def admin_update_app(
     app_id: uuid.UUID,
     payload: AppAdminUpdate,
     db: DbSession,
-    _: Annotated[User, Depends(get_current_admin)],
+    request: Request,
+    admin: Annotated[User, Depends(get_current_admin)],
 ) -> AppRead:
     app = (
         await db.execute(
@@ -200,6 +249,8 @@ async def admin_update_app(
     ).scalar_one_or_none()
     if app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+    before_visibility = app.visibility.value
+    before_status = app.status.value
 
     # Apply user-facing fields
     for f in (
@@ -229,6 +280,22 @@ async def admin_update_app(
             ).scalars().all()
         )
         app.categories = cats
+    diff: dict[str, object] = {}
+    if payload.visibility is not None and payload.visibility.value != before_visibility:
+        diff["visibility"] = {"from": before_visibility, "to": payload.visibility.value}
+    if payload.status is not None and payload.status.value != before_status:
+        diff["status"] = {"from": before_status, "to": payload.status.value}
+    if diff:
+        await write_event(
+            db,
+            action="app.updated",
+            actor=admin,
+            target_type="app",
+            target_id=app.id,
+            summary=f"updated {app.package_name}",
+            payload=diff,
+            request=request,
+        )
     await db.flush()
     await enqueue_reindex()
     return AppRead.model_validate(app)
@@ -301,7 +368,8 @@ async def admin_reject_apk(
 async def admin_delete_apk(
     apk_id: uuid.UUID,
     db: DbSession,
-    _: Annotated[User, Depends(get_current_admin)],
+    request: Request,
+    admin: Annotated[User, Depends(get_current_admin)],
 ) -> None:
     apk = (await db.execute(select(Apk).where(Apk.id == apk_id))).scalar_one_or_none()
     if apk is None:
@@ -311,6 +379,19 @@ async def admin_delete_apk(
         await storage.delete(apk.storage_key)
     except Exception:  # noqa: BLE001
         pass
+    await write_event(
+        db,
+        action="apk.deleted",
+        actor=admin,
+        target_type="apk",
+        target_id=apk.id,
+        summary=f"deleted {apk.package_name} v{apk.version_name} ({apk.version_code})",
+        payload={
+            "package_name": apk.package_name,
+            "version_code": apk.version_code,
+        },
+        request=request,
+    )
     await db.delete(apk)
     await db.flush()
     await enqueue_reindex()
@@ -319,20 +400,32 @@ async def admin_delete_apk(
 # --------------------------------------------------------------------------
 # Repo config + reindex
 # --------------------------------------------------------------------------
+def _serialize_repo_config(config: RepoConfig) -> RepoConfigRead:
+    """Build a RepoConfigRead off the ORM row + the static
+    ``settings.clamav_available`` flag (which comes from the env, not the
+    DB)."""
+    from app.core.config import settings as _settings
+
+    data = RepoConfigRead.model_validate(config).model_dump()
+    data["clamav_available"] = _settings.clamav_available
+    return RepoConfigRead(**data)
+
+
 @router.get("/repo", response_model=RepoConfigRead)
 async def get_repo_config(
     db: DbSession,
     _: Annotated[User, Depends(get_current_admin)],
 ) -> RepoConfigRead:
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one()
-    return RepoConfigRead.model_validate(config)
+    return _serialize_repo_config(config)
 
 
 @router.patch("/repo", response_model=RepoConfigRead)
 async def update_repo_config(
     payload: RepoConfigUpdate,
     db: DbSession,
-    _: Annotated[User, Depends(get_current_admin)],
+    request: Request,
+    admin: Annotated[User, Depends(get_current_admin)],
 ) -> RepoConfigRead:
     import json as _json
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one()
@@ -355,12 +448,51 @@ async def update_repo_config(
         config.registration_policy = payload.registration_policy
     if payload.upload_max_apk_mb is not None:
         config.upload_max_apk_mb = payload.upload_max_apk_mb
+    # Quota defaults — same set/leave/reset triad as the per-user knobs.
+    if payload.quota_reset_apps:
+        config.default_quota_max_apps = None
+    elif payload.default_quota_max_apps is not None:
+        config.default_quota_max_apps = payload.default_quota_max_apps
+    if payload.quota_reset_storage_bytes:
+        config.default_quota_max_storage_bytes = None
+    elif payload.default_quota_max_storage_bytes is not None:
+        config.default_quota_max_storage_bytes = payload.default_quota_max_storage_bytes
+    if payload.quota_reset_apks_per_month:
+        config.default_quota_max_apks_per_month = None
+    elif payload.default_quota_max_apks_per_month is not None:
+        config.default_quota_max_apks_per_month = payload.default_quota_max_apks_per_month
+    # ClamAV toggles — reject when the env knob isn't set, so admins don't
+    # accidentally enable a scanner with nowhere to dial.
+    if payload.clamav_scan_on_upload is not None or payload.clamav_scan_periodic is not None:
+        from app.core.config import settings as _settings
+
+        if not _settings.clamav_available:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ClamAV is not configured (set FDROID_CLAMAV_HOST to enable)",
+            )
+        if payload.clamav_scan_on_upload is not None:
+            config.clamav_scan_on_upload = payload.clamav_scan_on_upload
+        if payload.clamav_scan_periodic is not None:
+            config.clamav_scan_periodic = payload.clamav_scan_periodic
+    if payload.require_admin_2fa is not None:
+        config.require_admin_2fa = payload.require_admin_2fa
+    await write_event(
+        db,
+        action="repo.config_updated",
+        actor=admin,
+        target_type="repo_config",
+        target_id=config.id,
+        summary="repo config updated",
+        payload=payload.model_dump(exclude_none=True),
+        request=request,
+    )
     await db.flush()
     # Only re-render the index when something baked into the JSON actually
     # changed — toggling registration policy doesn't move any bytes.
     if repo_index_dirty:
         await enqueue_reindex()
-    return RepoConfigRead.model_validate(config)
+    return _serialize_repo_config(config)
 
 
 @router.post("/repo/reindex", response_model=dict)
@@ -369,6 +501,18 @@ async def trigger_reindex(
 ) -> dict:
     await enqueue_reindex()
     return {"queued": True}
+
+
+@router.get("/jobs", response_model=dict)
+async def admin_jobs(
+    _: Annotated[User, Depends(get_current_admin)],
+) -> dict:
+    """Snapshot of the arq queue: queued count, in-progress count, and the
+    last ~10 completed jobs with their duration + status. Best-effort: an
+    unreachable redis returns ``available=False`` instead of raising."""
+    from app.services.queue import queue_snapshot
+
+    return await queue_snapshot()
 
 
 @router.post("/apks/rescan", response_model=dict)
@@ -442,7 +586,7 @@ async def upload_repo_icon(
     config.icon_path = key
     await db.flush()
     await enqueue_reindex()
-    return RepoConfigRead.model_validate(config)
+    return _serialize_repo_config(config)
 
 
 # --------------------------------------------------------------------------
@@ -608,3 +752,76 @@ async def revoke_invite_code(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
     await db.delete(invite)
     await db.flush()
+
+
+# --------------------------------------------------------------------------
+# Audit log
+# --------------------------------------------------------------------------
+@router.get("/audit", response_model=AuditLogPage)
+async def list_audit_log(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+    action: str | None = Query(default=None, max_length=64),
+    target_type: str | None = Query(default=None, max_length=32),
+    actor_id: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> AuditLogPage:
+    """Paginated reverse-chronological view of audit events.
+
+    Filters compose: e.g. ``?action=user.deleted&actor_id=<uuid>`` returns
+    only deletes performed by a specific admin. ``action`` matches by
+    prefix (``app.`` returns every app-scoped event).
+    """
+    base = select(AuditLog)
+    count_base = select(func.count(AuditLog.id))
+    if action:
+        # Prefix filter — ``app.`` matches every app event. SQLAlchemy
+        # ``startswith`` translates to LIKE 'value%' with the literal
+        # escaped for safety.
+        base = base.where(AuditLog.action.startswith(action))
+        count_base = count_base.where(AuditLog.action.startswith(action))
+    if target_type:
+        base = base.where(AuditLog.target_type == target_type)
+        count_base = count_base.where(AuditLog.target_type == target_type)
+    if actor_id:
+        base = base.where(AuditLog.actor_id == actor_id)
+        count_base = count_base.where(AuditLog.actor_id == actor_id)
+
+    total = (await db.execute(count_base)).scalar_one()
+    rows = (
+        await db.execute(
+            base.order_by(desc(AuditLog.created_at)).limit(limit).offset(offset)
+        )
+    ).scalars().all()
+
+    # Best-effort join to the user table so the response carries
+    # human-readable usernames without forcing the UI to do an N+1.
+    actor_ids = [r.actor_id for r in rows if r.actor_id is not None]
+    actors: dict[uuid.UUID, User] = {}
+    if actor_ids:
+        actor_rows = (
+            await db.execute(select(User).where(User.id.in_(actor_ids)))
+        ).scalars().all()
+        actors = {u.id: u for u in actor_rows}
+
+    items: list[AuditLogRead] = []
+    for r in rows:
+        actor = actors.get(r.actor_id) if r.actor_id else None
+        items.append(
+            AuditLogRead(
+                id=r.id,
+                created_at=r.created_at,
+                actor_id=r.actor_id,
+                actor_username=actor.username if actor else None,
+                actor_email=actor.email if actor else None,
+                action=r.action,
+                target_type=r.target_type,
+                target_id=r.target_id,
+                summary=r.summary,
+                payload=r.payload,
+                ip_hash=r.ip_hash,
+                user_agent=r.user_agent,
+            )
+        )
+    return AuditLogPage(items=items, total=total)
