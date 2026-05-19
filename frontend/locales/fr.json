@@ -360,12 +360,34 @@
   },
   "account": {
     "title": "Compte",
+    "memberSince": "membre depuis le {{date}}",
     "role": {
       "user": "utilisateur",
       "admin": "admin"
     },
     "saved": "Profil enregistré.",
     "saveFailed": "Échec de l'enregistrement",
+    "nav": {
+      "profile": "Profil",
+      "profileSub": "Identité, nom, langue",
+      "security": "Sécurité",
+      "securitySubLocal": "Mot de passe, 2FA, sessions",
+      "securitySubOidc": "2FA, sessions actives",
+      "tokens": "Clés d'API",
+      "tokensSub": "Quotas et jetons d'accès"
+    },
+    "profile": {
+      "identityTitle": "Identité",
+      "identitySubtitle": "Champs en lecture seule liés à ton fournisseur d'identité.",
+      "displayNameTitle": "Nom affiché",
+      "displayNameSubtitle": "Comment ton nom apparaît sur les uploads, commentaires et avis.",
+      "displayNamePlaceholder": "ex. Alice Martin",
+      "languageTitle": "Langue préférée",
+      "languageSubtitle": "Langue utilisée par le catalogue quand une app a une traduction correspondante."
+    },
+    "password": {
+      "body": "Choisis un mot de passe unique — 8 caractères minimum. Le changer ne te déconnecte pas des autres appareils ; utilise Sessions actives pour ça."
+    },
     "sections": {
       "profile": "Profil",
       "content": "Contenu",
@@ -462,7 +484,9 @@
       "neverExpires": "jamais",
       "create": "Créer la clé",
       "canDownloadPrivate": "Peut télécharger les apps privées",
+      "canDownloadPrivateBody": "Récupère les APK marqués privés, y compris les tiens et ceux des projets co-maintenus.",
       "canManageApps": "Peut gérer les apps (API)",
+      "canManageAppsBody": "Uploader, modifier et supprimer des apps via l'API — équivalent à tes droits sur le panneau.",
       "noKeys": "Aucune clé d'API pour l'instant.",
       "privateDl": "dl privé",
       "manage": "gérer",

@@ -360,12 +360,34 @@
   },
   "account": {
     "title": "Account",
+    "memberSince": "member since {{date}}",
     "role": {
       "user": "user",
       "admin": "admin"
     },
     "saved": "Profile saved.",
     "saveFailed": "Save failed",
+    "nav": {
+      "profile": "Profile",
+      "profileSub": "Identity, name, language",
+      "security": "Security",
+      "securitySubLocal": "Password, 2FA, sessions",
+      "securitySubOidc": "2FA, active sessions",
+      "tokens": "API keys",
+      "tokensSub": "Quotas & access tokens"
+    },
+    "profile": {
+      "identityTitle": "Identity",
+      "identitySubtitle": "Read-only fields tied to your sign-in provider.",
+      "displayNameTitle": "Display name",
+      "displayNameSubtitle": "How your name appears on uploads, comments and reviews.",
+      "displayNamePlaceholder": "e.g. Alice Martin",
+      "languageTitle": "Preferred language",
+      "languageSubtitle": "Pick the language the catalogue will use when an app has a matching translation."
+    },
+    "password": {
+      "body": "Use a unique password — 8 characters minimum. Changing it does not sign you out elsewhere; use Active sessions for that."
+    },
     "sections": {
       "profile": "Profile",
       "content": "Content",
@@ -462,7 +484,9 @@
       "neverExpires": "never",
       "create": "Create key",
       "canDownloadPrivate": "Can download private apps",
+      "canDownloadPrivateBody": "Fetch APKs flagged as private, including your own and those of co-maintained projects.",
       "canManageApps": "Can manage apps (API)",
+      "canManageAppsBody": "Upload, edit and delete apps over the API — equivalent to your own panel rights.",
       "noKeys": "No API keys yet.",
       "privateDl": "private dl",
       "manage": "manage",
