@@ -127,7 +127,15 @@ async def _load_apps_for_feed(
     limit: int,
 ) -> list[App]:
     """Common loader. ``order_col`` is the column we sort by descending —
-    ``last_published_at`` for the updates feed, ``created_at`` for new."""
+    ``last_published_at`` for the updates feed, ``created_at`` for new.
+
+    ``is_nsfw`` is a Python property that walks ``app.apks.anti_features``,
+    not a column, so it can't be pushed into the SQL ``WHERE``. We
+    over-fetch (``limit * 2``) then filter in Python — the catalogue is
+    small enough that the cost is negligible and it keeps the loader
+    symmetrical with the repo-builder behaviour.
+    """
+    fetch_limit = limit * 2 if not nsfw_visible else limit
     stmt = (
         select(App)
         .options(selectinload(App.categories), selectinload(App.apks))
@@ -136,22 +144,22 @@ async def _load_apps_for_feed(
             App.visibility == AppVisibility.PUBLIC,
         )
         .order_by(desc(order_col))
-        .limit(limit)
+        .limit(fetch_limit)
     )
-    if not nsfw_visible:
-        stmt = stmt.where(App.is_nsfw.is_(False))
-    if category:
-        # Filter inside the loaded subquery: join AppCategory + Category.
-        cat_q = select(Category.id).where(Category.name == category)
-        # Use a subquery on the join through AppCategory; the simplest path
-        # is to load + post-filter, since the catalogue rarely has more
-        # than 1000 apps.
-        rows = (await db.execute(stmt)).scalars().unique().all()
-        cat_ids = {c for c, in (await db.execute(cat_q)).all()}
-        return [a for a in rows if any(c.id in cat_ids for c in a.categories)][:limit]
     if author:
         stmt = stmt.where(App.author_name == author)
-    return list((await db.execute(stmt)).scalars().unique().all())
+    rows = list((await db.execute(stmt)).scalars().unique().all())
+
+    if not nsfw_visible:
+        rows = [a for a in rows if not a.is_nsfw]
+    if category:
+        cat_ids = {
+            c for c, in (
+                await db.execute(select(Category.id).where(Category.name == category))
+            ).all()
+        }
+        rows = [a for a in rows if any(c.id in cat_ids for c in a.categories)]
+    return rows[:limit]
 
 
 @router.get("/new")
