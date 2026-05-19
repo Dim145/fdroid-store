@@ -323,6 +323,10 @@
       "oidcButton": "Continue with SSO",
       "inviteLabel": "Invite code (only if you don't have an account yet)",
       "invitePlaceholder": "optional for existing accounts",
+      "mfaPrompt": "Enter the 6-digit code from your authenticator app, or one of your recovery codes.",
+      "mfaCodeLabel": "Verification code",
+      "mfaSubmit": "Verify",
+      "mfaCancel": "Back to sign in",
       "errors": {
         "default": "Sign-in failed",
         "invalid": "Invalid email or password"

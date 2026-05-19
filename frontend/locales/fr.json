@@ -323,6 +323,10 @@
       "oidcButton": "Continuer avec SSO",
       "inviteLabel": "Code d'invitation (seulement si tu n'as pas encore de compte)",
       "invitePlaceholder": "optionnel pour les comptes existants",
+      "mfaPrompt": "Saisis le code à 6 chiffres de ton application d'authentification, ou un code de récupération.",
+      "mfaCodeLabel": "Code de vérification",
+      "mfaSubmit": "Vérifier",
+      "mfaCancel": "Retour à la connexion",
       "errors": {
         "default": "Échec de la connexion",
         "invalid": "E-mail ou mot de passe invalide"

@@ -10,11 +10,19 @@ import {
   setTokens,
 } from "@/lib/api";
 
+/** Resolved login outcome. ``user`` is set on success; ``mfaToken`` is set
+ *  when the password check passed but a second factor is required — the
+ *  login page then renders a code input and calls ``finishMfaLogin``. */
+export type LoginOutcome =
+  | { kind: "ok"; user: CurrentUser }
+  | { kind: "mfa"; mfaToken: string };
+
 type AuthState = {
   user: CurrentUser | null;
   loading: boolean;
   fetchMe: () => Promise<void>;
-  login: (email: string, password: string) => Promise<CurrentUser>;
+  login: (email: string, password: string) => Promise<LoginOutcome>;
+  finishMfaLogin: (mfaToken: string, code: string) => Promise<CurrentUser>;
   signup: (payload: {
     email: string;
     username: string;
@@ -44,7 +52,20 @@ export const useAuth = create<AuthState>((set) => ({
   },
 
   async login(email, password) {
-    const tokens = await api.login(email, password);
+    const res = await api.login(email, password);
+    if ("mfa_required" in res) {
+      // No tokens minted yet — the page collects the second factor and
+      // calls ``finishMfaLogin``.
+      return { kind: "mfa", mfaToken: res.mfa_token };
+    }
+    setTokens(res.access_token, res.refresh_token);
+    const me = await api.me();
+    set({ user: me, loading: false });
+    return { kind: "ok", user: me };
+  },
+
+  async finishMfaLogin(mfaToken, code) {
+    const tokens = await api.loginMfa({ mfa_token: mfaToken, code });
     setTokens(tokens.access_token, tokens.refresh_token);
     const me = await api.me();
     set({ user: me, loading: false });

@@ -186,12 +186,27 @@ export type CurrentUser = {
   created_at: string;
   show_nsfw: boolean;
   preferred_locale: string | null;
+  // Per-user quota overrides — ``null`` = fall back to the repo default.
+  quota_max_apps?: number | null;
+  quota_max_storage_bytes?: number | null;
+  quota_max_apks_per_month?: number | null;
 };
+
+// Returned by /auth/login when MFA is required. The frontend stores
+// ``mfa_token`` in memory, prompts the user for a 6-digit code, then POSTs
+// it to /auth/login/mfa to receive the real TokenPair.
+export type MfaChallenge = {
+  mfa_required: true;
+  mfa_token: string;
+  expires_in: number;
+};
+
+export type LoginResponse = TokenPair | MfaChallenge;
 
 export const api = {
   authMethods: () => apiFetch<AuthMethodsInfo>("/api/v1/auth/methods", { anonymous: true }),
   login: (email: string, password: string) =>
-    apiFetch<TokenPair>("/api/v1/auth/login", {
+    apiFetch<LoginResponse>("/api/v1/auth/login", {
       method: "POST",
       anonymous: true,
       body: JSON.stringify({ email, password }),
@@ -390,6 +405,66 @@ export const api = {
     keystoreInfo: () => apiFetch<KeystoreInfo>("/api/v1/setup/keystore"),
   },
 
+  // ---------- Sessions ----------
+  sessions: {
+    list: () => apiFetch<UserSession[]>("/api/v1/me/sessions"),
+    revoke: (id: string) =>
+      apiFetch<void>(`/api/v1/me/sessions/${id}`, { method: "DELETE" }),
+    revokeAll: () => apiFetch<void>("/api/v1/me/sessions", { method: "DELETE" }),
+  },
+
+  // ---------- Quota usage ----------
+  quotas: {
+    usage: () => apiFetch<QuotaUsage>("/api/v1/me/quotas"),
+  },
+
+  // ---------- TOTP ----------
+  totp: {
+    status: () => apiFetch<TotpStatus>("/api/v1/me/totp/status"),
+    setup: () => apiFetch<TotpSetup>("/api/v1/me/totp/setup", { method: "POST" }),
+    confirm: (code: string) =>
+      apiFetch<{ recovery_codes: string[] }>("/api/v1/me/totp/confirm", {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      }),
+    disable: (password: string) =>
+      apiFetch<void>("/api/v1/me/totp/disable", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      }),
+  },
+
+  // ---------- 2-step login ----------
+  loginMfa: (payload: { mfa_token: string; code: string }) =>
+    apiFetch<TokenPair>("/api/v1/auth/login/mfa", {
+      method: "POST",
+      anonymous: true,
+      body: JSON.stringify(payload),
+    }),
+
+  // ---------- App-level collaborators ----------
+  collaborators: {
+    list: (appId: string) =>
+      apiFetch<AppCollaborator[]>(`/api/v1/apps/${appId}/collaborators`),
+    add: (appId: string, payload: { username?: string; email?: string }) =>
+      apiFetch<AppCollaborator>(`/api/v1/apps/${appId}/collaborators`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    remove: (appId: string, collaboratorId: string) =>
+      apiFetch<void>(
+        `/api/v1/apps/${appId}/collaborators/${collaboratorId}`,
+        { method: "DELETE" },
+      ),
+  },
+
+  // ---------- Upstream metadata.yml import ----------
+  importMetadata: (yamlSource: string) =>
+    apiFetch<MetadataImportResult>("/api/v1/apps/import-metadata", {
+      method: "POST",
+      body: JSON.stringify({ yaml: yamlSource }),
+    }),
+
   admin: {
     listUsers: (q?: string) =>
       apiFetch<Array<CurrentUser>>(`/api/v1/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
@@ -434,6 +509,25 @@ export const api = {
         }),
       revoke: (id: string) =>
         apiFetch<void>(`/api/v1/admin/invites/${id}`, { method: "DELETE" }),
+    },
+    // Audit log paged view; ``action`` is a prefix filter (e.g. ``user.``).
+    auditLog: (params: { action?: string; target_type?: string; actor_id?: string; limit?: number; offset?: number } = {}) => {
+      const qs = new URLSearchParams();
+      if (params.action) qs.set("action", params.action);
+      if (params.target_type) qs.set("target_type", params.target_type);
+      if (params.actor_id) qs.set("actor_id", params.actor_id);
+      qs.set("limit", String(params.limit ?? 50));
+      qs.set("offset", String(params.offset ?? 0));
+      return apiFetch<AuditLogPage>(`/api/v1/admin/audit?${qs}`);
+    },
+    jobs: () => apiFetch<JobsSnapshot>("/api/v1/admin/jobs"),
+    clamavPing: () =>
+      apiFetch<{ ok: boolean; configured: boolean }>("/api/v1/admin/clamav/ping"),
+    scans: (params: { limit?: number; only_infected?: boolean } = {}) => {
+      const qs = new URLSearchParams();
+      qs.set("limit", String(params.limit ?? 50));
+      if (params.only_infected) qs.set("only_infected", "true");
+      return apiFetch<ApkScanRow[]>(`/api/v1/admin/scans?${qs}`);
     },
   },
 };
@@ -640,6 +734,15 @@ export type AdminUpdateUser = {
   role?: "user" | "admin";
   is_active?: boolean;
   new_password?: string;
+  // Quota knobs. ``quota_*`` sets a value; ``quota_reset_*`` reverts to
+  // ``null`` (= fall back to the repo default). Pass at most one of the
+  // pair per dimension.
+  quota_max_apps?: number;
+  quota_max_storage_bytes?: number;
+  quota_max_apks_per_month?: number;
+  quota_reset_apps?: boolean;
+  quota_reset_storage_bytes?: boolean;
+  quota_reset_apks_per_month?: boolean;
 };
 
 export type RepoConfigInfo = {
@@ -656,6 +759,20 @@ export type RepoConfigInfo = {
   registration_policy: RegistrationPolicy;
   mirrors: string[];
   upload_max_apk_mb: number;
+  // Repo-wide default quotas (NULL = unlimited).
+  default_quota_max_apps?: number | null;
+  default_quota_max_storage_bytes?: number | null;
+  default_quota_max_apks_per_month?: number | null;
+  // Reset flags for the PATCH payload (not present on reads).
+  quota_reset_apps?: boolean;
+  quota_reset_storage_bytes?: boolean;
+  quota_reset_apks_per_month?: boolean;
+  // ClamAV admin toggles. ``clamav_available`` mirrors the env knob and
+  // is read-only.
+  clamav_available?: boolean;
+  clamav_scan_on_upload?: boolean;
+  clamav_scan_periodic?: boolean;
+  require_admin_2fa?: boolean;
 };
 
 export type InviteCode = {
@@ -718,4 +835,117 @@ export type AdminStats = {
     username: string | null;
     created_at: string;
   }>;
+};
+
+// ────────────────────────────────────────────────────────────────────────
+// Sessions, quotas, 2FA, audit log, jobs, collaborators
+// ────────────────────────────────────────────────────────────────────────
+
+export type UserSession = {
+  id: string;
+  created_at: string;
+  last_seen_at: string;
+  ip_hash: string | null;
+  user_agent: string | null;
+  revoked_at: string | null;
+};
+
+export type QuotaDimension = {
+  used: number;
+  /** ``null`` = unlimited (no cap). */
+  cap: number | null;
+};
+
+export type QuotaUsage = {
+  apps: QuotaDimension;
+  storage_bytes: QuotaDimension;
+  apks_this_month: QuotaDimension;
+};
+
+export type TotpStatus = {
+  enrolled: boolean;
+  pending?: boolean;
+  last_used_at?: string | null;
+};
+
+export type TotpSetup = {
+  secret: string;
+  provisioning_uri: string;
+  qr_data_uri: string;
+};
+
+export type AppCollaborator = {
+  id: string;
+  user_id: string;
+  granted_at: string;
+  username: string;
+  email: string;
+  full_name: string | null;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  created_at: string;
+  actor_id: string | null;
+  actor_username: string | null;
+  actor_email: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  summary: string | null;
+  payload: Record<string, unknown> | null;
+  ip_hash: string | null;
+  user_agent: string | null;
+};
+
+export type AuditLogPage = {
+  items: AuditLogEntry[];
+  total: number;
+};
+
+export type JobsSnapshot = {
+  available: boolean;
+  queued: number;
+  in_progress: number;
+  recent: Array<{
+    function?: string;
+    success?: boolean;
+    start_time?: string | null;
+    finish_time?: string | null;
+    duration_ms?: number | null;
+    result_str?: string | null;
+    raw_key?: string;
+  }>;
+  observed_at?: number;
+  error?: string;
+};
+
+export type ApkScanRow = {
+  id: string;
+  apk_id: string;
+  scanner: string;
+  status: "pending" | "clean" | "infected" | "error";
+  signatures: string | null;
+  error: string | null;
+  scanned_at: string | null;
+  created_at: string;
+};
+
+export type MetadataImportResult = {
+  name: string | null;
+  summary: string | null;
+  description: string | null;
+  license: string | null;
+  author_name: string | null;
+  author_email: string | null;
+  website: string | null;
+  source_code: string | null;
+  issue_tracker: string | null;
+  translation: string | null;
+  donate: string | null;
+  liberapay: string | null;
+  open_collective: string | null;
+  bitcoin: string | null;
+  categories: string[];
+  anti_features: string[];
 };

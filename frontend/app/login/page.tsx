@@ -43,13 +43,17 @@ function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
   const next = safeNext(search.get("next"));
-  const { user, login } = useAuth();
+  const { user, login, finishMfaLogin } = useAuth();
 
   const [methods, setMethods] = useState<AuthMethodsInfo | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // When set, the password step succeeded and we're waiting for the user
+  // to enter their 6-digit TOTP (or 8-char recovery) code.
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
   // Only relevant when the SSO target server is in invite mode AND the user
   // expects to create an account through it. Existing OIDC users never need it.
   const [oidcInvite, setOidcInvite] = useState("");
@@ -81,7 +85,13 @@ function LoginForm() {
     e.preventDefault();
     setError(null); setSubmitting(true);
     try {
-      const me = await login(email, password);
+      const outcome = await login(email, password);
+      if (outcome.kind === "mfa") {
+        // Stash the challenge and render the code-entry step.
+        setMfaToken(outcome.mfaToken);
+        return;
+      }
+      const me = outcome.user;
       if (me.role === "admin") {
         try {
           const status = await api.setup.status();
@@ -91,6 +101,26 @@ function LoginForm() {
       router.replace(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onSubmitMfa(e: React.FormEvent) {
+    e.preventDefault();
+    if (!mfaToken) return;
+    setError(null); setSubmitting(true);
+    try {
+      const me = await finishMfaLogin(mfaToken, mfaCode.trim());
+      if (me.role === "admin") {
+        try {
+          const status = await api.setup.status();
+          if (!status.setup_complete) { router.replace("/admin/setup"); return; }
+        } catch { /* ignore */ }
+      }
+      router.replace(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Invalid code");
     } finally {
       setSubmitting(false);
     }
@@ -116,7 +146,7 @@ function LoginForm() {
       {error && !methods?.local && (
         <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
       )}
-      {methods?.local && (
+      {methods?.local && !mfaToken && (
         <form onSubmit={onSubmit} className="space-y-4">
           <Field label={t("auth.login.emailLabel")} htmlFor="email">
             <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -130,6 +160,38 @@ function LoginForm() {
           <Button type="submit" variant="filled" size="xl" className="w-full" disabled={submitting}>
             {submitting ? t("auth.login.submitting") : t("auth.login.submit")}
           </Button>
+        </form>
+      )}
+
+      {mfaToken && (
+        <form onSubmit={onSubmitMfa} className="space-y-4">
+          <p className="text-sm text-ink-soft">{t("auth.login.mfaPrompt")}</p>
+          <Field label={t("auth.login.mfaCodeLabel")} htmlFor="mfa-code">
+            <Input
+              id="mfa-code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              required
+              value={mfaCode}
+              onChange={(e) => setMfaCode(e.target.value)}
+              placeholder="123 456"
+              className="font-mono tracking-widest"
+            />
+          </Field>
+          {error && (
+            <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
+          )}
+          <Button type="submit" variant="filled" size="xl" className="w-full" disabled={submitting}>
+            {submitting ? t("auth.login.submitting") : t("auth.login.mfaSubmit")}
+          </Button>
+          <button
+            type="button"
+            onClick={() => { setMfaToken(null); setMfaCode(""); setError(null); }}
+            className="block w-full text-center text-xs text-ink-mute hover:text-ink"
+          >
+            {t("auth.login.mfaCancel")}
+          </button>
         </form>
       )}
 
