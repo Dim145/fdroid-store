@@ -2,6 +2,7 @@
 
 import { Image as ImageIcon, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import { api, REPO_URL, type KeystoreInfo, type RepoConfigInfo } from "@/lib/api
 import { useRepoStore } from "@/lib/repo-store";
 
 export default function AdminRepoPage() {
+  const { t } = useTranslation();
   const refreshGlobalRepo = useRepoStore((s) => s.refresh);
   const [repo, setRepo] = useState<RepoConfigInfo | null>(null);
   const [keystore, setKeystore] = useState<KeystoreInfo | null>(null);
@@ -29,20 +31,19 @@ export default function AdminRepoPage() {
       setRepo(r); setKeystore(k);
       setName(r.name); setDesc(r.description || ""); setAddr(r.address);
       setMirrors(r.mirrors || []);
-    } catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
+    } catch (e) { setErr(e instanceof Error ? e.message : t("admin.repo.loadFailed")); }
   }
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); /* eslint-disable-next-line */ }, []);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setErr(null); setMsg(null);
     try {
       await api.admin.updateRepo({ name, description: desc, address: addr, mirrors });
-      setMsg("Saved. Reindex queued.");
-      // Propagate to every other page using the live URL (QR codes, footer…).
+      setMsg(t("admin.repo.saved"));
       await Promise.all([refresh(), refreshGlobalRepo()]);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Save failed");
+      setErr(e instanceof Error ? e.message : t("admin.repo.saveFailed"));
     }
   }
 
@@ -60,57 +61,54 @@ export default function AdminRepoPage() {
     setErr(null); setMsg(null); setUploadingIcon(true);
     try {
       await api.admin.uploadRepoIcon(file);
-      setMsg("Icon uploaded. Reindex queued.");
+      setMsg(t("admin.repo.iconUploaded"));
       await refresh();
-    } catch (e) { setErr(e instanceof Error ? e.message : "Icon upload failed"); }
+    } catch (e) { setErr(e instanceof Error ? e.message : t("admin.repo.iconUploadFailed")); }
     finally { setUploadingIcon(false); }
   }
   function iconUrl(): string | null {
     if (!repo?.icon_path) return null;
     const basename = repo.icon_path.split("/").pop();
     if (!basename) return null;
-    // Use the configured public address so the preview always reflects what
-    // F-Droid clients will fetch. Falls back to the build-time env if the
-    // saved address isn't loaded yet.
     const base = (repo.address || REPO_URL).replace(/\/$/, "");
     return `${base}/icons/${basename}?v=${repo.last_index_version}`;
   }
 
   if (!repo) {
-    return <p className="text-sm text-ink-mute">Loading…</p>;
+    return <p className="text-sm text-ink-mute">{t("admin.repo.loading")}</p>;
   }
 
   return (
     <div className="space-y-6">
       <header>
-        <div className="eyebrow">Admin</div>
-        <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">Repository</h1>
+        <div className="eyebrow">{t("admin.eyebrow")}</div>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">{t("admin.repo.title")}</h1>
       </header>
 
       {msg && <p className="rounded-xl border border-primary bg-primary-container px-3 py-2 text-sm text-primary-on-container">{msg}</p>}
       {err && <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{err}</p>}
 
       <section className="surface p-6">
-        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">Public metadata</h2>
+        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">{t("admin.repo.publicMetadata")}</h2>
         <form onSubmit={save} className="grid gap-4 md:grid-cols-2">
-          <Field label="Repo name" htmlFor="rn" className="md:col-span-2">
+          <Field label={t("admin.repo.repoName")} htmlFor="rn" className="md:col-span-2">
             <Input id="rn" required value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="Description" htmlFor="rd" className="md:col-span-2">
+          <Field label={t("admin.repo.description")} htmlFor="rd" className="md:col-span-2">
             <Input id="rd" value={desc} onChange={(e) => setDesc(e.target.value)} />
           </Field>
-          <Field label="Public address" htmlFor="ra" className="md:col-span-2">
+          <Field label={t("admin.repo.publicAddress")} htmlFor="ra" className="md:col-span-2">
             <Input id="ra" required value={addr} onChange={(e) => setAddr(e.target.value)} />
-            <p className="text-xs text-ink-mute">Must be reachable from Android devices.</p>
+            <p className="text-xs text-ink-mute">{t("admin.repo.publicAddressHint")}</p>
           </Field>
           <div className="md:col-span-2 flex justify-end">
-            <Button type="submit" variant="filled">Save & reindex</Button>
+            <Button type="submit" variant="filled">{t("admin.repo.saveAndReindex")}</Button>
           </div>
         </form>
       </section>
 
       <section className="surface p-6">
-        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">Icon</h2>
+        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">{t("admin.repo.iconSection")}</h2>
         <div className="flex flex-wrap items-center gap-5">
           {iconUrl() && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -119,7 +117,7 @@ export default function AdminRepoPage() {
           <div className="flex-1">
             <label className="inline-flex">
               <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary-container px-4 text-sm font-semibold text-primary-on-container hover:brightness-[1.04]">
-                <ImageIcon className="h-4 w-4" /> Upload icon
+                <ImageIcon className="h-4 w-4" /> {t("admin.repo.uploadIcon")}
               </span>
               <input
                 type="file"
@@ -135,66 +133,65 @@ export default function AdminRepoPage() {
       </section>
 
       <section className="surface p-6">
-        <h2 className="mb-1 text-lg font-bold tracking-tight text-ink">Mirrors</h2>
+        <h2 className="mb-1 text-lg font-bold tracking-tight text-ink">{t("admin.repo.mirrors")}</h2>
         <p className="mb-4 text-sm text-ink-soft">
-          Alternate URLs that serve the same repo. F-Droid clients fall back to
-          a mirror if the primary address is unreachable. Save to apply.
+          {t("admin.repo.mirrorsBody")}
         </p>
         <ul className="space-y-2">
           {mirrors.length === 0 && (
             <li className="rounded-xl border border-dashed border-outline px-4 py-6 text-center italic text-ink-mute">
-              No mirrors configured.
+              {t("admin.repo.noMirrors")}
             </li>
           )}
           {mirrors.map((m) => (
             <li key={m} className="flex items-center gap-2 rounded-xl border border-outline-soft bg-surface px-3 py-2">
               <code className="min-w-0 flex-1 select-all truncate font-mono text-xs text-ink">{m}</code>
               <Button type="button" size="sm" variant="outlined" onClick={() => removeMirror(m)}>
-                <Trash2 className="h-3.5 w-3.5" /> Remove
+                <Trash2 className="h-3.5 w-3.5" /> {t("admin.repo.remove")}
               </Button>
             </li>
           ))}
         </ul>
         <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto]">
           <Input
-            placeholder="https://mirror.example.org/fdroid/repo"
+            placeholder={t("admin.repo.mirrorPlaceholder")}
             value={newMirror}
             onChange={(e) => setNewMirror(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addMirror(); } }}
           />
           <Button type="button" variant="tonal" onClick={addMirror}>
-            <Plus className="h-4 w-4" /> Add mirror
+            <Plus className="h-4 w-4" /> {t("admin.repo.addMirror")}
           </Button>
         </div>
       </section>
 
       <section className="surface p-6">
         <h2 className="mb-4 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
-          <KeyRound className="h-5 w-5" /> Signing key
+          <KeyRound className="h-5 w-5" /> {t("admin.repo.signingKey")}
         </h2>
         {keystore?.present ? (
           <dl className="grid gap-3 md:grid-cols-2">
-            <Detail label="Alias" value={keystore.alias} mono />
-            <Detail label="Valid until" value={keystore.not_after} />
+            <Detail label={t("admin.repo.alias")} value={keystore.alias} mono />
+            <Detail label={t("admin.repo.validUntil")} value={keystore.not_after} />
             <div className="md:col-span-2">
-              <div className="text-[10px] uppercase tracking-wider text-ink-mute">Fingerprint SHA-256</div>
+              <div className="text-[10px] uppercase tracking-wider text-ink-mute">{t("admin.repo.fingerprint")}</div>
               <code className="mt-1 block break-all font-mono text-[11px] text-ink">{keystore.fingerprint_sha256}</code>
             </div>
           </dl>
         ) : (
-          <p className="text-sm text-danger">No keystore yet — complete the setup wizard.</p>
+          <p className="text-sm text-danger">{t("admin.repo.noKeystore")}</p>
         )}
       </section>
 
       <section className="surface p-6">
-        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">Index state</h2>
+        <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">{t("admin.repo.indexState")}</h2>
         <dl className="grid gap-3 md:grid-cols-2">
-          <Detail label="Last index version" value={String(repo.last_index_version)} mono />
-          <Detail label="Last indexed" value={repo.last_indexed_at} />
+          <Detail label={t("admin.repo.lastIndexVersion")} value={String(repo.last_index_version)} mono />
+          <Detail label={t("admin.repo.lastIndexed")} value={repo.last_indexed_at} />
         </dl>
         <div className="mt-4">
-          <Button variant="outlined" onClick={() => api.admin.reindex().then(() => setMsg("Reindex queued."))}>
-            <RefreshCw className="h-4 w-4" /> Trigger reindex
+          <Button variant="outlined" onClick={() => api.admin.reindex().then(() => setMsg(t("admin.repo.reindexQueued")))}>
+            <RefreshCw className="h-4 w-4" /> {t("admin.repo.triggerReindex")}
           </Button>
         </div>
       </section>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,14 +11,13 @@ import { useRepoInfo } from "@/lib/repo-store";
 import { cn } from "@/lib/utils";
 
 export default function SetupWizardPage() {
+  const { t } = useTranslation();
   const repo = useRepoInfo();
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [repoName, setRepoName] = useState("My F-Droid Repo");
   const [repoDesc, setRepoDesc] = useState("");
   // Default to the current origin + /fdroid/repo so the wizard pre-fills a
-  // usable public URL on a fresh install. REPO_URL is now relative ("/fdroid/
-  // repo") for portable image builds, which doesn't make sense in a field
-  // that F-Droid clients fetch from the outside world.
+  // usable public URL on a fresh install.
   const [repoAddr, setRepoAddr] = useState(() => {
     if (typeof window !== "undefined") {
       return `${window.location.origin}${REPO_URL.startsWith("/") ? REPO_URL : "/fdroid/repo"}`;
@@ -35,8 +35,6 @@ export default function SetupWizardPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Once the live config arrives, hydrate the form with the current values
-  // (admin re-running the wizard expects to see the existing settings).
   useEffect(() => {
     if (!repo.loaded) return;
     if (repo.name) setRepoName((cur) => (cur === "My F-Droid Repo" ? repo.name! : cur));
@@ -69,7 +67,7 @@ export default function SetupWizardPage() {
     try {
       let keystoreB64: string | undefined;
       if (mode === "import") {
-        if (!file) throw new Error("Please select a keystore file");
+        if (!file) throw new Error(t("admin.setup.selectFile"));
         keystoreB64 = await readFileAsBase64(file);
       }
       await api.setup.wizard({
@@ -83,25 +81,22 @@ export default function SetupWizardPage() {
         key_dname: mode === "generate" ? dname : undefined,
         keystore_b64: keystoreB64,
       });
-      setMsg("Setup complete. The repo index will be generated on the next reindex.");
-      // Re-pull both the local setup state and the global repo info so any
-      // QR codes / install links elsewhere in the app pick up the new
-      // address + fingerprint immediately.
+      setMsg(t("admin.setup.complete"));
       await Promise.all([refresh(), repo.refresh()]);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Setup failed");
+      setErr(e instanceof Error ? e.message : t("admin.setup.failed"));
     } finally { setSubmitting(false); }
   }
 
   return (
     <div className="space-y-6">
       <header>
-        <div className="eyebrow">Admin</div>
-        <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">Setup wizard</h1>
+        <div className="eyebrow">{t("admin.eyebrow")}</div>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">{t("admin.setup.title")}</h1>
         <p className="mt-1 text-ink-soft">
           {setupComplete
-            ? "Setup is complete. Re-run to rotate the signing key."
-            : "Finish the one-time configuration to start serving the catalogue."}
+            ? t("admin.setup.subtitleComplete")
+            : t("admin.setup.subtitleIncomplete")}
         </p>
       </header>
 
@@ -110,15 +105,15 @@ export default function SetupWizardPage() {
 
       <form onSubmit={submit} className="space-y-6">
         <section className="surface p-6">
-          <Step num="01" title="Repository" />
+          <Step num="01" title={t("admin.setup.stepRepo")} />
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <Field label="Repo name" htmlFor="rn" className="md:col-span-2">
+            <Field label={t("admin.setup.fields.repoName")} htmlFor="rn" className="md:col-span-2">
               <Input id="rn" required value={repoName} onChange={(e) => setRepoName(e.target.value)} />
             </Field>
-            <Field label="Description" htmlFor="rd" className="md:col-span-2">
+            <Field label={t("admin.setup.fields.description")} htmlFor="rd" className="md:col-span-2">
               <Input id="rd" value={repoDesc} onChange={(e) => setRepoDesc(e.target.value)} />
             </Field>
-            <Field label="Public address" htmlFor="ra" className="md:col-span-2">
+            <Field label={t("admin.setup.fields.publicAddress")} htmlFor="ra" className="md:col-span-2">
               <Input
                 id="ra"
                 required
@@ -130,28 +125,28 @@ export default function SetupWizardPage() {
         </section>
 
         <section className="surface p-6">
-          <Step num="02" title="Signing key" />
+          <Step num="02" title={t("admin.setup.stepKey")} />
           <div className="mt-4 mb-4 flex gap-2">
-            <ModeChip active={mode === "generate"} onClick={() => setMode("generate")}>Generate</ModeChip>
-            <ModeChip active={mode === "import"} onClick={() => setMode("import")}>Import existing</ModeChip>
+            <ModeChip active={mode === "generate"} onClick={() => setMode("generate")}>{t("admin.setup.modeGenerate")}</ModeChip>
+            <ModeChip active={mode === "import"} onClick={() => setMode("import")}>{t("admin.setup.modeImport")}</ModeChip>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Keystore password" htmlFor="ksp" className="md:col-span-2">
+            <Field label={t("admin.setup.fields.keystorePassword")} htmlFor="ksp" className="md:col-span-2">
               <Input id="ksp" type="password" required value={ksPwd} onChange={(e) => setKsPwd(e.target.value)} />
             </Field>
-            <Field label="Key alias" htmlFor="ka">
+            <Field label={t("admin.setup.fields.keyAlias")} htmlFor="ka">
               <Input id="ka" value={keyAlias} onChange={(e) => setKeyAlias(e.target.value)} />
             </Field>
-            <Field label="Key password (optional)" htmlFor="kp">
+            <Field label={t("admin.setup.fields.keyPassword")} htmlFor="kp">
               <Input id="kp" type="password" value={keyPwd} onChange={(e) => setKeyPwd(e.target.value)} />
             </Field>
             {mode === "generate" && (
-              <Field label="Distinguished name" htmlFor="dn" className="md:col-span-2">
+              <Field label={t("admin.setup.fields.dname")} htmlFor="dn" className="md:col-span-2">
                 <Input id="dn" value={dname} onChange={(e) => setDname(e.target.value)} />
               </Field>
             )}
             {mode === "import" && (
-              <Field label="Keystore file (.p12 / .jks)" htmlFor="kf" className="md:col-span-2">
+              <Field label={t("admin.setup.fields.keystoreFile")} htmlFor="kf" className="md:col-span-2">
                 <Input id="kf" type="file" accept=".p12,.jks,.pkcs12" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
               </Field>
             )}
@@ -160,7 +155,7 @@ export default function SetupWizardPage() {
 
         <div className="flex justify-end">
           <Button type="submit" variant="filled" size="xl" disabled={submitting}>
-            {submitting ? "Setting up…" : "Run setup"}
+            {submitting ? t("admin.setup.submitting") : t("admin.setup.submit")}
           </Button>
         </div>
       </form>
