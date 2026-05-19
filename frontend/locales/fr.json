@@ -874,6 +874,7 @@
         "statusError": "Erreur",
         "statusScanning": "Scan en cours",
         "proposed": {
+          "eyebrow": "Depuis GitHub",
           "title": "Remplir ces champs depuis le dépôt ?",
           "body": "GitHub nous a donné des valeurs pour des champs que tu n'as pas encore renseignés. Coche ceux à garder.",
           "apply_one": "Appliquer {{count}} champ",

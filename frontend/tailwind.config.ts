@@ -122,6 +122,10 @@ const config: Config = {
           "0%": { transform: "translateX(-100%)" },
           "100%": { transform: "translateX(100%)" },
         },
+        "modal-pop": {
+          from: { opacity: "0", transform: "translateY(12px) scale(0.96)" },
+          to: { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 0.35s ease-out both",
@@ -129,6 +133,7 @@ const config: Config = {
         "slide-down": "slide-down 0.25s ease-out both",
         "slide-in-right": "slide-in-right 0.28s cubic-bezier(0.22, 1, 0.36, 1) both",
         "telemetry-sweep": "telemetry-sweep 6s linear infinite",
+        "modal-pop": "modal-pop 0.22s cubic-bezier(0.22, 1, 0.36, 1) both",
       },
       transitionTimingFunction: {
         // Material standard easing — used by interactive components.

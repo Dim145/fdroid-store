@@ -891,6 +891,7 @@
         "statusError": "Error",
         "statusScanning": "Scanning",
         "proposed": {
+          "eyebrow": "From GitHub",
           "title": "Want to fill these from the repo?",
           "body": "GitHub gave us values for fields you haven't set yet. Pick the ones you want to keep.",
           "apply_one": "Apply {{count}} field",

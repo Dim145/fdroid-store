@@ -496,11 +496,11 @@ function ToggleRow({
 }
 
 
-/** Inline preview card that surfaces App listing fields the connected
- *  GitHub repo could populate. Each row has a checkbox so the operator
- *  picks which ones to apply — pre-checked on first appearance because
- *  the most likely intent is "fill them all". The card disappears on
- *  Apply (success) or Dismiss. */
+/** Centred modal that surfaces App listing fields the connected GitHub
+ *  repo could populate. Each row has a checkbox so the operator picks
+ *  which to apply — pre-checked on first appearance because the most
+ *  likely intent after wiring a source is "fill everything". Closes on
+ *  backdrop click, X button, or Escape. */
 function ProposedFieldsCard({
   proposed,
   picked,
@@ -518,78 +518,144 @@ function ProposedFieldsCard({
 }) {
   const { t } = useTranslation();
   const pickedCount = proposed.filter((p) => picked.has(p.field)).length;
+  const applyBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Lock the page scroll + focus the primary action while the modal is
+  // open so the user can hit Enter immediately. Escape closes.
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onDismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    // Defer focus a tick so the animation doesn't fight with the
+    // browser stealing focus mid-frame.
+    const focusId = window.setTimeout(() => applyBtnRef.current?.focus(), 40);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(focusId);
+    };
+  }, [busy, onDismiss]);
+
   return (
-    <div className="rounded-2xl border border-primary/30 bg-primary-container/30 p-4 animate-fade-up">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
-          <div>
-            <div className="text-sm font-semibold text-primary-on-container">
-              {t("myApps.edit.githubSource.proposed.title")}
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-8">
+      {/* Backdrop — single click target so backdrop dismissal is one tap. */}
+      <button
+        type="button"
+        aria-label={t("common.close")}
+        onClick={() => { if (!busy) onDismiss(); }}
+        className="absolute inset-0 animate-fade-in bg-black/45 backdrop-blur-[3px]"
+      />
+
+      {/* Card */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="github-proposed-title"
+        className="relative w-full max-w-md animate-modal-pop overflow-hidden rounded-3xl border border-outline-soft bg-surface shadow-e4"
+      >
+        {/* Primary-tinted wash + trim-marks in the top-right corner,
+            echoing the editorial chrome of the parent page. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(70% 100% at 0% 0%, rgb(var(--primary) / 0.16), transparent 60%)",
+          }}
+        />
+        <div aria-hidden className="pointer-events-none absolute right-5 top-5 h-8 w-8">
+          <div className="absolute inset-x-0 top-0 h-px bg-outline" />
+          <div className="absolute inset-y-0 right-0 w-px bg-outline" />
+        </div>
+
+        <div className="relative p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-primary text-primary-fg shadow-e1">
+                <Sparkles className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
+                  {t("myApps.edit.githubSource.proposed.eyebrow")}
+                </div>
+                <h3
+                  id="github-proposed-title"
+                  className="mt-1 text-lg font-bold leading-tight tracking-tight text-ink"
+                >
+                  {t("myApps.edit.githubSource.proposed.title")}
+                </h3>
+              </div>
             </div>
-            <p className="text-[11px] leading-relaxed text-ink-soft">
-              {t("myApps.edit.githubSource.proposed.body")}
-            </p>
+            <button
+              type="button"
+              onClick={() => { if (!busy) onDismiss(); }}
+              aria-label={t("common.close")}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-pill text-ink-mute transition-colors hover:bg-surface-2 hover:text-ink"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <p className="mt-3 max-w-prose text-sm leading-relaxed text-ink-soft">
+            {t("myApps.edit.githubSource.proposed.body")}
+          </p>
+
+          <ul className="mt-5 max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
+            {proposed.map((p) => {
+              const id = `proposed-${p.field}`;
+              const isPicked = picked.has(p.field);
+              return (
+                <li key={p.field}>
+                  <label
+                    htmlFor={id}
+                    className={cn(
+                      "flex cursor-pointer items-start gap-2.5 rounded-2xl border bg-surface px-3 py-2.5 transition-colors",
+                      isPicked
+                        ? "border-primary/50 bg-primary-container/20"
+                        : "border-outline-soft hover:border-outline hover:bg-surface-2",
+                    )}
+                  >
+                    <input
+                      id={id}
+                      type="checkbox"
+                      checked={isPicked}
+                      onChange={() => onToggle(p.field)}
+                      className="mt-1"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-mono text-[10px] uppercase tracking-wider text-ink-mute">
+                        {t(`myApps.edit.githubSource.proposed.field.${p.field}`)}
+                      </div>
+                      <div className="mt-0.5 break-words text-sm text-ink">
+                        {p.proposed_value}
+                      </div>
+                    </div>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+
+          <div className="mt-5 flex items-center justify-end gap-2 border-t border-outline-soft pt-4">
+            <Button type="button" variant="ghost" size="sm" onClick={onDismiss} disabled={busy}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              ref={applyBtnRef}
+              type="button"
+              variant="filled"
+              size="sm"
+              onClick={onApply}
+              disabled={busy || pickedCount === 0}
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {t("myApps.edit.githubSource.proposed.apply", { count: pickedCount })}
+            </Button>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label={t("common.close")}
-          className="flex h-7 w-7 items-center justify-center rounded-pill text-ink-mute transition-colors hover:bg-surface hover:text-ink"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      <ul className="mt-3 space-y-1.5">
-        {proposed.map((p) => {
-          const id = `proposed-${p.field}`;
-          const isPicked = picked.has(p.field);
-          return (
-            <li key={p.field}>
-              <label
-                htmlFor={id}
-                className={cn(
-                  "flex cursor-pointer items-start gap-2.5 rounded-xl border bg-surface px-3 py-2 transition-colors",
-                  isPicked
-                    ? "border-primary/40"
-                    : "border-outline-soft hover:border-outline",
-                )}
-              >
-                <input
-                  id={id}
-                  type="checkbox"
-                  checked={isPicked}
-                  onChange={() => onToggle(p.field)}
-                  className="mt-0.5"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="font-mono text-[10px] uppercase tracking-wider text-ink-mute">
-                    {t(`myApps.edit.githubSource.proposed.field.${p.field}`)}
-                  </div>
-                  <div className="mt-0.5 break-words text-sm text-ink">{p.proposed_value}</div>
-                </div>
-              </label>
-            </li>
-          );
-        })}
-      </ul>
-
-      <div className="mt-3 flex items-center justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
-          {t("common.cancel")}
-        </Button>
-        <Button
-          type="button"
-          variant="filled"
-          size="sm"
-          onClick={onApply}
-          disabled={busy || pickedCount === 0}
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          {t("myApps.edit.githubSource.proposed.apply", { count: pickedCount })}
-        </Button>
       </div>
     </div>
   );
