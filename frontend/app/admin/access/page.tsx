@@ -2,6 +2,7 @@
 
 import { Check, Copy, Globe, KeyRound, Lock, Plus, ShieldCheck, Trash2, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,18 +12,8 @@ import { api, type InviteCode, type RegistrationPolicy, type RepoConfigInfo } fr
 import { useRepoStore } from "@/lib/repo-store";
 import { cn, formatDate } from "@/lib/utils";
 
-/* ============================================================================
- * Access & registration admin page.
- *
- * Two settings drive every door into the repo:
- *   1. public_mode — anonymous browse + F-Droid sync on/off
- *   2. registration_policy — who can create an account
- *
- * Plus a small CRUD on invite codes when the policy is "invite".
- * Settings persist on RepoConfig; toggling them never requires a re-index
- * (the backend skips reindex for these patches).
- * ============================================================================ */
 export default function AdminAccessPage() {
+  const { t } = useTranslation();
   const refreshGlobalRepo = useRepoStore((s) => s.refresh);
 
   const [repo, setRepo] = useState<RepoConfigInfo | null>(null);
@@ -37,13 +28,11 @@ export default function AdminAccessPage() {
       setRepo(r);
       setInvites(list);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to load");
+      setErr(e instanceof Error ? e.message : t("admin.access.loadFailed"));
     }
   }
-  useEffect(() => { refreshAll(); }, []);
+  useEffect(() => { refreshAll(); /* eslint-disable-next-line */ }, []);
 
-  // Optimistic, single-field patches — admins toggle radios + switches
-  // quickly and we don't want every click to feel like a save.
   async function patchRepo(patch: Partial<Pick<RepoConfigInfo, "public_mode" | "registration_policy">>) {
     if (!repo) return;
     setErr(null); setMsg(null);
@@ -52,30 +41,27 @@ export default function AdminAccessPage() {
     try {
       const updated = await api.admin.updateRepo(patch);
       setRepo(updated);
-      // Auth-methods + login UI consume this too, so propagate.
       await refreshGlobalRepo();
-      setMsg("Saved.");
+      setMsg(t("admin.access.saved"));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Save failed");
-      // Roll back the optimistic value so the UI stays truthful.
+      setErr(e instanceof Error ? e.message : t("admin.access.saveFailed"));
       setRepo(repo);
     }
   }
 
   if (!repo) {
-    return <p className="text-sm text-ink-mute">Loading…</p>;
+    return <p className="text-sm text-ink-mute">{t("admin.access.loading")}</p>;
   }
 
   return (
     <div className="space-y-6">
       <header>
-        <div className="eyebrow">Admin · access</div>
+        <div className="eyebrow">{t("admin.access.eyebrow")}</div>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">
-          Access &amp; registration
+          {t("admin.access.title")}
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-ink-soft">
-          Choose who can browse the catalogue, sync the F-Droid index, and create
-          new accounts. Changes apply instantly.
+          {t("admin.access.subtitle")}
         </p>
       </header>
 
@@ -85,12 +71,10 @@ export default function AdminAccessPage() {
       {/* ── Public mode ── */}
       <section className="surface p-6">
         <h2 className="mb-1 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
-          <Globe className="h-5 w-5" /> Public mode
+          <Globe className="h-5 w-5" /> {t("admin.access.publicMode")}
         </h2>
         <p className="mb-5 text-sm text-ink-soft">
-          When public, anyone can browse public apps on the website and any
-          F-Droid client can sync the public repo without credentials. Private
-          apps are still gated by API keys, regardless of this setting.
+          {t("admin.access.publicModeBody")}
         </p>
         <RadioCardGroup<boolean>
           value={repo.public_mode}
@@ -99,14 +83,14 @@ export default function AdminAccessPage() {
             {
               value: true,
               icon: <Globe className="h-5 w-5" />,
-              title: "Public",
-              subtitle: "Open browsing + public F-Droid sync",
+              title: t("admin.access.publicOption"),
+              subtitle: t("admin.access.publicOptionSubtitle"),
             },
             {
               value: false,
               icon: <Lock className="h-5 w-5" />,
-              title: "Private",
-              subtitle: "Login or API key required everywhere",
+              title: t("admin.access.privateOption"),
+              subtitle: t("admin.access.privateOptionSubtitle"),
             },
           ]}
         />
@@ -115,12 +99,10 @@ export default function AdminAccessPage() {
       {/* ── Registration ── */}
       <section className="surface p-6">
         <h2 className="mb-1 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
-          <UsersRound className="h-5 w-5" /> Registration
+          <UsersRound className="h-5 w-5" /> {t("admin.access.registration")}
         </h2>
         <p className="mb-5 text-sm text-ink-soft">
-          Controls who can create an account. OIDC follows the same rule —
-          existing users always log in, but a new SSO account needs the same
-          permission as a local signup.
+          {t("admin.access.registrationBody")}
         </p>
         <RadioCardGroup<RegistrationPolicy>
           value={repo.registration_policy}
@@ -129,20 +111,20 @@ export default function AdminAccessPage() {
             {
               value: "public",
               icon: <Globe className="h-5 w-5" />,
-              title: "Open",
-              subtitle: "Anyone can sign up",
+              title: t("admin.access.policyOpen"),
+              subtitle: t("admin.access.policyOpenSubtitle"),
             },
             {
               value: "invite",
               icon: <KeyRound className="h-5 w-5" />,
-              title: "By invitation",
-              subtitle: "Invite code required",
+              title: t("admin.access.policyInvite"),
+              subtitle: t("admin.access.policyInviteSubtitle"),
             },
             {
               value: "closed",
               icon: <Lock className="h-5 w-5" />,
-              title: "Closed",
-              subtitle: "Admins create accounts manually",
+              title: t("admin.access.policyClosed"),
+              subtitle: t("admin.access.policyClosedSubtitle"),
             },
           ]}
         />
@@ -150,10 +132,9 @@ export default function AdminAccessPage() {
 
       {/* ── Upload limits ── */}
       <section className="surface p-6">
-        <h2 className="mb-1 text-lg font-bold tracking-tight text-ink">Upload limits</h2>
+        <h2 className="mb-1 text-lg font-bold tracking-tight text-ink">{t("admin.access.uploadLimits")}</h2>
         <p className="mb-5 text-sm text-ink-soft">
-          Hard cap on APK uploads. Larger files are refused before they hit
-          disk. Set this just above your largest legitimate release.
+          {t("admin.access.uploadLimitsBody")}
         </p>
         <ApkSizeEditor
           repo={repo}
@@ -172,15 +153,14 @@ export default function AdminAccessPage() {
       >
         <div className="mb-1 flex items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
-            <ShieldCheck className="h-5 w-5" /> Invite codes
+            <ShieldCheck className="h-5 w-5" /> {t("admin.access.invites")}
           </h2>
           {repo.registration_policy !== "invite" && (
-            <Badge variant="outline">inactive · policy not set to “invite”</Badge>
+            <Badge variant="outline">{t("admin.access.invitesInactive")}</Badge>
           )}
         </div>
         <p className="mb-5 text-sm text-ink-soft">
-          Single-use codes. Share each one with the person you're inviting; it
-          burns out after their first successful signup.
+          {t("admin.access.invitesBody")}
         </p>
         <InviteCreator onCreated={refreshAll} setErr={setErr} setMsg={setMsg} />
         <InviteList invites={invites} onChange={refreshAll} setErr={setErr} setMsg={setMsg} />
@@ -188,8 +168,6 @@ export default function AdminAccessPage() {
     </div>
   );
 }
-
-/* ───────────────────────────────────────────────────────────────────────── */
 
 function Toast({ tone, children }: { tone: "ok" | "err"; children: React.ReactNode }) {
   return (
@@ -266,6 +244,7 @@ function InviteCreator({
   setErr: (s: string | null) => void;
   setMsg: (s: string | null) => void;
 }) {
+  const { t } = useTranslation();
   const [note, setNote] = useState("");
   const [expires, setExpires] = useState("");
   const [busy, setBusy] = useState(false);
@@ -283,7 +262,7 @@ function InviteCreator({
       setNote(""); setExpires("");
       onCreated();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Create failed");
+      setErr(e instanceof Error ? e.message : t("admin.access.createFailed"));
     } finally {
       setBusy(false);
     }
@@ -293,29 +272,29 @@ function InviteCreator({
     <div className="mb-6 rounded-2xl border border-outline-soft bg-surface p-4">
       <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-[2fr_1fr_auto]">
         <div className="space-y-1.5">
-          <Label htmlFor="inv-note" className="text-xs font-medium text-ink-soft">Note (optional)</Label>
+          <Label htmlFor="inv-note" className="text-xs font-medium text-ink-soft">{t("admin.access.noteLabel")}</Label>
           <Input
             id="inv-note"
-            placeholder="e.g. for Alice"
+            placeholder={t("admin.access.notePlaceholder")}
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="inv-exp" className="text-xs font-medium text-ink-soft">Expires (days)</Label>
+          <Label htmlFor="inv-exp" className="text-xs font-medium text-ink-soft">{t("admin.access.expiresLabel")}</Label>
           <Input
             id="inv-exp"
             type="number"
             min={1}
             max={365}
-            placeholder="never"
+            placeholder={t("admin.access.expiresPlaceholder")}
             value={expires}
             onChange={(e) => setExpires(e.target.value)}
           />
         </div>
         <div className="flex items-end">
           <Button type="submit" variant="filled" className="w-full" disabled={busy}>
-            <Plus className="h-4 w-4" /> Generate
+            <Plus className="h-4 w-4" /> {t("admin.access.generate")}
           </Button>
         </div>
       </form>
@@ -328,6 +307,7 @@ function InviteCreator({
 }
 
 function InviteHighlight({ invite, onDismiss }: { invite: InviteCode; onDismiss: () => void }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   async function copy() {
     try {
@@ -341,16 +321,16 @@ function InviteHighlight({ invite, onDismiss }: { invite: InviteCode; onDismiss:
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-[10px] uppercase tracking-wider text-primary-on-container/80">
-            New invite code — copy it now
+            {t("admin.access.newCode")}
           </div>
           <code className="mt-1 block select-all break-all font-mono text-sm text-primary-on-container">
             {invite.code}
           </code>
         </div>
-        <Button variant="tonal" size="icon-sm" onClick={copy} aria-label="Copy code">
+        <Button variant="tonal" size="icon-sm" onClick={copy} aria-label={t("admin.access.copyCode")}>
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onDismiss}>Done</Button>
+        <Button variant="ghost" size="sm" onClick={onDismiss}>{t("admin.access.done")}</Button>
       </div>
     </div>
   );
@@ -367,18 +347,19 @@ function InviteList({
   setErr: (s: string | null) => void;
   setMsg: (s: string | null) => void;
 }) {
+  const { t } = useTranslation();
   const [revoking, setRevoking] = useState<string | null>(null);
   const sorted = useMemo(() => invites, [invites]);
 
   async function revoke(id: string) {
-    if (!confirm("Revoke this invite code?")) return;
+    if (!confirm(t("admin.access.revokeConfirm"))) return;
     setRevoking(id); setErr(null);
     try {
       await api.admin.invites.revoke(id);
-      setMsg("Invite revoked.");
+      setMsg(t("admin.access.revoked"));
       onChange();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Revoke failed");
+      setErr(e instanceof Error ? e.message : t("admin.access.revokeFailed"));
     } finally {
       setRevoking(null);
     }
@@ -387,7 +368,7 @@ function InviteList({
   if (sorted.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-outline px-4 py-8 text-center italic text-ink-mute">
-        No invite codes yet.
+        {t("admin.access.noInvites")}
       </div>
     );
   }
@@ -395,7 +376,7 @@ function InviteList({
   return (
     <ul className="space-y-2">
       {sorted.map((inv) => {
-        const status = inviteStatus(inv);
+        const status = inviteStatus(inv, t);
         return (
           <li key={inv.id} className="flex flex-wrap items-center gap-3 rounded-2xl border border-outline-soft bg-surface p-3">
             <code className="select-all rounded-pill bg-surface-2 px-3 py-1 font-mono text-xs text-ink">
@@ -406,10 +387,10 @@ function InviteList({
                 <div className="truncate text-sm text-ink">{inv.note}</div>
               )}
               <div className="font-mono text-[11px] text-ink-mute">
-                created {formatDate(inv.created_at)}
-                {inv.created_by_username && ` by ${inv.created_by_username}`}
-                {inv.expires_at && ` · expires ${formatDate(inv.expires_at)}`}
-                {inv.used_by_username && ` · used by ${inv.used_by_username}`}
+                {t("admin.access.created", { date: formatDate(inv.created_at) })}
+                {inv.created_by_username && t("admin.access.createdBy", { name: inv.created_by_username })}
+                {inv.expires_at && t("admin.access.expires", { date: formatDate(inv.expires_at) })}
+                {inv.used_by_username && t("admin.access.usedBy", { name: inv.used_by_username })}
               </div>
             </div>
             <Badge variant={status.tone}>{status.label}</Badge>
@@ -419,7 +400,7 @@ function InviteList({
               onClick={() => revoke(inv.id)}
               disabled={revoking === inv.id}
             >
-              <Trash2 className="h-3.5 w-3.5" /> Delete
+              <Trash2 className="h-3.5 w-3.5" /> {t("admin.access.delete")}
             </Button>
           </li>
         );
@@ -439,6 +420,7 @@ function ApkSizeEditor({
   setErr: (s: string | null) => void;
   setMsg: (s: string | null) => void;
 }) {
+  const { t } = useTranslation();
   const [value, setValue] = useState(String(repo.upload_max_apk_mb));
   const [busy, setBusy] = useState(false);
 
@@ -447,16 +429,16 @@ function ApkSizeEditor({
   async function save() {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed < 5 || parsed > 2000) {
-      setErr("APK size cap must be between 5 and 2000 MB");
+      setErr(t("admin.access.apkSizeError"));
       return;
     }
     setErr(null); setMsg(null); setBusy(true);
     try {
       const updated = await api.admin.updateRepo({ upload_max_apk_mb: parsed });
       await onSaved(updated);
-      setMsg("Saved.");
+      setMsg(t("admin.access.saved"));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Save failed");
+      setErr(e instanceof Error ? e.message : t("admin.access.saveFailed"));
     } finally {
       setBusy(false);
     }
@@ -466,7 +448,7 @@ function ApkSizeEditor({
     <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
       <div className="space-y-1.5">
         <Label htmlFor="apksize" className="text-xs font-medium text-ink-soft">
-          Max APK size (MB)
+          {t("admin.access.maxApkSize")}
         </Label>
         <Input
           id="apksize"
@@ -478,20 +460,20 @@ function ApkSizeEditor({
         />
       </div>
       <Button type="button" variant="filled" onClick={save} disabled={busy}>
-        Save
+        {t("admin.access.save")}
       </Button>
     </div>
   );
 }
 
 
-function inviteStatus(inv: InviteCode): {
+function inviteStatus(inv: InviteCode, t: (k: string) => string): {
   label: string;
   tone: "primary" | "outline" | "destructive" | "soft";
 } {
-  if (inv.used_at) return { label: "used", tone: "outline" };
+  if (inv.used_at) return { label: t("admin.access.statusUsed"), tone: "outline" };
   if (inv.expires_at && new Date(inv.expires_at).getTime() < Date.now()) {
-    return { label: "expired", tone: "destructive" };
+    return { label: t("admin.access.statusExpired"), tone: "destructive" };
   }
-  return { label: "pending", tone: "primary" };
+  return { label: t("admin.access.statusPending"), tone: "primary" };
 }
