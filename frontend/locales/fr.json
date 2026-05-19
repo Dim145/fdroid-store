@@ -409,7 +409,7 @@
     "submitting": "Création…",
     "createFailed": "Échec de la création",
     "edit": {
-      "back": "← Retour à mes apps",
+      "back": "Mes apps",
       "publicPage": "Page publique",
       "sections": {
         "listing": "Fiche",
@@ -435,6 +435,8 @@
         "title": "Titre",
         "packageLocked": "Paquet (verrouillé)",
         "visibility": "Visibilité",
+        "visibilityPublic": "Publique",
+        "visibilityPrivate": "Privée",
         "summary": "Résumé",
         "description": "Description",
         "categories": "Catégories",
@@ -445,10 +447,14 @@
         "issueTracker": "Bug tracker",
         "authorEmail": "E-mail de l'auteur",
         "translationUrl": "URL de traduction",
+        "translationPlaceholder": "https://weblate.example.org/…",
         "donateUrl": "URL de don",
         "liberapay": "Liberapay",
+        "liberapayPlaceholder": "https://liberapay.com/you",
         "openCollective": "Open Collective",
-        "bitcoin": "Bitcoin"
+        "openCollectivePlaceholder": "https://opencollective.com/you",
+        "bitcoin": "Bitcoin",
+        "bitcoinPlaceholder": "bc1q… ou bitcoin:bc1q…"
       },
       "saveListing": "Enregistrer la fiche",
       "saved": "Fiche enregistrée.",
@@ -522,6 +528,7 @@
         "reset_toast": "Version suggérée remise en auto.",
         "resetFailed": "Échec",
         "moreLocales": "(+{{n}} de plus)",
+        "metaLine": "Code {{code}} · {{size}} · SDK {{min}}–{{max}}",
         "changelogSaved": "Changelog enregistré.",
         "changelogSaveFailed": "Échec",
         "changelogCleared": "Changelog effacé.",
@@ -578,7 +585,7 @@
         "title": "Certificat de signature verrouillé",
         "body": "Les uploads ultérieurs d'APK doivent être signés par ce certificat exact. Tout le reste est rejeté avant de pouvoir remplacer le paquet."
       },
-      "deleteApp": "Supprimer l'app",
+      "deleteApp": "Supprimer la version",
       "deleteAppConfirm": "Supprimer {{name}} et TOUTES ses versions ? Définitif.",
       "deleteAppFailed": "Échec de la suppression",
       "loadFailed": "Échec du chargement de l'app"

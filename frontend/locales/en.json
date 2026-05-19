@@ -409,7 +409,7 @@
     "submitting": "Creating…",
     "createFailed": "Create failed",
     "edit": {
-      "back": "← Back to my apps",
+      "back": "My apps",
       "publicPage": "Public page",
       "sections": {
         "listing": "Listing",
@@ -435,6 +435,8 @@
         "title": "Title",
         "packageLocked": "Package (locked)",
         "visibility": "Visibility",
+        "visibilityPublic": "Public",
+        "visibilityPrivate": "Private",
         "summary": "Summary",
         "description": "Description",
         "categories": "Categories",
@@ -445,10 +447,14 @@
         "issueTracker": "Issue tracker",
         "authorEmail": "Author email",
         "translationUrl": "Translation URL",
+        "translationPlaceholder": "https://weblate.example.org/…",
         "donateUrl": "Donate URL",
         "liberapay": "Liberapay",
+        "liberapayPlaceholder": "https://liberapay.com/you",
         "openCollective": "Open Collective",
-        "bitcoin": "Bitcoin"
+        "openCollectivePlaceholder": "https://opencollective.com/you",
+        "bitcoin": "Bitcoin",
+        "bitcoinPlaceholder": "bc1q… or bitcoin:bc1q…"
       },
       "saveListing": "Save listing",
       "saved": "Listing saved.",
@@ -522,6 +528,7 @@
         "reset_toast": "Suggested version back to auto.",
         "resetFailed": "Reset failed",
         "moreLocales": "(+{{n}} more)",
+        "metaLine": "Code {{code}} · {{size}} · SDK {{min}}–{{max}}",
         "changelogSaved": "Changelog saved.",
         "changelogSaveFailed": "Save failed",
         "changelogCleared": "Changelog cleared.",
@@ -578,7 +585,7 @@
         "title": "Signing certificate locked",
         "body": "Subsequent APK uploads must be signed with this exact certificate. Anything else is rejected before it can replace the package."
       },
-      "deleteApp": "Delete app",
+      "deleteApp": "Delete release",
       "deleteAppConfirm": "Delete {{name}} and ALL versions? Permanent.",
       "deleteAppFailed": "Delete failed",
       "loadFailed": "Failed to load app"
