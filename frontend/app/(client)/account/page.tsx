@@ -4,6 +4,7 @@ import { Check, Copy, EyeOff, Globe2, Key, Trash2, User as UserIcon, X } from "l
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { QuotaUsageSection, SessionsSection, TotpSection } from "@/components/account-security";
 import { AuthGuard } from "@/components/auth-guard";
 import { RepoQrCode } from "@/components/repo-qr-code";
 import { Badge } from "@/components/ui/badge";
@@ -400,6 +401,21 @@ function AccountInner() {
             </li>
           ))}
         </ul>
+      </Section>
+
+      {/* Quotas */}
+      <Section step="06" title={t("account.sections.quotas")}>
+        <QuotaUsageSection />
+      </Section>
+
+      {/* Active sessions */}
+      <Section step="07" title={t("account.sections.sessions")}>
+        <SessionsSection />
+      </Section>
+
+      {/* 2FA */}
+      <Section step="08" title={t("account.sections.totp")}>
+        <TotpSection />
       </Section>
     </div>
   );
