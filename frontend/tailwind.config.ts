@@ -110,6 +110,10 @@ const config: Config = {
           from: { transform: "translateY(-8px)", opacity: "0" },
           to: { transform: "translateY(0)", opacity: "1" },
         },
+        "slide-in-right": {
+          from: { transform: "translateX(24px)", opacity: "0" },
+          to: { transform: "translateX(0)", opacity: "1" },
+        },
         ripple: {
           "0%": { transform: "scale(0)", opacity: "0.35" },
           "100%": { transform: "scale(2.2)", opacity: "0" },
@@ -119,6 +123,7 @@ const config: Config = {
         "fade-in": "fade-in 0.35s ease-out both",
         "fade-up": "fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both",
         "slide-down": "slide-down 0.25s ease-out both",
+        "slide-in-right": "slide-in-right 0.28s cubic-bezier(0.22, 1, 0.36, 1) both",
       },
       transitionTimingFunction: {
         // Material standard easing — used by interactive components.
