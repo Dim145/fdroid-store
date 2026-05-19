@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Activity, PlayCircle, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -19,6 +19,7 @@ export default function AdminScansPage() {
   const [scans, setScans] = useState<ApkScanRow[]>([]);
   const [onlyInfected, setOnlyInfected] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
 
   async function reload() {
     setLoading(true);
@@ -47,6 +48,25 @@ export default function AdminScansPage() {
       toast.success(t("admin.scans.saved"));
     } catch (e) {
       toast.error(t("admin.scans.saveFailed"), e instanceof Error ? e.message : undefined);
+    }
+  }
+
+  async function scanNow() {
+    setScanning(true);
+    try {
+      await api.admin.clamavScanNow();
+      toast.success(t("admin.scans.scanNowQueued"));
+      // The worker stamps each row as it processes; poll a few times so
+      // the history section catches up without the user having to hit
+      // Refresh manually.
+      for (const delay of [3000, 6000, 12000]) {
+        await new Promise((r) => setTimeout(r, delay));
+        await reload();
+      }
+    } catch (e) {
+      toast.error(t("admin.scans.scanNowFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setScanning(false);
     }
   }
 
@@ -109,6 +129,16 @@ export default function AdminScansPage() {
                 onCheckedChange={(v) => toggle("clamav_scan_periodic", v)}
               />
             </label>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-outline-soft bg-surface px-4 py-3">
+              <div>
+                <div className="text-sm font-medium text-ink">{t("admin.scans.scanNow")}</div>
+                <div className="text-xs text-ink-mute">{t("admin.scans.scanNowBody")}</div>
+              </div>
+              <Button variant="filled" size="sm" onClick={scanNow} disabled={scanning || !ping?.ok}>
+                <PlayCircle className="h-4 w-4" />
+                {scanning ? t("admin.scans.scanNowRunning") : t("admin.scans.scanNowAction")}
+              </Button>
+            </div>
           </div>
         )}
       </section>

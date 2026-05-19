@@ -532,6 +532,41 @@ async def admin_clamav_ping(
     return {"ok": await ping(), "configured": True}
 
 
+@router.post("/clamav/scan-now", response_model=dict)
+async def admin_clamav_scan_now(
+    db: DbSession,
+    request: Request,
+    admin: Annotated[User, Depends(get_current_admin)],
+) -> dict:
+    """Trigger a one-shot rescan of every PUBLISHED apk. Same code path
+    as the daily cron but with ``force=True`` so the periodic toggle and
+    the 24h "already scanned" cutoff are both bypassed. Coalesced under
+    a fixed job_id at the queue level — spamming the button is safe."""
+    from app.core.config import settings as _settings
+    from app.services.queue import enqueue_clamav_scan
+
+    if not _settings.clamav_available:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ClamAV is not configured (set CLAMAV_HOST to enable)",
+        )
+    ok = await enqueue_clamav_scan()
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not reach the job queue",
+        )
+    await write_event(
+        db,
+        action="clamav.scan_triggered",
+        actor=admin,
+        target_type="repo_config",
+        summary="manual ClamAV rescan triggered",
+        request=request,
+    )
+    return {"queued": True}
+
+
 @router.get("/scans", response_model=list[dict])
 async def admin_recent_scans(
     db: DbSession,

@@ -43,13 +43,17 @@ async def rebuild_index(ctx: dict) -> dict:
             raise
 
 
-async def scan_apks_periodic(ctx: dict) -> dict:
+async def scan_apks_periodic(ctx: dict, force: bool = False) -> dict:
     """Re-scan every PUBLISHED apk whose last scan is older than 24h.
 
-    No-op when clamd isn't configured at the env level, when the admin
-    hasn't enabled ``clamav_scan_periodic``, or when the storage backend
-    isn't ``LocalStorage`` (S3 + scan in-place would need a separate
-    fetch pipeline — out of scope for now)."""
+    No-op when clamd isn't configured at the env level or when the
+    storage backend isn't ``LocalStorage`` (S3 + scan in-place would
+    need a separate fetch pipeline — out of scope for now).
+
+    The ``clamav_scan_periodic`` admin toggle gates the *recurring* cron
+    run; manual triggers from /admin/scans set ``force=True`` so an
+    operator can validate the setup before flipping the daily switch on.
+    """
     if not settings.clamav_available:
         log.info("scan_apks_periodic skipped: CLAMAV_HOST not set")
         return {"skipped": "clamav_not_configured"}
@@ -63,7 +67,7 @@ async def scan_apks_periodic(ctx: dict) -> dict:
 
     async with SessionLocal() as db:
         config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
-        if config is None or not config.clamav_scan_periodic:
+        if not force and (config is None or not config.clamav_scan_periodic):
             log.info("scan_apks_periodic skipped: admin toggle off")
             return {"skipped": "disabled"}
 
@@ -88,7 +92,9 @@ async def scan_apks_periodic(ctx: dict) -> dict:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if latest is not None and latest.created_at >= cutoff:
+            # Manual triggers rescan everything; cron runs only refresh
+            # rows older than 24h (or never-scanned).
+            if not force and latest is not None and latest.created_at >= cutoff:
                 continue
             try:
                 local = storage.local_path(apk.storage_key)

@@ -48,8 +48,13 @@ class ScanResult:
 _CHUNK = 64 * 1024  # 64 KiB — comfortably below clamd's StreamMaxLength
 
 
-async def _scan_stream(host: str, port: int, fh) -> ScanResult:
-    timeout_s = 30.0
+async def _scan_stream(host: str, port: int, fh, *, size_bytes: int = 0) -> ScanResult:
+    # 20 s base + 1 s per MB on the wire. Scales with the file: 12 MB APK
+    # → ~32 s, 75 MB APK → ~95 s. ClamAV's INSTREAM throughput on a single
+    # core is roughly 1-2 MB/s for compressed archives, so this gives the
+    # scanner ~2× headroom before we kill the connection.
+    mb = max(0, size_bytes) // (1024 * 1024)
+    timeout_s = max(30.0, 20.0 + float(mb))
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=5.0
@@ -125,8 +130,12 @@ async def scan_path(path: Path) -> ScanResult:
             error="CLAMAV_HOST is not set",
         )
     port = settings.clamav_port
+    try:
+        size_bytes = path.stat().st_size
+    except OSError:
+        size_bytes = 0
     with path.open("rb") as fh:
-        return await _scan_stream(host, port, fh)
+        return await _scan_stream(host, port, fh, size_bytes=size_bytes)
 
 
 async def ping() -> bool:

@@ -31,6 +31,31 @@ async def enqueue_reindex() -> None:
         log.warning("could not enqueue reindex", error=str(exc))
 
 
+async def enqueue_clamav_scan() -> bool:
+    """Schedule a one-shot full rescan of every published APK.
+
+    Identical to the daily cron run but with ``force=True`` so the toggle
+    + 24h-cutoff are bypassed. Coalesced under a fixed job_id — pressing
+    the button multiple times in quick succession only queues one run.
+    Returns True when the enqueue succeeded, False when Redis was
+    unreachable so the caller can surface a 503.
+    """
+    try:
+        pool = await create_pool(_redis_settings())
+        try:
+            await pool.enqueue_job(
+                "scan_apks_periodic",
+                True,  # force
+                _job_id="scan_apks_manual",
+            )
+            return True
+        finally:
+            await pool.close()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not enqueue manual scan", error=str(exc))
+        return False
+
+
 async def queue_snapshot() -> dict:
     """Best-effort introspection for the admin "Jobs" page.
 

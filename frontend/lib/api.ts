@@ -523,6 +523,8 @@ export const api = {
     jobs: () => apiFetch<JobsSnapshot>("/api/v1/admin/jobs"),
     clamavPing: () =>
       apiFetch<{ ok: boolean; configured: boolean }>("/api/v1/admin/clamav/ping"),
+    clamavScanNow: () =>
+      apiFetch<{ queued: boolean }>("/api/v1/admin/clamav/scan-now", { method: "POST" }),
     scans: (params: { limit?: number; only_infected?: boolean } = {}) => {
       const qs = new URLSearchParams();
       qs.set("limit", String(params.limit ?? 50));
