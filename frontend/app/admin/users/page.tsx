@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Gauge } from "lucide-react";
+import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api, type CurrentUser } from "@/lib/api";
+import { api, type AdminUpdateUser, type CurrentUser } from "@/lib/api";
+import { toast } from "@/lib/toast-store";
 
 export default function AdminUsersPage() {
   const { t } = useTranslation();
@@ -20,6 +22,9 @@ export default function AdminUsersPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"user" | "admin">("user");
+  // Inline quota editor — only one row open at a time so we don't flood
+  // the table with input rows.
+  const [editingQuotas, setEditingQuotas] = useState<string | null>(null);
 
   async function refresh() {
     try { setUsers(await api.admin.listUsers(q || undefined)); }
@@ -98,25 +103,45 @@ export default function AdminUsersPage() {
           </TableHeader>
           <TableBody>
             {users.map((u) => (
-              <TableRow key={u.id}>
-                <TableCell>
-                  <div className="text-sm text-ink">{u.email}</div>
-                  {!u.is_active && (
-                    <div className="text-[10px] uppercase tracking-wider text-danger">{t("admin.users.disabled")}</div>
-                  )}
-                </TableCell>
-                <TableCell className="font-mono text-[11px]">{u.username}</TableCell>
-                <TableCell><Badge variant={u.role === "admin" ? "primary" : "outline"}>{u.role}</Badge></TableCell>
-                <TableCell><Badge variant="outline">{u.auth_provider}</Badge></TableCell>
-                <TableCell className="hidden md:table-cell text-xs text-ink-mute">{u.last_login_at ?? "—"}</TableCell>
-                <TableCell className="space-x-1 text-right">
-                  <Button size="sm" variant="outlined" onClick={() => toggleActive(u)}>{u.is_active ? t("admin.users.disable") : t("admin.users.enable")}</Button>
-                  <Button size="sm" variant="outlined" onClick={() => toggleRole(u)}>
-                    {u.role === "admin" ? t("admin.users.makeUser") : t("admin.users.makeAdmin")}
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => remove(u)}>{t("admin.users.delete")}</Button>
-                </TableCell>
-              </TableRow>
+              <Fragment key={u.id}>
+                <TableRow>
+                  <TableCell>
+                    <div className="text-sm text-ink">{u.email}</div>
+                    {!u.is_active && (
+                      <div className="text-[10px] uppercase tracking-wider text-danger">{t("admin.users.disabled")}</div>
+                    )}
+                  </TableCell>
+                  <TableCell className="font-mono text-[11px]">{u.username}</TableCell>
+                  <TableCell><Badge variant={u.role === "admin" ? "primary" : "outline"}>{u.role}</Badge></TableCell>
+                  <TableCell><Badge variant="outline">{u.auth_provider}</Badge></TableCell>
+                  <TableCell className="hidden md:table-cell text-xs text-ink-mute">{u.last_login_at ?? "—"}</TableCell>
+                  <TableCell className="space-x-1 text-right">
+                    <Button size="sm" variant="outlined" onClick={() => toggleActive(u)}>{u.is_active ? t("admin.users.disable") : t("admin.users.enable")}</Button>
+                    <Button size="sm" variant="outlined" onClick={() => toggleRole(u)}>
+                      {u.role === "admin" ? t("admin.users.makeUser") : t("admin.users.makeAdmin")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      onClick={() => setEditingQuotas(editingQuotas === u.id ? null : u.id)}
+                    >
+                      <Gauge className="h-3.5 w-3.5" /> {t("admin.users.quotas")}
+                    </Button>
+                    <Button size="sm" variant="danger" onClick={() => remove(u)}>{t("admin.users.delete")}</Button>
+                  </TableCell>
+                </TableRow>
+                {editingQuotas === u.id && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="bg-surface-2/50 p-4">
+                      <QuotaEditor
+                        user={u}
+                        onClose={() => setEditingQuotas(null)}
+                        onSaved={async () => { await refresh(); setEditingQuotas(null); }}
+                      />
+                    </TableCell>
+                  </TableRow>
+                )}
+              </Fragment>
             ))}
             {users.length === 0 && (
               <TableRow>
@@ -135,6 +160,109 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor?: string; 
     <div className="space-y-1.5">
       <Label htmlFor={htmlFor} className="text-sm font-medium text-ink-soft">{label}</Label>
       {children}
+    </div>
+  );
+}
+
+
+/* Inline quota editor for one user row. ``null`` in any of the three
+ * fields means "fall back to the repo default" — encoded as the empty
+ * input below. The Save button only PATCHes the dimensions whose input
+ * changed against the original row, so a blank field clears that
+ * dimension via ``quota_reset_*`` instead of overwriting with 0. */
+function QuotaEditor({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: CurrentUser;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [apps, setApps] = useState<string>(user.quota_max_apps?.toString() ?? "");
+  const [storageMB, setStorageMB] = useState<string>(
+    user.quota_max_storage_bytes != null
+      ? Math.floor(user.quota_max_storage_bytes / (1024 * 1024)).toString()
+      : "",
+  );
+  const [monthly, setMonthly] = useState<string>(user.quota_max_apks_per_month?.toString() ?? "");
+  const [busy, setBusy] = useState(false);
+
+  function parseOrNull(s: string): number | null {
+    const trimmed = s.trim();
+    if (!trimmed) return null;
+    const n = parseInt(trimmed, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  async function save() {
+    setBusy(true);
+    const payload: AdminUpdateUser = {};
+    const a = parseOrNull(apps);
+    if (a == null) payload.quota_reset_apps = true;
+    else payload.quota_max_apps = a;
+
+    const s = parseOrNull(storageMB);
+    if (s == null) payload.quota_reset_storage_bytes = true;
+    else payload.quota_max_storage_bytes = s * 1024 * 1024;
+
+    const m = parseOrNull(monthly);
+    if (m == null) payload.quota_reset_apks_per_month = true;
+    else payload.quota_max_apks_per_month = m;
+
+    try {
+      await api.admin.updateUser(user.id, payload);
+      toast.success(t("admin.users.quotaSaved"));
+      await onSaved();
+    } catch (e) {
+      toast.error(t("admin.users.quotaSaveFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-ink-soft">{t("admin.users.quotaBody")}</p>
+      <div className="grid gap-3 md:grid-cols-3">
+        <Field label={t("admin.users.quotaApps")} htmlFor={`q-apps-${user.id}`}>
+          <Input
+            id={`q-apps-${user.id}`}
+            type="number"
+            min={0}
+            placeholder={t("admin.users.quotaInherit")}
+            value={apps}
+            onChange={(e) => setApps(e.target.value)}
+          />
+        </Field>
+        <Field label={t("admin.users.quotaStorage")} htmlFor={`q-storage-${user.id}`}>
+          <Input
+            id={`q-storage-${user.id}`}
+            type="number"
+            min={0}
+            placeholder={t("admin.users.quotaInherit")}
+            value={storageMB}
+            onChange={(e) => setStorageMB(e.target.value)}
+          />
+        </Field>
+        <Field label={t("admin.users.quotaMonthly")} htmlFor={`q-monthly-${user.id}`}>
+          <Input
+            id={`q-monthly-${user.id}`}
+            type="number"
+            min={0}
+            placeholder={t("admin.users.quotaInherit")}
+            value={monthly}
+            onChange={(e) => setMonthly(e.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="flex gap-2">
+        <Button variant="filled" size="sm" onClick={save} disabled={busy}>
+          {busy ? t("common.saving") : t("common.save")}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onClose}>{t("common.cancel")}</Button>
+      </div>
     </div>
   );
 }

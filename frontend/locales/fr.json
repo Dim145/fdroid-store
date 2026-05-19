@@ -1007,7 +1007,15 @@
       "enable": "Activer",
       "makeUser": "Passer utilisateur",
       "makeAdmin": "Passer admin",
-      "emptyUsers": "Aucun utilisateur."
+      "emptyUsers": "Aucun utilisateur.",
+      "quotas": "Quotas",
+      "quotaBody": "Vide = suit la valeur par défaut du dépôt. La capacité de stockage est en mébioctets.",
+      "quotaApps": "Apps max",
+      "quotaStorage": "Stockage max (MiB)",
+      "quotaMonthly": "APK max / mois",
+      "quotaInherit": "hériter du défaut",
+      "quotaSaved": "Quotas enregistrés.",
+      "quotaSaveFailed": "Impossible d'enregistrer les quotas"
     },
     "access": {
       "eyebrow": "Admin · accès",

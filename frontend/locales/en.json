@@ -1007,7 +1007,15 @@
       "enable": "Enable",
       "makeUser": "Make user",
       "makeAdmin": "Make admin",
-      "emptyUsers": "No users."
+      "emptyUsers": "No users.",
+      "quotas": "Quotas",
+      "quotaBody": "Empty = follow the repo-wide default. Storage cap is in mebibytes.",
+      "quotaApps": "Max apps",
+      "quotaStorage": "Max storage (MiB)",
+      "quotaMonthly": "Max APK uploads / month",
+      "quotaInherit": "inherit default",
+      "quotaSaved": "Quotas saved.",
+      "quotaSaveFailed": "Could not save quotas"
     },
     "access": {
       "eyebrow": "Admin · access",
