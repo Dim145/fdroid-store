@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useAuth } from "@/lib/auth-store";
 
@@ -38,11 +39,12 @@ export function AuthGuard({ children, requireAdmin = false }: Props) {
 }
 
 function Spinner() {
+  const { t } = useTranslation();
   return (
     <div
       className="h-6 w-6 animate-spin rounded-full border-2 border-outline-soft border-t-primary"
       role="status"
-      aria-label="Loading"
+      aria-label={t("common.loading")}
     />
   );
 }

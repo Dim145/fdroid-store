@@ -2,6 +2,7 @@
 
 import { Download } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -38,6 +39,7 @@ export function InstallPill({
   mode = "deeplink",
   className,
 }: Props) {
+  const { t } = useTranslation();
   const repo = useRepoInfo();
   const { user } = useAuth();
   const [hover, setHover] = useState(false);
@@ -97,7 +99,7 @@ export function InstallPill({
             )}
             strokeWidth={2.4}
           />
-          <span>{busy ? "…" : "Download .apk"}</span>
+          <span>{busy ? "…" : t("appDetail.downloadApk")}</span>
         </a>
       </Button>
     );
@@ -124,13 +126,13 @@ export function InstallPill({
             )}
             strokeWidth={2.4}
           />
-          <span>Install</span>
+          <span>{t("appDetail.install")}</span>
         </a>
       </Button>
       {apkLink && (
         <Button asChild variant="tonal" size="sm" className="self-stretch" disabled={busy}>
           <a href={apkLink} onClick={onClickApk} download className="text-xs">
-            {busy ? "…" : "Or download .apk"}
+            {busy ? "…" : t("appDetail.orDownloadApk")}
           </a>
         </Button>
       )}

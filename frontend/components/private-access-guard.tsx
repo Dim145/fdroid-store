@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useAuth } from "@/lib/auth-store";
 import { useRepoInfo } from "@/lib/repo-store";
@@ -14,6 +15,7 @@ import { useRepoInfo } from "@/lib/repo-store";
  * Mounted on routes that were anonymous-friendly (home + /(client)/*). The
  * /login page itself is *not* wrapped, otherwise we'd loop. */
 export function PrivateAccessGuard({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const repo = useRepoInfo();
@@ -39,7 +41,7 @@ export function PrivateAccessGuard({ children }: { children: React.ReactNode }) 
         <div
           className="h-7 w-7 animate-spin rounded-full border-2 border-outline-soft border-t-primary"
           role="status"
-          aria-label="Loading"
+          aria-label={t("common.loading")}
         />
       </div>
     );

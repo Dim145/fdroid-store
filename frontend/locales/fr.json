@@ -80,6 +80,27 @@
     "pasteHint": "Colle cette URL dans ton client F-Droid pour t'abonner.",
     "copyright": "© {{year}} fdroid-store · auto-hébergé"
   },
+  "theme": {
+    "label": "Thème",
+    "light": "Clair",
+    "system": "Système",
+    "dark": "Sombre"
+  },
+  "featureHero": {
+    "defaultKicker": "App mise en avant",
+    "selfHostedRelease": "Sortie auto-hébergée",
+    "open": "Ouvrir"
+  },
+  "permissions": {
+    "none": "Cette version ne demande aucune permission.",
+    "summary_one": "{{count}} permission · {{groups}} {{groupWord}} · v{{version}}",
+    "summary_other": "{{count}} permissions · {{groups}} {{groupWord}} · v{{version}}",
+    "group_one": "groupe",
+    "group_other": "groupes",
+    "showMore_one": "+ afficher {{count}} groupe de plus",
+    "showMore_other": "+ afficher {{count}} groupes de plus",
+    "showLess": "– afficher moins"
+  },
   "home": {
     "welcome": "Bienvenue",
     "defaultRepoName": "Votre étagère d'apps indé",

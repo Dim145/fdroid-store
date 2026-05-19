@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { groupPermissions } from "@/lib/android-permissions";
@@ -16,12 +17,13 @@ type Props = {
  * short sentence. Anything we don't have a curated translation for falls
  * into "Other" with a best-effort humanisation of its constant name. */
 export function AppPermissions({ permissions, versionLabel }: Props) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const groups = useMemo(() => groupPermissions(permissions), [permissions]);
   const totalCount = permissions.length;
 
   if (totalCount === 0) {
-    return <p className="text-sm italic text-ink-mute">This version requests no permissions.</p>;
+    return <p className="text-sm italic text-ink-mute">{t("permissions.none")}</p>;
   }
 
   // Show the first two columns of groups by default — that covers most apps.
@@ -34,8 +36,12 @@ export function AppPermissions({ permissions, versionLabel }: Props) {
     <div className="space-y-4">
       {versionLabel && (
         <p className="font-mono text-xs text-ink-mute">
-          {totalCount} permission{totalCount === 1 ? "" : "s"} · {groups.length}{" "}
-          group{groups.length === 1 ? "" : "s"} · v{versionLabel}
+          {t("permissions.summary", {
+            count: totalCount,
+            groups: groups.length,
+            groupWord: t("permissions.group", { count: groups.length }),
+            version: versionLabel,
+          })}
         </p>
       )}
 
@@ -73,12 +79,12 @@ export function AppPermissions({ permissions, versionLabel }: Props) {
 
       {hiddenGroups > 0 && (
         <Button variant="text" size="sm" onClick={() => setExpanded(true)} className="px-0">
-          + show {hiddenGroups} more group{hiddenGroups === 1 ? "" : "s"}
+          {t("permissions.showMore", { count: hiddenGroups })}
         </Button>
       )}
       {expanded && groups.length > INITIAL_GROUPS && (
         <Button variant="text" size="sm" onClick={() => setExpanded(false)} className="px-0">
-          – show less
+          {t("permissions.showLess")}
         </Button>
       )}
     </div>

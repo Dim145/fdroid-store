@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,9 @@ type Props = {
 /* The big banner at the top of the home page. Tints the card with a hue
  * derived from the app name so each featured app feels color-coordinated.
  * Mobile collapses to a stacked layout with the icon on top. */
-export function FeatureHero({ app, kicker = "Featured app" }: Props) {
+export function FeatureHero({ app, kicker }: Props) {
+  const { t } = useTranslation();
+  const kickerLabel = kicker ?? t("featureHero.defaultKicker");
   let h = 0;
   for (let i = 0; i < app.name.length; i++) h = (h * 31 + app.name.charCodeAt(i)) | 0;
   const hue = Math.abs(h) % 360;
@@ -45,13 +48,13 @@ export function FeatureHero({ app, kicker = "Featured app" }: Props) {
         />
         <div className="min-w-0">
           <Badge variant="primary" className="uppercase tracking-wider">
-            ★ {kicker}
+            ★ {kickerLabel}
           </Badge>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-ink md:text-4xl">
             {app.name}
           </h2>
           <p className="mt-1 text-sm text-ink-mute md:text-base">
-            {app.author_name || app.categories[0]?.name || "Self-hosted release"}
+            {app.author_name || app.categories[0]?.name || t("featureHero.selfHostedRelease")}
           </p>
           {app.summary && (
             <p className="mt-3 max-w-2xl text-sm text-ink-soft md:text-base">
@@ -60,7 +63,7 @@ export function FeatureHero({ app, kicker = "Featured app" }: Props) {
           )}
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <Button variant="filled" size="lg" className="pointer-events-none">
-              Open
+              {t("featureHero.open")}
             </Button>
             {app.suggested_version_name && (
               <Badge variant="soft" className="font-mono">
@@ -68,7 +71,7 @@ export function FeatureHero({ app, kicker = "Featured app" }: Props) {
               </Badge>
             )}
             {app.visibility === "private" && (
-              <Badge variant="accent">private</Badge>
+              <Badge variant="accent">{t("appCard.private")}</Badge>
             )}
             {app.categories.slice(0, 1).map((c) => (
               <Badge key={c.id} variant="outline">{c.name}</Badge>

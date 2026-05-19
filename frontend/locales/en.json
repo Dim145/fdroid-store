@@ -80,6 +80,27 @@
     "pasteHint": "Paste this in your F-Droid client to subscribe.",
     "copyright": "© {{year}} fdroid-store · self-hosted"
   },
+  "theme": {
+    "label": "Theme",
+    "light": "Light",
+    "system": "System",
+    "dark": "Dark"
+  },
+  "featureHero": {
+    "defaultKicker": "Featured app",
+    "selfHostedRelease": "Self-hosted release",
+    "open": "Open"
+  },
+  "permissions": {
+    "none": "This version requests no permissions.",
+    "summary_one": "{{count}} permission · {{groups}} {{groupWord}} · v{{version}}",
+    "summary_other": "{{count}} permissions · {{groups}} {{groupWord}} · v{{version}}",
+    "group_one": "group",
+    "group_other": "groups",
+    "showMore_one": "+ show {{count}} more group",
+    "showMore_other": "+ show {{count}} more groups",
+    "showLess": "– show less"
+  },
   "home": {
     "welcome": "Welcome",
     "defaultRepoName": "Your indie app shelf",

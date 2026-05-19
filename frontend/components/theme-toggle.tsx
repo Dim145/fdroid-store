@@ -2,6 +2,7 @@
 
 import { Moon, Sun, MonitorSmartphone } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useTheme } from "@/components/theme-provider";
 import { cn } from "@/lib/utils";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
  * light · system · dark. Persists via the ThemeProvider. The segment for the
  * currently-selected preference is filled; the others are ghost icons. */
 export function ThemeToggle() {
+  const { t } = useTranslation();
   const { preference, setPreference } = useTheme();
   const [open, setOpen] = useState(false);
 
@@ -19,26 +21,26 @@ export function ThemeToggle() {
         "relative inline-flex h-9 items-center rounded-pill border border-outline bg-surface p-0.5 text-ink-soft transition-colors",
       )}
       role="group"
-      aria-label="Theme"
+      aria-label={t("theme.label")}
     >
       <Segment
         active={preference === "light"}
         onClick={() => setPreference("light")}
-        label="Light"
+        label={t("theme.light")}
       >
         <Sun className="h-3.5 w-3.5" strokeWidth={2.2} />
       </Segment>
       <Segment
         active={preference === "system"}
         onClick={() => setPreference("system")}
-        label="System"
+        label={t("theme.system")}
       >
         <MonitorSmartphone className="h-3.5 w-3.5" strokeWidth={2.2} />
       </Segment>
       <Segment
         active={preference === "dark"}
         onClick={() => setPreference("dark")}
-        label="Dark"
+        label={t("theme.dark")}
       >
         <Moon className="h-3.5 w-3.5" strokeWidth={2.2} />
       </Segment>
