@@ -26,7 +26,7 @@ import html
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 
@@ -35,6 +35,29 @@ from app.models.app import App, AppStatus, AppVisibility, Category
 from app.models.repo_config import RepoConfig
 
 router = APIRouter()
+
+
+def _wants_inline_xml(request: Request) -> bool:
+    """Did this request come from a browser address bar?
+
+    Browsers send ``Accept: text/html,application/xhtml+xml,...`` while
+    feed readers send ``application/rss+xml`` or ``application/atom+xml``
+    (often without ``text/html`` at all). When the client clearly prefers
+    HTML we hand back ``application/xml`` instead of the RSS/Atom MIME so
+    the browser renders the document inline with its built-in XML viewer
+    instead of triggering a download.
+
+    Feed readers don't care about the exact content-type — they parse
+    whatever they're handed.
+    """
+    accept = (request.headers.get("accept") or "").lower()
+    if not accept or accept == "*/*":
+        return False
+    # A genuine feed reader always names the format it wants. If neither
+    # ``rss+xml`` nor ``atom+xml`` shows up in Accept, treat the caller as
+    # a browser.
+    feedy = "rss+xml" in accept or "atom+xml" in accept
+    return "text/html" in accept and not feedy
 
 
 def _xml_escape(text: str | None) -> str:
@@ -165,7 +188,7 @@ async def _load_apps_for_feed(
 @router.get("/new")
 async def feed_new(
     db: DbSession,
-    response: Response,
+    request: Request,
     format: Literal["atom", "rss"] = Query(default="atom"),
     category: str | None = Query(default=None, max_length=64),
     author: str | None = Query(default=None, max_length=255),
@@ -186,18 +209,19 @@ async def feed_new(
     if format == "rss":
         items = "".join(_rss_item(a, base, a.created_at, "") for a in apps)
         body = _wrap_rss("New apps", self_url, items)
-        media = "application/rss+xml; charset=utf-8"
+        feed_media = "application/rss+xml; charset=utf-8"
     else:
         entries = "".join(_atom_entry(a, base, a.created_at, "") for a in apps)
         body = _wrap_atom("New apps", self_url, entries)
-        media = "application/atom+xml; charset=utf-8"
+        feed_media = "application/atom+xml; charset=utf-8"
+    media = "application/xml; charset=utf-8" if _wants_inline_xml(request) else feed_media
     return Response(content=body, media_type=media)
 
 
 @router.get("/updates")
 async def feed_updates(
     db: DbSession,
-    response: Response,
+    request: Request,
     format: Literal["atom", "rss"] = Query(default="atom"),
     category: str | None = Query(default=None, max_length=64),
     author: str | None = Query(default=None, max_length=255),
@@ -221,9 +245,10 @@ async def feed_updates(
     if format == "rss":
         items = "".join(_rss_item(a, base, _ts(a), "Updated: ") for a in apps)
         body = _wrap_rss("App updates", self_url, items)
-        media = "application/rss+xml; charset=utf-8"
+        feed_media = "application/rss+xml; charset=utf-8"
     else:
         entries = "".join(_atom_entry(a, base, _ts(a), "Updated: ") for a in apps)
         body = _wrap_atom("App updates", self_url, entries)
-        media = "application/atom+xml; charset=utf-8"
+        feed_media = "application/atom+xml; charset=utf-8"
+    media = "application/xml; charset=utf-8" if _wants_inline_xml(request) else feed_media
     return Response(content=body, media_type=media)
