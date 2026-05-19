@@ -1106,7 +1106,16 @@
       "lastIndexed": "Last indexed",
       "triggerReindex": "Trigger reindex",
       "reindexQueued": "Reindex queued.",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "quotas": "Default quotas",
+      "quotasBody": "Caps applied to every user that doesn't have a per-user override. Leave empty for no cap (∞). Storage is in mebibytes.",
+      "quotaApps": "Max apps",
+      "quotaStorage": "Max storage (MiB)",
+      "quotaMonthly": "Max APK uploads / month",
+      "quotaUnlimited": "no cap",
+      "saveQuotas": "Save quotas",
+      "saved": "Saved.",
+      "saveFailed": "Save failed"
     },
     "setup": {
       "title": "Setup wizard",

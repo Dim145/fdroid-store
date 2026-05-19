@@ -1,6 +1,6 @@
 "use client";
 
-import { Image as ImageIcon, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Gauge, Image as ImageIcon, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -166,6 +166,20 @@ export default function AdminRepoPage() {
       </section>
 
       <section className="surface p-6">
+        <h2 className="mb-1 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
+          <Gauge className="h-5 w-5" /> {t("admin.repo.quotas")}
+        </h2>
+        <p className="mb-4 text-sm text-ink-soft">{t("admin.repo.quotasBody")}</p>
+        <QuotaDefaults
+          repo={repo}
+          onSaved={(updated) => {
+            setRepo(updated);
+            setMsg(t("admin.repo.saved"));
+          }}
+        />
+      </section>
+
+      <section className="surface p-6">
         <h2 className="mb-4 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
           <KeyRound className="h-5 w-5" /> {t("admin.repo.signingKey")}
         </h2>
@@ -217,5 +231,111 @@ function Detail({ label, value, mono }: { label: string; value: string | null | 
         {value || <Badge variant="soft">—</Badge>}
       </div>
     </div>
+  );
+}
+
+
+/* Repo-wide default quota editor. Empty input = no cap (unlimited).
+ * A per-user override still wins over whatever we set here. */
+function QuotaDefaults({
+  repo,
+  onSaved,
+}: {
+  repo: RepoConfigInfo;
+  onSaved: (updated: RepoConfigInfo) => void;
+}) {
+  const { t } = useTranslation();
+  const [apps, setApps] = useState<string>(
+    repo.default_quota_max_apps != null ? String(repo.default_quota_max_apps) : "",
+  );
+  const [storageMB, setStorageMB] = useState<string>(
+    repo.default_quota_max_storage_bytes != null
+      ? String(Math.floor(repo.default_quota_max_storage_bytes / (1024 * 1024)))
+      : "",
+  );
+  const [monthly, setMonthly] = useState<string>(
+    repo.default_quota_max_apks_per_month != null
+      ? String(repo.default_quota_max_apks_per_month)
+      : "",
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function parseOrNull(s: string): number | null {
+    const trimmed = s.trim();
+    if (!trimmed) return null;
+    const n = parseInt(trimmed, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null); setBusy(true);
+    const payload: Partial<RepoConfigInfo> = {};
+    const a = parseOrNull(apps);
+    if (a == null) payload.quota_reset_apps = true;
+    else payload.default_quota_max_apps = a;
+
+    const s = parseOrNull(storageMB);
+    if (s == null) payload.quota_reset_storage_bytes = true;
+    else payload.default_quota_max_storage_bytes = s * 1024 * 1024;
+
+    const m = parseOrNull(monthly);
+    if (m == null) payload.quota_reset_apks_per_month = true;
+    else payload.default_quota_max_apks_per_month = m;
+
+    try {
+      const updated = await api.admin.updateRepo(payload);
+      onSaved(updated);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : t("admin.repo.saveFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="grid gap-3 md:grid-cols-3">
+      <Field label={t("admin.repo.quotaApps")} htmlFor="q-d-apps">
+        <Input
+          id="q-d-apps"
+          type="number"
+          min={0}
+          placeholder={t("admin.repo.quotaUnlimited")}
+          value={apps}
+          onChange={(e) => setApps(e.target.value)}
+        />
+      </Field>
+      <Field label={t("admin.repo.quotaStorage")} htmlFor="q-d-storage">
+        <Input
+          id="q-d-storage"
+          type="number"
+          min={0}
+          placeholder={t("admin.repo.quotaUnlimited")}
+          value={storageMB}
+          onChange={(e) => setStorageMB(e.target.value)}
+        />
+      </Field>
+      <Field label={t("admin.repo.quotaMonthly")} htmlFor="q-d-monthly">
+        <Input
+          id="q-d-monthly"
+          type="number"
+          min={0}
+          placeholder={t("admin.repo.quotaUnlimited")}
+          value={monthly}
+          onChange={(e) => setMonthly(e.target.value)}
+        />
+      </Field>
+      {err && (
+        <p className="md:col-span-3 rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">
+          {err}
+        </p>
+      )}
+      <div className="md:col-span-3 flex justify-end">
+        <Button type="submit" variant="filled" disabled={busy}>
+          {busy ? t("common.saving") : t("admin.repo.saveQuotas")}
+        </Button>
+      </div>
+    </form>
   );
 }

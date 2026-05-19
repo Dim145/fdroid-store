@@ -1106,7 +1106,16 @@
       "lastIndexed": "Dernier reindex",
       "triggerReindex": "Lancer un reindex",
       "reindexQueued": "Reindex en file.",
-      "loading": "Chargement…"
+      "loading": "Chargement…",
+      "quotas": "Quotas par défaut",
+      "quotasBody": "Limites appliquées à chaque utilisateur sans override individuel. Laisse vide pour pas de limite (∞). Le stockage est en mébioctets.",
+      "quotaApps": "Apps max",
+      "quotaStorage": "Stockage max (MiB)",
+      "quotaMonthly": "APK max / mois",
+      "quotaUnlimited": "pas de limite",
+      "saveQuotas": "Enregistrer les quotas",
+      "saved": "Enregistré.",
+      "saveFailed": "Échec de l'enregistrement"
     },
     "setup": {
       "title": "Assistant de setup",
