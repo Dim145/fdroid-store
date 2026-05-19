@@ -76,6 +76,8 @@
     "allApps": "All apps",
     "myApps": "My apps",
     "account": "Account",
+    "feedNew": "RSS: new apps",
+    "feedUpdates": "RSS: updates",
     "repoUrl": "Repo URL",
     "pasteHint": "Paste this in your F-Droid client to subscribe.",
     "copyright": "© {{year}} fdroid-store · self-hosted"
@@ -574,7 +576,13 @@
       "publishing": "Publishing…",
       "parseFailed": "Could not parse APK",
       "dropApkFirst": "Drop an APK first.",
-      "createFailed": "Could not create app"
+      "createFailed": "Could not create app",
+      "detectedHeader": "Suggested anti-features",
+      "detectedBody": "Our scanner spotted these libraries inside the APK. You'll see them again on the app page where you can confirm or dismiss each chip per version.",
+      "metadataImportLabel": "Import metadata.yml",
+      "metadataImportBody": "Paste an upstream fdroiddata metadata.yml. Empty form fields will be filled in; anything you've already typed is preserved.",
+      "metadataImportApply": "Prefill fields",
+      "metadataImportFailed": "Could not parse metadata.yml"
     },
     "fields": {
       "apkFile": "APK file",
@@ -616,7 +624,9 @@
         "versionsSubtitleAuto": "Upload a new APK to publish a new version. The signer must match. The latest published version is auto-suggested to F-Droid clients.",
         "versionsSubtitleManual": "Upload a new APK to publish a new version. The signer must match. Suggested version is pinned — uploads no longer auto-bump it.",
         "danger": "Danger zone",
-        "dangerSubtitle": "Deletes the app and all of its versions, icons and screenshots."
+        "dangerSubtitle": "Deletes the app and all of its versions, icons and screenshots.",
+        "collaborators": "Co-maintainers",
+        "collaboratorsSubtitle": "Users who can manage this listing alongside you. They get every permission except deleting the app, transferring ownership, changing visibility, and managing this list."
       },
       "fields": {
         "title": "Title",
@@ -775,7 +785,24 @@
       "deleteApp": "Delete release",
       "deleteAppConfirm": "Delete {{name}} and ALL versions? Permanent.",
       "deleteAppFailed": "Delete failed",
-      "loadFailed": "Failed to load app"
+      "loadFailed": "Failed to load app",
+      "collaborators": {
+        "body": "Co-maintainers can upload APKs, edit the listing, and manage screenshots / translations. They can't delete the app, change visibility, or manage this list — those stay with you.",
+        "empty": "No co-maintainers yet — only you can manage this app.",
+        "addLabel": "Add by username",
+        "addPlaceholder": "username",
+        "add": "Add",
+        "added": "Collaborator added.",
+        "addFailed": "Could not add collaborator",
+        "remove": "Remove",
+        "leave": "Leave",
+        "removeConfirm": "Remove {{username}} from this app?",
+        "leaveConfirm": "Leave this app? You'll lose management access.",
+        "removed": "Collaborator removed.",
+        "left": "You left the app.",
+        "removeFailed": "Remove failed",
+        "loadFailed": "Could not load collaborators"
+      }
     }
   },
   "admin": {

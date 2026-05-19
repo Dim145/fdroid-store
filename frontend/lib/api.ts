@@ -668,6 +668,7 @@ export type AppDetail = AppSummary & {
   apks: Apk[];
   screenshots: Screenshot[];
   localizations: Localization[];
+  owner_id: string | null;
   owner_username: string | null;
   download_count: number;
 };
@@ -720,6 +721,10 @@ export type ApkInspect = {
   permissions: string[];
   native_code: string[];
   has_icon: boolean;
+  /** Heuristic anti-feature scan results from the backend. Keys are
+   *  anti-feature slugs (``Tracking``, ``NonFreeNet``, …); values are
+   *  human labels for the libraries that triggered each flag. */
+  detected_anti_features: Record<string, string[]>;
 };
 
 export type AdminCreateUser = {

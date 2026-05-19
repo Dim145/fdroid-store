@@ -1,6 +1,6 @@
 "use client";
 
-import { Upload, ArrowLeft } from "lucide-react";
+import { ArrowLeft, FileCode2, ShieldAlert, Upload } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -33,6 +33,36 @@ function NewAppInner() {
   const [authorName, setAuthorName] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
   const [submitting, setSubmitting] = useState(false);
+
+  // metadata.yml paste-and-prefill — collapsed by default to keep the
+  // page calm; the user expands it from the eyebrow on Step 02.
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [metadataYaml, setMetadataYaml] = useState("");
+  const [importing, setImporting] = useState(false);
+
+  async function onImportMetadata() {
+    if (!metadataYaml.trim()) return;
+    setImporting(true);
+    setError(null);
+    try {
+      const parsed = await api.importMetadata(metadataYaml);
+      // Only fill fields the user hasn't already typed into — we don't
+      // want to clobber a manual edit because they pasted a YAML after.
+      if (parsed.name && !name) setName(parsed.name);
+      if (parsed.summary && !summary) setSummary(parsed.summary);
+      if (parsed.description && !description) setDescription(parsed.description);
+      if (parsed.license && !license) setLicense(parsed.license);
+      if (parsed.author_name && !authorName) setAuthorName(parsed.author_name);
+      if (parsed.website && !website) setWebsite(parsed.website);
+      if (parsed.source_code && !sourceCode) setSourceCode(parsed.source_code);
+      if (parsed.issue_tracker && !issueTracker) setIssueTracker(parsed.issue_tracker);
+      setMetadataOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("myApps.new.metadataImportFailed"));
+    } finally {
+      setImporting(false);
+    }
+  }
 
   async function onPickFile(picked: File) {
     setError(null);
@@ -137,20 +167,95 @@ function NewAppInner() {
           )}
 
           {inspect && (
-            <dl className="mt-5 grid gap-3 rounded-xl bg-surface-2 p-4 md:grid-cols-3">
-              <Spec label={t("myApps.new.specPackage")} value={inspect.package_name} mono />
-              <Spec label={t("myApps.new.specVersion")} value={`${inspect.version_name} (${inspect.version_code})`} mono />
-              <Spec label={t("myApps.new.specSize")} value={formatBytes(inspect.size_bytes)} mono />
-              <Spec label={t("myApps.new.specSdk")} value={`${inspect.min_sdk}–${inspect.target_sdk}`} mono />
-              <Spec label={t("myApps.new.specAbis")} value={inspect.native_code.join(", ") || "—"} mono />
-              <Spec label={t("myApps.new.specPermissions")} value={String(inspect.permissions.length)} mono />
-            </dl>
+            <>
+              <dl className="mt-5 grid gap-3 rounded-xl bg-surface-2 p-4 md:grid-cols-3">
+                <Spec label={t("myApps.new.specPackage")} value={inspect.package_name} mono />
+                <Spec label={t("myApps.new.specVersion")} value={`${inspect.version_name} (${inspect.version_code})`} mono />
+                <Spec label={t("myApps.new.specSize")} value={formatBytes(inspect.size_bytes)} mono />
+                <Spec label={t("myApps.new.specSdk")} value={`${inspect.min_sdk}–${inspect.target_sdk}`} mono />
+                <Spec label={t("myApps.new.specAbis")} value={inspect.native_code.join(", ") || "—"} mono />
+                <Spec label={t("myApps.new.specPermissions")} value={String(inspect.permissions.length)} mono />
+              </dl>
+              {/* Heuristic anti-feature suggestion. Each chip is a flag the
+                  scanner detected inside the APK; the user can review and
+                  toggle them once on the app detail page (the scanner can
+                  false-positive on shaded libs). */}
+              {Object.keys(inspect.detected_anti_features).length > 0 && (
+                <div className="mt-5 rounded-xl border border-accent/40 bg-accent-container/30 p-4">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-accent-on-container">
+                    <ShieldAlert className="h-4 w-4" />
+                    {t("myApps.new.detectedHeader")}
+                  </div>
+                  <p className="mb-3 text-xs text-ink-soft">
+                    {t("myApps.new.detectedBody")}
+                  </p>
+                  <ul className="flex flex-wrap gap-1.5">
+                    {Object.entries(inspect.detected_anti_features).flatMap(([flag, labels]) =>
+                      labels.map((label) => (
+                        <li
+                          key={`${flag}:${label}`}
+                          className="rounded-pill bg-surface px-2.5 py-1 text-xs"
+                          title={label}
+                        >
+                          <span className="font-mono text-[10px] text-ink-mute">{flag}</span>
+                          {" "}
+                          <span className="text-ink">{label}</span>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+              )}
+            </>
           )}
         </section>
 
         {/* Step 2 — listing */}
         <section className="surface p-6">
-          <Step num="02" title={t("myApps.new.step2")} />
+          <div className="flex items-start justify-between gap-3">
+            <Step num="02" title={t("myApps.new.step2")} />
+            <button
+              type="button"
+              onClick={() => setMetadataOpen((o) => !o)}
+              className="inline-flex items-center gap-1.5 rounded-pill border border-outline-soft bg-surface px-3 py-1.5 text-xs font-medium text-ink-soft hover:border-primary hover:text-primary"
+            >
+              <FileCode2 className="h-3.5 w-3.5" />
+              {t("myApps.new.metadataImportLabel")}
+            </button>
+          </div>
+          {metadataOpen && (
+            <div className="mt-4 rounded-2xl border border-outline-soft bg-surface-2/40 p-4">
+              <p className="mb-2 text-xs text-ink-soft">
+                {t("myApps.new.metadataImportBody")}
+              </p>
+              <textarea
+                value={metadataYaml}
+                onChange={(e) => setMetadataYaml(e.target.value)}
+                rows={8}
+                className="w-full rounded-xl border border-outline bg-surface px-3 py-2 font-mono text-xs focus:border-primary focus:outline-none"
+                placeholder={"Name: My Cool App\nSummary: …\nDescription: …\nLicense: GPL-3.0\nWebSite: …"}
+              />
+              <div className="mt-2 flex gap-2">
+                <Button
+                  type="button"
+                  variant="filled"
+                  size="sm"
+                  onClick={onImportMetadata}
+                  disabled={importing || !metadataYaml.trim()}
+                >
+                  {importing ? t("common.loading") : t("myApps.new.metadataImportApply")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => { setMetadataOpen(false); setMetadataYaml(""); }}
+                >
+                  {t("common.cancel")}
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Field label={t("myApps.new.titleLabel")} htmlFor="name">
               <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} />

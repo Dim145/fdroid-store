@@ -221,6 +221,7 @@ class AppDetail(AppRead):
     apks: list[ApkRead] = Field(default_factory=list)
     screenshots: list["ScreenshotRead"] = Field(default_factory=list)
     localizations: list[LocalizationRead] = Field(default_factory=list)
+    owner_id: uuid.UUID | None = None
     owner_username: str | None = None
     # Total successful APK downloads across every version of this app,
     # counting both authenticated and anonymous traffic.

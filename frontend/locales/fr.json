@@ -76,6 +76,8 @@
     "allApps": "Toutes les apps",
     "myApps": "Mes apps",
     "account": "Compte",
+    "feedNew": "RSS : nouvelles apps",
+    "feedUpdates": "RSS : mises à jour",
     "repoUrl": "URL du dépôt",
     "pasteHint": "Colle cette URL dans ton client F-Droid pour t'abonner.",
     "copyright": "© {{year}} fdroid-store · auto-hébergé"
@@ -574,7 +576,13 @@
       "publishing": "Publication…",
       "parseFailed": "Impossible de parser l'APK",
       "dropApkFirst": "Dépose d'abord un APK.",
-      "createFailed": "Impossible de créer l'app"
+      "createFailed": "Impossible de créer l'app",
+      "detectedHeader": "Anti-features suggérées",
+      "detectedBody": "Notre scanner a repéré ces bibliothèques dans l'APK. Tu les retrouveras sur la page de l'app où tu peux confirmer ou ignorer chaque chip par version.",
+      "metadataImportLabel": "Importer metadata.yml",
+      "metadataImportBody": "Colle un metadata.yml upstream (format fdroiddata). Les champs vides seront remplis ; ceux que tu as déjà saisis sont préservés.",
+      "metadataImportApply": "Pré-remplir",
+      "metadataImportFailed": "Impossible de parser metadata.yml"
     },
     "fields": {
       "apkFile": "Fichier APK",
@@ -616,7 +624,9 @@
         "versionsSubtitleAuto": "Mets en ligne un nouvel APK pour publier une nouvelle version. Le signataire doit correspondre. La dernière version publiée est suggérée automatiquement aux clients F-Droid.",
         "versionsSubtitleManual": "Mets en ligne un nouvel APK pour publier une nouvelle version. Le signataire doit correspondre. La version suggérée est verrouillée — les uploads ne la déplacent plus automatiquement.",
         "danger": "Zone dangereuse",
-        "dangerSubtitle": "Supprime l'app et toutes ses versions, icônes et captures."
+        "dangerSubtitle": "Supprime l'app et toutes ses versions, icônes et captures.",
+        "collaborators": "Co-mainteneurs",
+        "collaboratorsSubtitle": "Utilisateurs qui peuvent gérer cette fiche avec toi. Ils ont toutes les permissions sauf supprimer l'app, transférer la propriété, changer la visibilité et gérer cette liste."
       },
       "fields": {
         "title": "Titre",
@@ -775,7 +785,24 @@
       "deleteApp": "Supprimer la version",
       "deleteAppConfirm": "Supprimer {{name}} et TOUTES ses versions ? Définitif.",
       "deleteAppFailed": "Échec de la suppression",
-      "loadFailed": "Échec du chargement de l'app"
+      "loadFailed": "Échec du chargement de l'app",
+      "collaborators": {
+        "body": "Les co-mainteneurs peuvent déposer des APK, modifier la fiche, gérer les captures et traductions. Ils ne peuvent pas supprimer l'app, changer la visibilité, ni gérer cette liste — ça reste à toi.",
+        "empty": "Aucun co-mainteneur pour l'instant — toi seul peux gérer cette app.",
+        "addLabel": "Ajouter par nom d'utilisateur",
+        "addPlaceholder": "username",
+        "add": "Ajouter",
+        "added": "Co-mainteneur ajouté.",
+        "addFailed": "Impossible d'ajouter le co-mainteneur",
+        "remove": "Retirer",
+        "leave": "Quitter",
+        "removeConfirm": "Retirer {{username}} de cette app ?",
+        "leaveConfirm": "Quitter cette app ? Tu perdras l'accès de gestion.",
+        "removed": "Co-mainteneur retiré.",
+        "left": "Tu as quitté l'app.",
+        "removeFailed": "Échec du retrait",
+        "loadFailed": "Impossible de charger les co-mainteneurs"
+      }
     }
   },
   "admin": {

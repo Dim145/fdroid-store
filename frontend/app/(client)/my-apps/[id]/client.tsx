@@ -26,6 +26,7 @@ import { useTranslation } from "react-i18next";
 import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
 import { AuthGuard } from "@/components/auth-guard";
+import { CollaboratorsSection } from "@/components/collaborators-section";
 import { LocalizationsEditor } from "@/components/localizations-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,11 +34,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, mediaUrl, type Apk, type AppDetail, type Category, type Screenshot } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
+import { useAuth } from "@/lib/auth-store";
 import { toast } from "@/lib/toast-store";
 import { cn, formatBytes, formatDate, pickLocalizedText } from "@/lib/utils";
 
 function ManageAppInner() {
   const { t } = useTranslation();
+  const { user: currentUser } = useAuth();
   // Static export bakes ``useParams`` to the placeholder used at build time
   // (``__dynamic``), so we read the real segment from the live URL instead.
   const pathname = usePathname();
@@ -791,6 +794,17 @@ function ManageAppInner() {
           )}
         </ul>
       </Section>
+
+      {/* ──── Collaborators ──── */}
+      {currentUser && app.owner_id && (
+        <Section step="07" title={t("myApps.edit.sections.collaborators")} subtitle={t("myApps.edit.sections.collaboratorsSubtitle")}>
+          <CollaboratorsSection
+            appId={app.id}
+            ownerId={app.owner_id}
+            currentUserId={currentUser.id}
+          />
+        </Section>
+      )}
 
       {/* ──── Danger zone ──── */}
       <section className="rounded-3xl border-2 border-danger/40 p-5">

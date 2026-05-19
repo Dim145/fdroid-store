@@ -1,5 +1,6 @@
 "use client";
 
+import { Rss } from "lucide-react";
 import Link from "next/link";
 import { useTranslation } from "react-i18next";
 
@@ -30,6 +31,24 @@ export function SiteFooter() {
               <li><Link href="/apps" className="text-ink-soft hover:text-ink">{t("footer.allApps")}</Link></li>
               <li><Link href="/my-apps" className="text-ink-soft hover:text-ink">{t("footer.myApps")}</Link></li>
               <li><Link href="/account" className="text-ink-soft hover:text-ink">{t("footer.account")}</Link></li>
+              <li>
+                <a
+                  href="/api/v1/feed/new"
+                  className="inline-flex items-center gap-1.5 text-ink-soft hover:text-ink"
+                  aria-label={t("footer.feedNew")}
+                >
+                  <Rss className="h-3 w-3" /> {t("footer.feedNew")}
+                </a>
+              </li>
+              <li>
+                <a
+                  href="/api/v1/feed/updates"
+                  className="inline-flex items-center gap-1.5 text-ink-soft hover:text-ink"
+                  aria-label={t("footer.feedUpdates")}
+                >
+                  <Rss className="h-3 w-3" /> {t("footer.feedUpdates")}
+                </a>
+              </li>
             </ul>
           </div>
           <div>
