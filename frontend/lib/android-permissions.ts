@@ -39,7 +39,8 @@ export type PermissionGroupKey =
   | "OTHER";
 
 export type PermissionGroup = {
-  label: string;
+  /** i18n key under `permissions.groups.*`. */
+  labelKey: string;
   icon: LucideIcon;
   /** Lower number = appears earlier. Roughly mirrors Play Store's ordering
    *  (sensitive → infrastructure → grab-bag). */
@@ -47,125 +48,130 @@ export type PermissionGroup = {
 };
 
 export const PERMISSION_GROUPS: Record<PermissionGroupKey, PermissionGroup> = {
-  CONTACTS:      { label: "Contacts",           icon: Contact,        order: 10 },
-  LOCATION:      { label: "Location",           icon: MapPin,         order: 20 },
-  CAMERA:        { label: "Camera",             icon: Camera,         order: 30 },
-  MICROPHONE:    { label: "Microphone",         icon: Mic,            order: 40 },
-  PHONE:         { label: "Phone",              icon: Phone,          order: 50 },
-  SMS:           { label: "SMS & Messages",     icon: MessageSquare,  order: 60 },
-  CALENDAR:      { label: "Calendar",           icon: Calendar,       order: 70 },
-  STORAGE:       { label: "Storage",            icon: Folder,         order: 80 },
-  MEDIA:         { label: "Photos / Media",     icon: ImageIcon,      order: 90 },
-  SENSORS:       { label: "Body sensors",       icon: Activity,       order: 100 },
-  ACTIVITY:      { label: "Physical activity",  icon: Activity,       order: 110 },
-  NOTIFICATIONS: { label: "Notifications",      icon: Bell,           order: 120 },
-  BLUETOOTH:     { label: "Bluetooth",          icon: Bluetooth,      order: 130 },
-  NETWORK:       { label: "Network & Wi-Fi",    icon: Wifi,           order: 140 },
-  SYSTEM:        { label: "Device & System",    icon: Settings,       order: 150 },
-  OTHER:         { label: "Other",              icon: FileQuestion,   order: 999 },
+  CONTACTS:      { labelKey: "permissions.groups.CONTACTS",      icon: Contact,       order: 10 },
+  LOCATION:      { labelKey: "permissions.groups.LOCATION",      icon: MapPin,        order: 20 },
+  CAMERA:        { labelKey: "permissions.groups.CAMERA",        icon: Camera,        order: 30 },
+  MICROPHONE:    { labelKey: "permissions.groups.MICROPHONE",    icon: Mic,           order: 40 },
+  PHONE:         { labelKey: "permissions.groups.PHONE",         icon: Phone,         order: 50 },
+  SMS:           { labelKey: "permissions.groups.SMS",           icon: MessageSquare, order: 60 },
+  CALENDAR:      { labelKey: "permissions.groups.CALENDAR",      icon: Calendar,      order: 70 },
+  STORAGE:       { labelKey: "permissions.groups.STORAGE",       icon: Folder,        order: 80 },
+  MEDIA:         { labelKey: "permissions.groups.MEDIA",         icon: ImageIcon,     order: 90 },
+  SENSORS:       { labelKey: "permissions.groups.SENSORS",       icon: Activity,      order: 100 },
+  ACTIVITY:      { labelKey: "permissions.groups.ACTIVITY",      icon: Activity,      order: 110 },
+  NOTIFICATIONS: { labelKey: "permissions.groups.NOTIFICATIONS", icon: Bell,          order: 120 },
+  BLUETOOTH:     { labelKey: "permissions.groups.BLUETOOTH",     icon: Bluetooth,     order: 130 },
+  NETWORK:       { labelKey: "permissions.groups.NETWORK",       icon: Wifi,          order: 140 },
+  SYSTEM:        { labelKey: "permissions.groups.SYSTEM",        icon: Settings,      order: 150 },
+  OTHER:         { labelKey: "permissions.groups.OTHER",         icon: FileQuestion,  order: 999 },
 };
 
 /** Curated mapping from Android permission constants to a group + a short
- *  human sentence. Sources: Android developer docs + a quick pass over the
- *  Play Store wording. Anything not in this table falls through to OTHER
- *  with a humanised version of the constant name. */
-const KNOWN: Record<string, { group: PermissionGroupKey; text: string }> = {
+ *  identifier matching the i18n key under `permissions.items.*`. Anything not
+ *  in this table falls through to OTHER with a humanised version of the
+ *  constant name (no translation key). */
+const KNOWN: Record<string, { group: PermissionGroupKey; key: string }> = {
   // — Contacts & accounts ----------------------------------------------------
-  "android.permission.READ_CONTACTS":        { group: "CONTACTS",  text: "read your contacts" },
-  "android.permission.WRITE_CONTACTS":       { group: "CONTACTS",  text: "modify your contacts" },
-  "android.permission.GET_ACCOUNTS":         { group: "CONTACTS",  text: "find accounts on the device" },
+  "android.permission.READ_CONTACTS":        { group: "CONTACTS",  key: "READ_CONTACTS" },
+  "android.permission.WRITE_CONTACTS":       { group: "CONTACTS",  key: "WRITE_CONTACTS" },
+  "android.permission.GET_ACCOUNTS":         { group: "CONTACTS",  key: "GET_ACCOUNTS" },
 
   // — Location ---------------------------------------------------------------
-  "android.permission.ACCESS_FINE_LOCATION":      { group: "LOCATION", text: "access precise location (GPS-level)" },
-  "android.permission.ACCESS_COARSE_LOCATION":    { group: "LOCATION", text: "access approximate location" },
-  "android.permission.ACCESS_BACKGROUND_LOCATION":{ group: "LOCATION", text: "access location while in the background" },
+  "android.permission.ACCESS_FINE_LOCATION":       { group: "LOCATION", key: "ACCESS_FINE_LOCATION" },
+  "android.permission.ACCESS_COARSE_LOCATION":     { group: "LOCATION", key: "ACCESS_COARSE_LOCATION" },
+  "android.permission.ACCESS_BACKGROUND_LOCATION": { group: "LOCATION", key: "ACCESS_BACKGROUND_LOCATION" },
 
   // — Camera & mic -----------------------------------------------------------
-  "android.permission.CAMERA":              { group: "CAMERA",     text: "take pictures and record video" },
-  "android.permission.RECORD_AUDIO":        { group: "MICROPHONE", text: "record audio" },
+  "android.permission.CAMERA":              { group: "CAMERA",     key: "CAMERA" },
+  "android.permission.RECORD_AUDIO":        { group: "MICROPHONE", key: "RECORD_AUDIO" },
 
   // — Phone ------------------------------------------------------------------
-  "android.permission.READ_PHONE_STATE":    { group: "PHONE", text: "read phone state and identity" },
-  "android.permission.READ_PHONE_NUMBERS":  { group: "PHONE", text: "read the device's phone numbers" },
-  "android.permission.CALL_PHONE":          { group: "PHONE", text: "place phone calls" },
-  "android.permission.ANSWER_PHONE_CALLS":  { group: "PHONE", text: "answer phone calls" },
-  "android.permission.READ_CALL_LOG":       { group: "PHONE", text: "read the call log" },
-  "android.permission.WRITE_CALL_LOG":      { group: "PHONE", text: "modify the call log" },
+  "android.permission.READ_PHONE_STATE":    { group: "PHONE", key: "READ_PHONE_STATE" },
+  "android.permission.READ_PHONE_NUMBERS":  { group: "PHONE", key: "READ_PHONE_NUMBERS" },
+  "android.permission.CALL_PHONE":          { group: "PHONE", key: "CALL_PHONE" },
+  "android.permission.ANSWER_PHONE_CALLS":  { group: "PHONE", key: "ANSWER_PHONE_CALLS" },
+  "android.permission.READ_CALL_LOG":       { group: "PHONE", key: "READ_CALL_LOG" },
+  "android.permission.WRITE_CALL_LOG":      { group: "PHONE", key: "WRITE_CALL_LOG" },
 
   // — SMS --------------------------------------------------------------------
-  "android.permission.READ_SMS":            { group: "SMS", text: "read your text messages" },
-  "android.permission.SEND_SMS":            { group: "SMS", text: "send SMS messages" },
-  "android.permission.RECEIVE_SMS":         { group: "SMS", text: "receive SMS messages" },
-  "android.permission.RECEIVE_MMS":         { group: "SMS", text: "receive MMS messages" },
+  "android.permission.READ_SMS":            { group: "SMS", key: "READ_SMS" },
+  "android.permission.SEND_SMS":            { group: "SMS", key: "SEND_SMS" },
+  "android.permission.RECEIVE_SMS":         { group: "SMS", key: "RECEIVE_SMS" },
+  "android.permission.RECEIVE_MMS":         { group: "SMS", key: "RECEIVE_MMS" },
 
   // — Calendar ---------------------------------------------------------------
-  "android.permission.READ_CALENDAR":       { group: "CALENDAR", text: "read your calendar" },
-  "android.permission.WRITE_CALENDAR":      { group: "CALENDAR", text: "modify your calendar" },
+  "android.permission.READ_CALENDAR":       { group: "CALENDAR", key: "READ_CALENDAR" },
+  "android.permission.WRITE_CALENDAR":      { group: "CALENDAR", key: "WRITE_CALENDAR" },
 
   // — Storage ----------------------------------------------------------------
-  "android.permission.READ_EXTERNAL_STORAGE":   { group: "STORAGE", text: "read shared storage" },
-  "android.permission.WRITE_EXTERNAL_STORAGE":  { group: "STORAGE", text: "modify or delete shared storage" },
-  "android.permission.MANAGE_EXTERNAL_STORAGE": { group: "STORAGE", text: "manage all files on the device" },
+  "android.permission.READ_EXTERNAL_STORAGE":   { group: "STORAGE", key: "READ_EXTERNAL_STORAGE" },
+  "android.permission.WRITE_EXTERNAL_STORAGE":  { group: "STORAGE", key: "WRITE_EXTERNAL_STORAGE" },
+  "android.permission.MANAGE_EXTERNAL_STORAGE": { group: "STORAGE", key: "MANAGE_EXTERNAL_STORAGE" },
 
   // — Media (Android 13+) ----------------------------------------------------
-  "android.permission.READ_MEDIA_IMAGES":   { group: "MEDIA", text: "read photos" },
-  "android.permission.READ_MEDIA_VIDEO":    { group: "MEDIA", text: "read videos" },
-  "android.permission.READ_MEDIA_AUDIO":    { group: "MEDIA", text: "read music & audio" },
-  "android.permission.ACCESS_MEDIA_LOCATION": { group: "MEDIA", text: "read location metadata from photos" },
+  "android.permission.READ_MEDIA_IMAGES":     { group: "MEDIA", key: "READ_MEDIA_IMAGES" },
+  "android.permission.READ_MEDIA_VIDEO":      { group: "MEDIA", key: "READ_MEDIA_VIDEO" },
+  "android.permission.READ_MEDIA_AUDIO":      { group: "MEDIA", key: "READ_MEDIA_AUDIO" },
+  "android.permission.ACCESS_MEDIA_LOCATION": { group: "MEDIA", key: "ACCESS_MEDIA_LOCATION" },
 
   // — Sensors / fitness ------------------------------------------------------
-  "android.permission.BODY_SENSORS":            { group: "SENSORS",  text: "read body sensors (heart rate, etc.)" },
-  "android.permission.BODY_SENSORS_BACKGROUND": { group: "SENSORS",  text: "read body sensors in the background" },
-  "android.permission.ACTIVITY_RECOGNITION":    { group: "ACTIVITY", text: "recognise physical activity" },
+  "android.permission.BODY_SENSORS":            { group: "SENSORS",  key: "BODY_SENSORS" },
+  "android.permission.BODY_SENSORS_BACKGROUND": { group: "SENSORS",  key: "BODY_SENSORS_BACKGROUND" },
+  "android.permission.ACTIVITY_RECOGNITION":    { group: "ACTIVITY", key: "ACTIVITY_RECOGNITION" },
 
   // — Notifications ----------------------------------------------------------
-  "android.permission.POST_NOTIFICATIONS":  { group: "NOTIFICATIONS", text: "show notifications" },
+  "android.permission.POST_NOTIFICATIONS":  { group: "NOTIFICATIONS", key: "POST_NOTIFICATIONS" },
 
   // — Bluetooth --------------------------------------------------------------
-  "android.permission.BLUETOOTH":            { group: "BLUETOOTH", text: "pair with Bluetooth devices" },
-  "android.permission.BLUETOOTH_ADMIN":      { group: "BLUETOOTH", text: "access Bluetooth settings" },
-  "android.permission.BLUETOOTH_CONNECT":    { group: "BLUETOOTH", text: "connect to paired Bluetooth devices" },
-  "android.permission.BLUETOOTH_SCAN":       { group: "BLUETOOTH", text: "discover and pair Bluetooth devices" },
-  "android.permission.BLUETOOTH_ADVERTISE":  { group: "BLUETOOTH", text: "broadcast Bluetooth signals" },
+  "android.permission.BLUETOOTH":            { group: "BLUETOOTH", key: "BLUETOOTH" },
+  "android.permission.BLUETOOTH_ADMIN":      { group: "BLUETOOTH", key: "BLUETOOTH_ADMIN" },
+  "android.permission.BLUETOOTH_CONNECT":    { group: "BLUETOOTH", key: "BLUETOOTH_CONNECT" },
+  "android.permission.BLUETOOTH_SCAN":       { group: "BLUETOOTH", key: "BLUETOOTH_SCAN" },
+  "android.permission.BLUETOOTH_ADVERTISE":  { group: "BLUETOOTH", key: "BLUETOOTH_ADVERTISE" },
 
   // — Network ----------------------------------------------------------------
-  "android.permission.INTERNET":             { group: "NETWORK", text: "have full network access" },
-  "android.permission.ACCESS_NETWORK_STATE": { group: "NETWORK", text: "view network connections" },
-  "android.permission.ACCESS_WIFI_STATE":    { group: "NETWORK", text: "view Wi-Fi connections" },
-  "android.permission.CHANGE_WIFI_STATE":    { group: "NETWORK", text: "connect and disconnect from Wi-Fi" },
-  "android.permission.CHANGE_NETWORK_STATE": { group: "NETWORK", text: "change network connectivity" },
-  "android.permission.NEARBY_WIFI_DEVICES":  { group: "NETWORK", text: "find nearby Wi-Fi devices" },
+  "android.permission.INTERNET":             { group: "NETWORK", key: "INTERNET" },
+  "android.permission.ACCESS_NETWORK_STATE": { group: "NETWORK", key: "ACCESS_NETWORK_STATE" },
+  "android.permission.ACCESS_WIFI_STATE":    { group: "NETWORK", key: "ACCESS_WIFI_STATE" },
+  "android.permission.CHANGE_WIFI_STATE":    { group: "NETWORK", key: "CHANGE_WIFI_STATE" },
+  "android.permission.CHANGE_NETWORK_STATE": { group: "NETWORK", key: "CHANGE_NETWORK_STATE" },
+  "android.permission.NEARBY_WIFI_DEVICES":  { group: "NETWORK", key: "NEARBY_WIFI_DEVICES" },
 
   // — System & device --------------------------------------------------------
-  "android.permission.WAKE_LOCK":              { group: "SYSTEM", text: "prevent the device from sleeping" },
-  "android.permission.RECEIVE_BOOT_COMPLETED": { group: "SYSTEM", text: "run at startup" },
-  "android.permission.FOREGROUND_SERVICE":     { group: "SYSTEM", text: "run a foreground service" },
-  "android.permission.FOREGROUND_SERVICE_DATA_SYNC": { group: "SYSTEM", text: "run a background sync service" },
-  "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK": { group: "SYSTEM", text: "run a media-playback service" },
-  "android.permission.VIBRATE":                { group: "SYSTEM", text: "control vibration" },
-  "android.permission.MODIFY_AUDIO_SETTINGS":  { group: "SYSTEM", text: "modify audio settings" },
-  "android.permission.DISABLE_KEYGUARD":       { group: "SYSTEM", text: "disable the screen lock" },
-  "android.permission.SYSTEM_ALERT_WINDOW":    { group: "SYSTEM", text: "display on top of other apps" },
-  "android.permission.READ_LOGS":              { group: "SYSTEM", text: "read system logs" },
-  "android.permission.REQUEST_INSTALL_PACKAGES": { group: "SYSTEM", text: "install other apps" },
-  "android.permission.QUERY_ALL_PACKAGES":     { group: "SYSTEM", text: "list every app installed on the device" },
-  "android.permission.SCHEDULE_EXACT_ALARM":   { group: "SYSTEM", text: "schedule exact alarms" },
-  "android.permission.USE_EXACT_ALARM":        { group: "SYSTEM", text: "use exact alarms" },
-  "android.permission.SET_WALLPAPER":          { group: "SYSTEM", text: "set the wallpaper" },
-  "android.permission.EXPAND_STATUS_BAR":      { group: "SYSTEM", text: "expand or collapse the status bar" },
-  "android.permission.REORDER_TASKS":          { group: "SYSTEM", text: "reorder running apps" },
-  "android.permission.KILL_BACKGROUND_PROCESSES": { group: "SYSTEM", text: "close other apps in the background" },
-  "android.permission.USE_FINGERPRINT":        { group: "SYSTEM", text: "use the fingerprint sensor" },
-  "android.permission.USE_BIOMETRIC":          { group: "SYSTEM", text: "use biometric authentication" },
-  "android.permission.WRITE_SETTINGS":         { group: "SYSTEM", text: "modify system settings" },
-  "android.permission.READ_SYNC_SETTINGS":     { group: "SYSTEM", text: "read sync settings" },
-  "android.permission.WRITE_SYNC_SETTINGS":    { group: "SYSTEM", text: "modify sync settings" },
-  "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE": { group: "SYSTEM", text: "read your notifications" },
+  "android.permission.WAKE_LOCK":                          { group: "SYSTEM", key: "WAKE_LOCK" },
+  "android.permission.RECEIVE_BOOT_COMPLETED":             { group: "SYSTEM", key: "RECEIVE_BOOT_COMPLETED" },
+  "android.permission.FOREGROUND_SERVICE":                 { group: "SYSTEM", key: "FOREGROUND_SERVICE" },
+  "android.permission.FOREGROUND_SERVICE_DATA_SYNC":       { group: "SYSTEM", key: "FOREGROUND_SERVICE_DATA_SYNC" },
+  "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK":  { group: "SYSTEM", key: "FOREGROUND_SERVICE_MEDIA_PLAYBACK" },
+  "android.permission.VIBRATE":                            { group: "SYSTEM", key: "VIBRATE" },
+  "android.permission.MODIFY_AUDIO_SETTINGS":              { group: "SYSTEM", key: "MODIFY_AUDIO_SETTINGS" },
+  "android.permission.DISABLE_KEYGUARD":                   { group: "SYSTEM", key: "DISABLE_KEYGUARD" },
+  "android.permission.SYSTEM_ALERT_WINDOW":                { group: "SYSTEM", key: "SYSTEM_ALERT_WINDOW" },
+  "android.permission.READ_LOGS":                          { group: "SYSTEM", key: "READ_LOGS" },
+  "android.permission.REQUEST_INSTALL_PACKAGES":           { group: "SYSTEM", key: "REQUEST_INSTALL_PACKAGES" },
+  "android.permission.QUERY_ALL_PACKAGES":                 { group: "SYSTEM", key: "QUERY_ALL_PACKAGES" },
+  "android.permission.SCHEDULE_EXACT_ALARM":               { group: "SYSTEM", key: "SCHEDULE_EXACT_ALARM" },
+  "android.permission.USE_EXACT_ALARM":                    { group: "SYSTEM", key: "USE_EXACT_ALARM" },
+  "android.permission.SET_WALLPAPER":                      { group: "SYSTEM", key: "SET_WALLPAPER" },
+  "android.permission.EXPAND_STATUS_BAR":                  { group: "SYSTEM", key: "EXPAND_STATUS_BAR" },
+  "android.permission.REORDER_TASKS":                      { group: "SYSTEM", key: "REORDER_TASKS" },
+  "android.permission.KILL_BACKGROUND_PROCESSES":          { group: "SYSTEM", key: "KILL_BACKGROUND_PROCESSES" },
+  "android.permission.USE_FINGERPRINT":                    { group: "SYSTEM", key: "USE_FINGERPRINT" },
+  "android.permission.USE_BIOMETRIC":                      { group: "SYSTEM", key: "USE_BIOMETRIC" },
+  "android.permission.WRITE_SETTINGS":                     { group: "SYSTEM", key: "WRITE_SETTINGS" },
+  "android.permission.READ_SYNC_SETTINGS":                 { group: "SYSTEM", key: "READ_SYNC_SETTINGS" },
+  "android.permission.WRITE_SYNC_SETTINGS":                { group: "SYSTEM", key: "WRITE_SYNC_SETTINGS" },
+  "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE": { group: "SYSTEM", key: "BIND_NOTIFICATION_LISTENER_SERVICE" },
 };
 
 export type ResolvedPermission = {
   group: PermissionGroupKey;
-  text: string;
+  /** Translation key under `permissions.items` for curated entries, or null
+   *  when the permission isn't in the curated table. */
+  i18nKey: string | null;
+  /** Best-effort English fallback (humanised constant name). Used when
+   *  `i18nKey` is null, and as the `defaultValue` for missing translations. */
+  fallbackText: string;
   /** The original constant, used as a `<li>` key and a tooltip fallback. */
   raw: string;
 };
@@ -174,8 +180,6 @@ export type ResolvedPermission = {
  *  best-effort humanisation of its short name (snake_case → " "). */
 export function resolvePermission(raw: string): ResolvedPermission {
   const known = KNOWN[raw];
-  if (known) return { ...known, raw };
-
   const short = raw.startsWith("android.permission.")
     ? raw.slice("android.permission.".length)
     : raw;
@@ -184,12 +188,20 @@ export function resolvePermission(raw: string): ResolvedPermission {
     .replace(/_/g, " ")
     // Re-capitalise the very first word to feel like a sentence
     .replace(/^./, (c) => c.toUpperCase());
-  return { group: "OTHER", text: humanised, raw };
+  if (known) {
+    return {
+      group: known.group,
+      i18nKey: `permissions.items.${known.key}`,
+      fallbackText: humanised,
+      raw,
+    };
+  }
+  return { group: "OTHER", i18nKey: null, fallbackText: humanised, raw };
 }
 
-/** Group + sort an arbitrary list of permission constants in one pass.
- *  The result preserves the canonical group order; inside each group the
- *  permissions are alphabetised so reloads don't reorder the page. */
+/** Group an arbitrary list of permission constants. Items inside each group
+ *  are sorted by their raw constant for deterministic order across locales;
+ *  the consumer is free to re-sort by translated text if needed. */
 export function groupPermissions(
   permissions: readonly string[],
 ): Array<{ key: PermissionGroupKey; group: PermissionGroup; items: ResolvedPermission[] }> {
@@ -204,7 +216,7 @@ export function groupPermissions(
     .map(([key, items]) => ({
       key,
       group: PERMISSION_GROUPS[key],
-      items: items.sort((a, b) => a.text.localeCompare(b.text)),
+      items: items.sort((a, b) => a.raw.localeCompare(b.raw)),
     }))
     .sort((a, b) => a.group.order - b.group.order);
 }

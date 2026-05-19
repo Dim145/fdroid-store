@@ -55,22 +55,28 @@ export function AppPermissions({ permissions, versionLabel }: Props) {
                   <Icon className="h-3.5 w-3.5" strokeWidth={2.2} />
                 </span>
                 <h4 className="text-sm font-semibold tracking-tight">
-                  {group.label}
+                  {t(group.labelKey)}
                 </h4>
                 <span className="font-mono text-[10px] text-ink-mute">
                   ×{items.length}
                 </span>
               </header>
               <ul className="space-y-1 pl-9 text-sm leading-relaxed text-ink-soft">
-                {items.map((p) => (
-                  <li
-                    key={p.raw}
-                    title={p.raw}
-                    className="relative before:absolute before:-left-3.5 before:top-2 before:h-1 before:w-1 before:rounded-full before:bg-ink-mute"
-                  >
-                    {p.text}
-                  </li>
-                ))}
+                {items
+                  .map((p) => ({
+                    p,
+                    text: p.i18nKey ? t(p.i18nKey, { defaultValue: p.fallbackText }) : p.fallbackText,
+                  }))
+                  .sort((a, b) => a.text.localeCompare(b.text))
+                  .map(({ p, text }) => (
+                    <li
+                      key={p.raw}
+                      title={p.raw}
+                      className="relative before:absolute before:-left-3.5 before:top-2 before:h-1 before:w-1 before:rounded-full before:bg-ink-mute"
+                    >
+                      {text}
+                    </li>
+                  ))}
               </ul>
             </section>
           );
