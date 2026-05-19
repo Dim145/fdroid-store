@@ -851,7 +851,7 @@
       "reachable": "ClamAV joignable",
       "unreachable": "ClamAV injoignable",
       "notConfigured": "Non configuré",
-      "envHint": "Définis FDROID_CLAMAV_HOST dans l'environnement du backend / worker pour activer. Le serveur clamd doit être accessible depuis les deux conteneurs.",
+      "envHint": "Définis CLAMAV_HOST dans .env (ex. ``CLAMAV_HOST=clamav``) puis démarre la stack avec ``docker compose --profile clamav up -d`` pour activer le scanner. Le serveur clamd doit être joignable depuis le backend et le worker.",
       "recheck": "Re-vérifier",
       "toggleUpload": "Analyser à l'upload",
       "toggleUploadBody": "Chaque APK déposé est analysé de façon synchrone. Les uploads infectés sont refusés avec un 422.",

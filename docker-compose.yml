@@ -41,7 +41,7 @@ services:
   # forgetting to enable the profile won't break uploads.
   clamav:
     profiles: ["clamav"]
-    image: clamav/clamav:stable
+    image: clamav/clamav:stable-debian
     restart: unless-stopped
     volumes:
       - clamav_db:/var/lib/clamav
