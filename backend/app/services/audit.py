@@ -13,6 +13,7 @@ caught by structlog at log level WARNING.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from typing import Any
 
@@ -72,13 +73,22 @@ async def write_event(
     no secrets).
     """
     try:
+        # JSON-coerce the payload so asyncpg's JSONB codec doesn't blow up
+        # on Pydantic types (``HttpUrl``, ``EmailStr``, etc.) or UUIDs the
+        # caller forgot to stringify. ``default=str`` is a coarse but safe
+        # fallback — every Pydantic type has a sane ``__str__``.
+        safe_payload: dict[str, Any] | None
+        if payload is None:
+            safe_payload = None
+        else:
+            safe_payload = json.loads(json.dumps(payload, default=str))
         row = AuditLog(
             actor_id=actor.id if actor else None,
             action=action,
             target_type=target_type,
             target_id=str(target_id) if target_id is not None else None,
             summary=summary,
-            payload=payload,
+            payload=safe_payload,
             ip_hash=_hash_ip(_client_ip(request)),
             user_agent=_user_agent(request),
         )

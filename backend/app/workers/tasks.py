@@ -25,7 +25,8 @@ from app.fdroid.repo_builder import rebuild_repo_index
 from app.models.apk import Apk, ApkStatus
 from app.models.apk_scan import ApkScan, ApkScanStatus
 from app.models.repo_config import RepoConfig
-from app.storage import LocalStorage, get_storage
+from app.storage import get_storage
+from app.storage.local import LocalStorage
 
 log = get_logger(__name__)
 

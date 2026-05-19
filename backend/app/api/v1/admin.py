@@ -484,7 +484,10 @@ async def update_repo_config(
         target_type="repo_config",
         target_id=config.id,
         summary="repo config updated",
-        payload=payload.model_dump(exclude_none=True),
+        # ``mode="json"`` coerces Pydantic types like HttpUrl into plain
+        # strings — asyncpg's JSONB codec rejects bare Pydantic objects
+        # with ``TypeError: Object of type HttpUrl is not JSON serializable``.
+        payload=payload.model_dump(mode="json", exclude_none=True),
         request=request,
     )
     await db.flush()
