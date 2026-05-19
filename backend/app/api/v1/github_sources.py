@@ -22,7 +22,7 @@ from app.schemas.github_source import (
     GithubSourceUpsertResponse,
     ProposedAppField,
 )
-from app.services.app_permissions import assert_can_manage_app
+from app.services.app_permissions import assert_can_manage_app, assert_owner_or_admin
 from app.services.audit import write_event
 from app.services.queue import enqueue_github_source_scan
 
@@ -69,18 +69,18 @@ async def upsert_github_source(
     request: Request,
     actor: Annotated[User, Depends(get_current_user)],
 ) -> GithubSourceUpsertResponse:
-    """Create or replace the GitHub source. Triggers an immediate scan so
-    the user sees results without waiting for the daily cron — even if
-    the source is in disabled state, the explicit save is treated as a
-    one-shot scan trigger.
+    """Create or replace the release source. Owner/admin only —
+    co-maintainers are deliberately blocked from changing the upstream
+    pointer because it changes WHAT gets published into the repo
+    (a co-maintainer swapping to a malicious fork would silently start
+    importing arbitrary APKs the owner never authorised). They can
+    still trigger a manual scan via the ``/scan`` endpoint below.
 
     Also fetches the repo's metadata (description / homepage / license
     / owner) and returns a list of currently-empty App fields that the
-    repo could populate. The UI surfaces this as a preview card the user
-    can opt-in to, field by field — the source upsert itself never
-    touches the App row, so this stays explicit."""
+    repo could populate."""
     app = await _load_app_or_404(db, app_id)
-    await assert_can_manage_app(db, actor, app)
+    assert_owner_or_admin(actor, app)
 
     existing = (
         await db.execute(
@@ -91,26 +91,64 @@ async def upsert_github_source(
     is_new = existing is None
     repo_changed = bool(existing and existing.repo.lower() != payload.repo.lower())
 
+    # Re-validate provider transitions too: changing the forge resets
+    # the import bookmark just like repo_changed does.
+    provider_changed = bool(
+        existing
+        and existing.provider != payload.provider
+    )
+    base_url_changed = bool(
+        existing
+        and (existing.base_url or "") != (payload.base_url or "")
+    )
+
+    # Token write-through. ``access_token`` is in ``model_fields_set``
+    # only when the client explicitly sent the key (vs. left it
+    # off entirely) — that's the three-way "set / clear / leave" gate.
+    from app.services.crypto import encrypt as _enc
+
+    _SENTINEL = object()
+    new_token_blob: bytes | None | object = _SENTINEL
+    if "access_token" in payload.model_fields_set:
+        raw = (payload.access_token or "").strip()
+        new_token_blob = _enc(raw) if raw else None
+    token_action: str | None = None
+
     if existing is None:
         existing = GithubSource(
             app_id=app_id,
             repo=payload.repo,
+            provider=payload.provider,
+            base_url=payload.base_url,
             asset_pattern=payload.asset_pattern,
             include_prereleases=payload.include_prereleases,
             enabled=payload.enabled,
             created_by=actor.id,
             last_status=GithubSourceStatus.IDLE,
         )
+        if new_token_blob is not _SENTINEL:
+            existing.access_token_encrypted = new_token_blob  # type: ignore[assignment]
+            if new_token_blob is not None:
+                token_action = "set"
         db.add(existing)
     else:
         existing.repo = payload.repo
+        existing.provider = payload.provider
+        existing.base_url = payload.base_url
         existing.asset_pattern = payload.asset_pattern
         existing.include_prereleases = payload.include_prereleases
         existing.enabled = payload.enabled
-        # When the repo changes, reset the import bookmark so the next
-        # scan considers the newest release regardless of what we had
-        # imported from the previous repo.
-        if repo_changed:
+        if new_token_blob is not _SENTINEL:
+            had_token = bool(existing.access_token_encrypted)
+            existing.access_token_encrypted = new_token_blob  # type: ignore[assignment]
+            if new_token_blob is None and had_token:
+                token_action = "cleared"
+            elif new_token_blob is not None:
+                token_action = "set"
+        # When the repo, provider or base URL changes, reset the import
+        # bookmark so the next scan considers the newest release rather
+        # than dedup'ing against a tag from a different source.
+        if repo_changed or provider_changed or base_url_changed:
             existing.last_release_tag = None
             existing.last_release_published_at = None
             existing.last_status = GithubSourceStatus.IDLE
@@ -125,9 +163,13 @@ async def upsert_github_source(
         summary=f"GitHub source set to {payload.repo} for {app.package_name}",
         payload={
             "repo": payload.repo,
+            "provider": payload.provider.value,
+            "base_url": payload.base_url,
             "asset_pattern": payload.asset_pattern,
             "include_prereleases": payload.include_prereleases,
             "enabled": payload.enabled,
+            # NEVER log the token itself — just the transition.
+            "token": token_action,
         },
         request=request,
     )
@@ -149,11 +191,21 @@ async def upsert_github_source(
     # Pull repo metadata in parallel-ish (the source upsert is committed,
     # the metadata fetch is best-effort). Used to compute the preview
     # card of fields that could be filled on the App row.
+    from app.services.crypto import decrypt as _decrypt_for_meta
     from app.services.github_releases import fetch_repo_metadata
 
     proposed: list[ProposedAppField] = []
+    # Use the just-saved token (or its decrypted value if the client
+    # didn't touch the field this round) so private-repo metadata
+    # also flows through to the proposed-update card.
+    meta_token = _decrypt_for_meta(existing.access_token_encrypted)
     try:
-        meta = await fetch_repo_metadata(payload.repo)
+        meta = await fetch_repo_metadata(
+            payload.repo,
+            provider=payload.provider.value,
+            base_url=payload.base_url,
+            token=meta_token,
+        )
     except Exception:  # noqa: BLE001
         meta = None
     if meta is not None:
@@ -197,8 +249,9 @@ async def delete_github_source(
     request: Request,
     actor: Annotated[User, Depends(get_current_user)],
 ) -> None:
+    """Owner/admin only — same reasoning as upsert."""
     app = await _load_app_or_404(db, app_id)
-    await assert_can_manage_app(db, actor, app)
+    assert_owner_or_admin(actor, app)
     source = (
         await db.execute(
             select(GithubSource).where(GithubSource.app_id == app_id)

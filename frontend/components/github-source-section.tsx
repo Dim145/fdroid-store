@@ -19,7 +19,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { api, type GithubSource, type GithubSourceStatus, type ProposedAppField } from "@/lib/api";
+import {
+  api,
+  type GithubProvider,
+  type GithubSource,
+  type GithubSourceStatus,
+  type ProposedAppField,
+} from "@/lib/api";
 import { toast } from "@/lib/toast-store";
 import { cn, formatDate } from "@/lib/utils";
 
@@ -40,9 +46,18 @@ export function GithubSourceSection({
   // Form state — controlled inputs, reset to source on every refresh so a
   // pending edit gets clobbered by the new server-side state on poll.
   const [repo, setRepo] = useState("");
+  const [provider, setProvider] = useState<GithubProvider>("github");
+  const [baseUrl, setBaseUrl] = useState("");
   const [assetPattern, setAssetPattern] = useState("");
   const [includePrereleases, setIncludePrereleases] = useState(false);
   const [enabled, setEnabled] = useState(true);
+  // Token UX is write-only: we never receive the value from the
+  // server. ``tokenInput`` is what the user typed THIS session;
+  // ``hasStoredToken`` mirrors the source row's ``has_access_token``
+  // so the UI can render the "Token configured · Clear" state.
+  const [tokenInput, setTokenInput] = useState("");
+  const [hasStoredToken, setHasStoredToken] = useState(false);
+  const [tokenAction, setTokenAction] = useState<"keep" | "set" | "clear">("keep");
   const [dirty, setDirty] = useState(false);
 
   const [saving, setSaving] = useState(false);
@@ -79,9 +94,16 @@ export function GithubSourceSection({
         // Hydrate the form when the user hasn't started editing.
         if (!dirty) {
           setRepo(next.repo);
+          setProvider(next.provider);
+          setBaseUrl(next.base_url ?? "");
           setAssetPattern(next.asset_pattern ?? "");
           setIncludePrereleases(next.include_prereleases);
           setEnabled(next.enabled);
+          setHasStoredToken(next.has_access_token);
+          // After a reload we go back to the "keep what's stored"
+          // intent so the next save doesn't accidentally overwrite.
+          setTokenAction("keep");
+          setTokenInput("");
         }
         // Detect a fresh import — if the tag rolls over to a new value
         // while we're polling, ask the parent to refresh the APK list.
@@ -124,9 +146,16 @@ export function GithubSourceSection({
       if (next) {
         if (!dirty) {
           setRepo(next.repo);
+          setProvider(next.provider);
+          setBaseUrl(next.base_url ?? "");
           setAssetPattern(next.asset_pattern ?? "");
           setIncludePrereleases(next.include_prereleases);
           setEnabled(next.enabled);
+          setHasStoredToken(next.has_access_token);
+          // After a reload we go back to the "keep what's stored"
+          // intent so the next save doesn't accidentally overwrite.
+          setTokenAction("keep");
+          setTokenInput("");
         }
         if (
           next.last_status === "imported" &&
@@ -154,12 +183,24 @@ export function GithubSourceSection({
     if (!repo.trim()) return;
     setSaving(true);
     try {
-      const resp = await api.githubSource.upsert(appId, {
+      // Three-way token semantics:
+      //   keep  → don't include the field at all (server leaves it)
+      //   set   → string value
+      //   clear → explicit null
+      const body: Record<string, unknown> = {
         repo: repo.trim(),
+        provider,
+        base_url: baseUrl.trim() || null,
         asset_pattern: assetPattern.trim() || null,
         include_prereleases: includePrereleases,
         enabled,
-      });
+      };
+      if (tokenAction === "set" && tokenInput.trim()) {
+        body.access_token = tokenInput.trim();
+      } else if (tokenAction === "clear") {
+        body.access_token = null;
+      }
+      const resp = await api.githubSource.upsert(appId, body as Parameters<typeof api.githubSource.upsert>[1]);
       setSource(resp.source);
       setDirty(false);
       // Surface the preview card with every proposed field pre-selected
@@ -249,6 +290,8 @@ export function GithubSourceSection({
       await api.githubSource.remove(appId);
       setSource(null);
       setRepo("");
+      setProvider("github");
+      setBaseUrl("");
       setAssetPattern("");
       setIncludePrereleases(false);
       setEnabled(true);
@@ -291,6 +334,24 @@ export function GithubSourceSection({
 
       <form onSubmit={onSave} className="space-y-4">
         <div className="grid gap-3 md:grid-cols-2">
+          {/* Provider picker — segmented pills. Selecting a non-GitHub
+              provider reveals the base URL field below. */}
+          <div className="space-y-1.5 md:col-span-2">
+            <Label className="text-xs font-medium uppercase tracking-wider text-ink-mute">
+              {t("myApps.edit.githubSource.providerLabel")}
+            </Label>
+            <div className="inline-flex rounded-pill border border-outline-soft bg-surface-2 p-0.5">
+              {(["github", "gitlab", "gitea"] as const).map((p) => (
+                <ProviderPill
+                  key={p}
+                  active={provider === p}
+                  onClick={() => { setProvider(p); setDirty(true); }}
+                  label={t(`myApps.edit.githubSource.providers.${p}`)}
+                />
+              ))}
+            </div>
+          </div>
+
           <div className="space-y-1.5 md:col-span-2">
             <Label htmlFor="gh-repo" className="text-xs font-medium uppercase tracking-wider text-ink-mute">
               {t("myApps.edit.githubSource.repoLabel")}
@@ -303,12 +364,136 @@ export function GithubSourceSection({
                 id="gh-repo"
                 value={repo}
                 onChange={(e) => { setRepo(e.target.value); setDirty(true); }}
-                placeholder={t("myApps.edit.githubSource.repoPlaceholder")}
+                placeholder={t(`myApps.edit.githubSource.repoPlaceholder_${provider}`)}
                 className="font-mono"
               />
             </div>
             <p className="text-[11px] leading-relaxed text-ink-mute">
               {t("myApps.edit.githubSource.repoHint")}
+            </p>
+          </div>
+
+          {/* Self-hosted base URL — only relevant for GitLab + Gitea
+              variants; for stock GitHub.com it stays empty. */}
+          {provider !== "github" && (
+            <div className="space-y-1.5 md:col-span-2">
+              <Label htmlFor="gh-base-url" className="text-xs font-medium uppercase tracking-wider text-ink-mute">
+                {t("myApps.edit.githubSource.baseUrlLabel")}
+              </Label>
+              <Input
+                id="gh-base-url"
+                value={baseUrl}
+                onChange={(e) => { setBaseUrl(e.target.value); setDirty(true); }}
+                placeholder={
+                  provider === "gitlab"
+                    ? "https://gitlab.com"
+                    : "https://codeberg.org"
+                }
+                className="font-mono"
+              />
+              <p className="text-[11px] leading-relaxed text-ink-mute">
+                {t("myApps.edit.githubSource.baseUrlHint")}
+              </p>
+            </div>
+          )}
+
+          {/* Per-source PAT — write-only. Three visual states:
+                * No stored token & action=keep → empty password input
+                  + helper text ("optional")
+                * Stored token & action=keep → chip "Token configured"
+                  with [Replace] / [Clear] buttons, no input
+                * action=set → password input (focused), [Cancel] reverts
+                * action=clear → message "Token will be cleared on save"
+                  with [Undo] button */}
+          <div className="space-y-1.5 md:col-span-2">
+            <Label htmlFor="gh-token" className="text-xs font-medium uppercase tracking-wider text-ink-mute">
+              {t("myApps.edit.githubSource.tokenLabel")}
+            </Label>
+            {hasStoredToken && tokenAction === "keep" && (
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-primary/30 bg-primary-container/30 px-3 py-2">
+                <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-primary-on-container">
+                  <span className="h-1.5 w-1.5 rounded-pill bg-primary" />
+                  {t("myApps.edit.githubSource.tokenConfigured")}
+                </span>
+                <div className="ml-auto flex gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => { setTokenAction("set"); setDirty(true); }}
+                  >
+                    {t("myApps.edit.githubSource.tokenReplace")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="text-danger hover:bg-danger-container"
+                    onClick={() => { setTokenAction("clear"); setDirty(true); }}
+                  >
+                    {t("myApps.edit.githubSource.tokenClear")}
+                  </Button>
+                </div>
+              </div>
+            )}
+            {tokenAction === "set" && (
+              <div className="flex items-center gap-2">
+                <Input
+                  id="gh-token"
+                  type="password"
+                  autoComplete="off"
+                  value={tokenInput}
+                  onChange={(e) => { setTokenInput(e.target.value); setDirty(true); }}
+                  placeholder={t(`myApps.edit.githubSource.tokenPlaceholder_${provider}`)}
+                  className="font-mono"
+                />
+                {hasStoredToken && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => { setTokenAction("keep"); setTokenInput(""); }}
+                  >
+                    {t("common.cancel")}
+                  </Button>
+                )}
+              </div>
+            )}
+            {tokenAction === "clear" && (
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-danger/40 bg-danger-container/30 px-3 py-2">
+                <span className="text-xs text-danger-on-container">
+                  {t("myApps.edit.githubSource.tokenWillBeCleared")}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto"
+                  onClick={() => { setTokenAction("keep"); }}
+                >
+                  {t("myApps.edit.githubSource.tokenUndoClear")}
+                </Button>
+              </div>
+            )}
+            {!hasStoredToken && tokenAction !== "set" && (
+              // New source — show the field directly so users can
+              // paste a PAT without an extra click.
+              <Input
+                id="gh-token"
+                type="password"
+                autoComplete="off"
+                value={tokenInput}
+                onChange={(e) => {
+                  setTokenInput(e.target.value);
+                  setTokenAction(e.target.value ? "set" : "keep");
+                  setDirty(true);
+                }}
+                placeholder={t(`myApps.edit.githubSource.tokenPlaceholder_${provider}`)}
+                className="font-mono"
+              />
+            )}
+            <p className="text-[11px] leading-relaxed text-ink-mute">
+              {t("myApps.edit.githubSource.tokenHint")}
             </p>
           </div>
 
@@ -470,6 +655,33 @@ function toneFor(status: GithubSourceStatus, scanning: boolean): "ok" | "error" 
   if (status === "error") return "error";
   if (status === "imported" || status === "up_to_date") return "ok";
   return "neutral";
+}
+
+
+function ProviderPill({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "rounded-pill px-3 py-1 text-xs font-medium transition-colors",
+        active
+          ? "bg-primary text-primary-fg shadow-e1"
+          : "text-ink-soft hover:text-ink",
+      )}
+    >
+      {label}
+    </button>
+  );
 }
 
 

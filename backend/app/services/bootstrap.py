@@ -17,6 +17,7 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     App,
     AppCategory,
     Category,
+    DeployToken,
     DownloadEvent,
     GithubSource,
     InviteCode,
@@ -79,6 +80,19 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS clamav_scan_periodic BOOLEAN NOT NULL DEFAULT FALSE",
             # v0.14 — require 2FA for the admin role.
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS require_admin_2fa BOOLEAN NOT NULL DEFAULT FALSE",
+            # Multi-forge release sources. SQLAlchemy's default Enum
+            # mapping uses the Python *member name* (uppercase) as the
+            # PG label, so we have to match here — otherwise inserts
+            # crash with "invalid input value for enum".
+            """
+            DO $$ BEGIN
+              CREATE TYPE github_provider AS ENUM ('GITHUB', 'GITLAB', 'GITEA');
+            EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+            """,
+            "ALTER TABLE github_sources ADD COLUMN IF NOT EXISTS provider github_provider NOT NULL DEFAULT 'GITHUB'",
+            "ALTER TABLE github_sources ADD COLUMN IF NOT EXISTS base_url VARCHAR(255)",
+            # Per-source PAT, Fernet-encrypted. See services/crypto.py.
+            "ALTER TABLE github_sources ADD COLUMN IF NOT EXISTS access_token_encrypted BYTEA",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

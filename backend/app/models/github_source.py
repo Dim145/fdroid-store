@@ -10,7 +10,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 
@@ -24,6 +24,16 @@ class GithubSourceStatus(str, enum.Enum):
     IMPORTED = "imported"        # last scan imported a release
     ERROR = "error"              # last scan failed (see last_error)
     SKIPPED = "skipped"          # release found but skipped (e.g. signer mismatch handled gracefully)
+
+
+class GithubProvider(str, enum.Enum):
+    """Which forge the ``repo`` field refers to. Drives which release
+    API + auth header we use. ``base_url`` on the row pairs with this
+    to point at a self-hosted instance (gitlab.example.com, codeberg.org,
+    a private Gitea, …)."""
+    GITHUB = "github"
+    GITLAB = "gitlab"
+    GITEA = "gitea"
 
 
 class GithubSource(Base, IdMixin, TimestampMixin):
@@ -42,6 +52,24 @@ class GithubSource(Base, IdMixin, TimestampMixin):
     # GitHub repository in the canonical ``owner/name`` shape (case preserved
     # for display; matching is case-insensitive on GitHub's side).
     repo: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # Which forge ``repo`` belongs to. Defaults to GitHub so existing
+    # rows on upgraded deployments keep working without a backfill.
+    provider: Mapped[GithubProvider] = mapped_column(
+        Enum(GithubProvider, name="github_provider"),
+        default=GithubProvider.GITHUB,
+        nullable=False,
+    )
+    # Optional self-hosted instance URL (e.g. ``https://gitlab.example.com``,
+    # ``https://codeberg.org``). NULL means use the provider's canonical
+    # public host. Validated to be https on save.
+    base_url: Mapped[str | None] = mapped_column(String(255))
+
+    # Per-source personal access token, encrypted at rest with a key
+    # derived from ``settings.secret_key`` (see services.crypto). Used
+    # by the scan to authenticate against private repos; NULL means
+    # fall back to the env-var token for the provider.
+    access_token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
 
     # fnmatch-style glob applied to release asset ``name``. NULL falls back
     # to ``*.apk`` (any first APK in the release). Useful when a release
@@ -73,6 +101,12 @@ class GithubSource(Base, IdMixin, TimestampMixin):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
     )
+
+    @property
+    def has_access_token(self) -> bool:
+        """True when the source has a per-source PAT configured (used by
+        the API to expose the boolean state without leaking the token)."""
+        return bool(self.access_token_encrypted)
 
     app = relationship(
         "App",

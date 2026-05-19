@@ -158,6 +158,39 @@ def _hash_api_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
+# --------------------------------------------------------------------------
+# Deploy tokens (per-app CI ingest)
+# --------------------------------------------------------------------------
+# Format: fdci_<prefix>_<secret>
+#   - Same shape as the user API keys but with a distinct prefix so a
+#     leaked deploy token can't be mistaken for a full account
+#     credential (and the auth code can route them through the
+#     narrower upload-only path).
+DEPLOY_TOKEN_PROTO = "fdci"
+
+
+def generate_deploy_token() -> tuple[str, str, str]:
+    """Returns ``(full_token, prefix, hashed_secret)`` — same contract
+    as :func:`generate_api_key`, just with the fdci prototype.
+    """
+    prefix = secrets.token_hex(8)
+    secret = secrets.token_urlsafe(32)
+    full = f"{DEPLOY_TOKEN_PROTO}_{prefix}_{secret}"
+    return full, prefix, _hash_api_secret(secret)
+
+
+def parse_deploy_token(full: str) -> tuple[str, str] | None:
+    """Return ``(prefix, secret)`` if the token is well-formed, else None."""
+    parts = full.split("_", 2)
+    if len(parts) != 3 or parts[0] != DEPLOY_TOKEN_PROTO:
+        return None
+    return parts[1], parts[2]
+
+
+def verify_deploy_token_secret(secret: str, hashed: str) -> bool:
+    return secrets.compare_digest(_hash_api_secret(secret), hashed)
+
+
 __all__ = [
     "JWTError",
     "create_access_token",

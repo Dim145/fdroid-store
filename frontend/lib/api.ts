@@ -281,7 +281,16 @@ export const api = {
     },
     /** Probe a GitHub repository: resolve latest matching release, download
      *  + parse the APK, return metadata. No DB writes. */
-    inspectGithub: (payload: { repo: string; asset_pattern?: string | null; include_prereleases?: boolean }) =>
+    inspectGithub: (payload: {
+      repo: string;
+      asset_pattern?: string | null;
+      include_prereleases?: boolean;
+      provider?: GithubProvider;
+      base_url?: string | null;
+      /** Optional one-shot PAT — used only for this inspect call,
+       *  never persisted server-side. */
+      access_token?: string | null;
+    }) =>
       apiFetch<GithubApkInspect>("/api/v1/apks/inspect-github", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -470,6 +479,21 @@ export const api = {
         `/api/v1/apps/${appId}/collaborators/${collaboratorId}`,
         { method: "DELETE" },
       ),
+  },
+
+  // ---------- Deploy tokens (CI ingest) ----------
+  deployTokens: {
+    list: (appId: string) =>
+      apiFetch<DeployToken[]>(`/api/v1/apps/${appId}/deploy-tokens`),
+    create: (appId: string, payload: { name: string }) =>
+      apiFetch<DeployTokenCreated>(`/api/v1/apps/${appId}/deploy-tokens`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    revoke: (appId: string, tokenId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/deploy-tokens/${tokenId}`, {
+        method: "DELETE",
+      }),
   },
 
   // ---------- GitHub release auto-fetch ----------
@@ -745,8 +769,12 @@ export type AppCreateWithApk = Omit<AppCreate, "package_name" | "category_ids"> 
 export type AppCreateFromGithubPayload =
   Omit<AppCreate, "package_name" | "category_ids" | "author_email" | "donate" | "liberapay" | "bitcoin" | "open_collective" | "translation"> & {
     repo: string;
+    provider?: GithubProvider;
+    base_url?: string | null;
     asset_pattern?: string | null;
     include_prereleases?: boolean;
+    /** Per-source PAT, persisted alongside the source. */
+    access_token?: string | null;
   };
 
 /** Result returned by ``POST /apks/inspect-github`` — same fields as
@@ -779,13 +807,32 @@ export type GithubSourceUpsertResponse = {
   source: GithubSource;
   proposed_app_updates: ProposedAppField[];
 };
+
+/** App-scoped CI upload credential. The full secret only appears on
+ *  creation (DeployTokenCreated); subsequent reads only expose prefix
+ *  + metadata. */
+export type DeployToken = {
+  id: string;
+  app_id: string;
+  name: string;
+  prefix: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DeployTokenCreated = DeployToken & {
+  full_token: string;
+};
 export type AppUpdatePayload = Partial<Omit<AppCreate, "package_name">> & {
   /** Pin (number) or clear (null) the suggested version. Omit the field
    *  entirely to leave the current state alone. */
   suggested_version_code?: number | null;
 };
 
-/** Status of the last GitHub-release scan for an app. */
+/** Status of the last release-source scan for an app. */
 export type GithubSourceStatus =
   | "idle"
   | "up_to_date"
@@ -793,13 +840,20 @@ export type GithubSourceStatus =
   | "error"
   | "skipped";
 
+/** Which forge a release source points at. ``base_url`` lets the user
+ *  target self-hosted GitLab / Forgejo instances. */
+export type GithubProvider = "github" | "gitlab" | "gitea";
+
 export type GithubSource = {
   id: string;
   app_id: string;
   repo: string;
+  provider: GithubProvider;
+  base_url: string | null;
   asset_pattern: string | null;
   include_prereleases: boolean;
   enabled: boolean;
+  has_access_token: boolean;
   last_release_tag: string | null;
   last_release_published_at: string | null;
   last_scanned_at: string | null;
@@ -811,9 +865,17 @@ export type GithubSource = {
 
 export type GithubSourceUpsert = {
   repo: string;
+  provider?: GithubProvider;
+  base_url?: string | null;
   asset_pattern?: string | null;
   include_prereleases?: boolean;
   enabled?: boolean;
+  /** Write-only PAT. Three semantics:
+   *    * key absent → leave the stored token alone
+   *    * string → set / replace
+   *    * null or empty string → clear
+   */
+  access_token?: string | null;
 };
 
 export type ApkInspect = {

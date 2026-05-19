@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { api, type ApkInspect, type GithubApkInspect } from "@/lib/api";
+import { api, type ApkInspect, type GithubApkInspect, type GithubProvider } from "@/lib/api";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 
 type SourceMode = "apk" | "github";
@@ -28,7 +28,10 @@ function NewAppInner() {
   const [inspecting, setInspecting] = useState(false);
 
   // ---------- GitHub path state ----------
+  const [ghProvider, setGhProvider] = useState<GithubProvider>("github");
+  const [ghBaseUrl, setGhBaseUrl] = useState("");
   const [ghRepo, setGhRepo] = useState("");
+  const [ghToken, setGhToken] = useState("");
   const [ghPattern, setGhPattern] = useState("");
   const [ghPrereleases, setGhPrereleases] = useState(false);
   const [ghAdvancedOpen, setGhAdvancedOpen] = useState(false);
@@ -105,8 +108,11 @@ function NewAppInner() {
     try {
       const info = await api.apps.inspectGithub({
         repo: ghRepo.trim(),
+        provider: ghProvider,
+        base_url: ghBaseUrl.trim() || null,
         asset_pattern: ghPattern.trim() || null,
         include_prereleases: ghPrereleases,
+        access_token: ghToken.trim() || null,
       });
       setGhInspect(info);
       // Mirror the APK path: prefill the Listing form with values we can
@@ -196,8 +202,11 @@ function NewAppInner() {
         author_name: authorName || undefined,
         visibility,
         repo: ghInspect.repo,
+        provider: ghProvider,
+        base_url: ghBaseUrl.trim() || null,
         asset_pattern: ghPattern.trim() || null,
         include_prereleases: ghPrereleases,
+        access_token: ghToken.trim() || null,
       });
       router.replace(`/my-apps/${created.id}`);
     } catch (e) {
@@ -308,6 +317,32 @@ function NewAppInner() {
                 />
               </p>
 
+              {/* Forge picker — segmented pills. Selecting a non-GitHub
+                  provider reveals the base URL field below. */}
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium text-ink-soft">
+                  {t("myApps.new.github.providerLabel")}
+                </Label>
+                <div className="inline-flex rounded-pill border border-outline-soft bg-surface-2 p-0.5">
+                  {(["github", "gitlab", "gitea"] as const).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => { setGhProvider(p); setGhInspect(null); }}
+                      aria-pressed={ghProvider === p}
+                      className={cn(
+                        "rounded-pill px-3 py-1 text-xs font-medium transition-colors",
+                        ghProvider === p
+                          ? "bg-primary text-primary-fg shadow-e1"
+                          : "text-ink-soft hover:text-ink",
+                      )}
+                    >
+                      {t(`myApps.new.github.providers.${p}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="gh-repo" className="text-sm font-medium text-ink-soft">
                   {t("myApps.new.github.repoLabel")}
@@ -320,7 +355,7 @@ function NewAppInner() {
                     id="gh-repo"
                     value={ghRepo}
                     onChange={(e) => { setGhRepo(e.target.value); setGhInspect(null); }}
-                    placeholder={t("myApps.new.github.repoPlaceholder")}
+                    placeholder={t(`myApps.new.github.repoPlaceholder_${ghProvider}`)}
                     className="font-mono"
                   />
                   <Button
@@ -335,6 +370,51 @@ function NewAppInner() {
                     {ghValidating ? t("myApps.new.github.validating") : t("myApps.new.github.validate")}
                   </Button>
                 </div>
+              </div>
+
+              {/* Self-hosted base URL — only relevant for GitLab + Gitea
+                  variants. Stays hidden for stock GitHub.com. */}
+              {ghProvider !== "github" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="gh-base-url" className="text-sm font-medium text-ink-soft">
+                    {t("myApps.new.github.baseUrlLabel")}
+                  </Label>
+                  <Input
+                    id="gh-base-url"
+                    value={ghBaseUrl}
+                    onChange={(e) => { setGhBaseUrl(e.target.value); setGhInspect(null); }}
+                    placeholder={
+                      ghProvider === "gitlab"
+                        ? "https://gitlab.com"
+                        : "https://codeberg.org"
+                    }
+                    className="font-mono"
+                  />
+                  <p className="text-[11px] leading-relaxed text-ink-mute">
+                    {t("myApps.new.github.baseUrlHint")}
+                  </p>
+                </div>
+              )}
+
+              {/* Optional PAT — needed to inspect + import from a
+                  private repo. Stored encrypted on the source row so
+                  subsequent cron scans use the same credential. */}
+              <div className="space-y-1.5">
+                <Label htmlFor="gh-token" className="text-sm font-medium text-ink-soft">
+                  {t("myApps.new.github.tokenLabel")}
+                </Label>
+                <Input
+                  id="gh-token"
+                  type="password"
+                  autoComplete="off"
+                  value={ghToken}
+                  onChange={(e) => { setGhToken(e.target.value); setGhInspect(null); }}
+                  placeholder={t(`myApps.new.github.tokenPlaceholder_${ghProvider}`)}
+                  className="font-mono"
+                />
+                <p className="text-[11px] leading-relaxed text-ink-mute">
+                  {t("myApps.new.github.tokenHint")}
+                </p>
               </div>
 
               {/* Advanced disclosure — pattern + prereleases. Collapsed by

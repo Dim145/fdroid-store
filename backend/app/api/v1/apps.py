@@ -299,12 +299,14 @@ async def create_app_with_github_source(
     with the configured repo.
     """
     from datetime import UTC as _UTC, datetime as _dt
-    from app.models.github_source import GithubSource, GithubSourceStatus
+    from app.models.github_source import GithubProvider, GithubSource, GithubSourceStatus
+    from app.services.crypto import encrypt as _encrypt_token
     from app.services.github_releases import (
         GithubReleaseError,
         download_asset,
         fetch_repo_metadata,
         find_latest_asset,
+        validate_base_url,
         validate_repo,
     )
     from app.services.quotas import ensure_can_create_app, ensure_can_upload_apk
@@ -316,8 +318,24 @@ async def create_app_with_github_source(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    try:
+        base_url = validate_base_url(payload.base_url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    provider_name = (payload.provider or "github").lower()
+    try:
+        provider_enum = GithubProvider(provider_name)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown provider: {provider_name!r}",
+        ) from exc
 
     pattern = (payload.asset_pattern or "").strip() or None
+    raw_token = (payload.access_token or "").strip() or None
 
     await ensure_can_create_app(db, user)
 
@@ -327,6 +345,9 @@ async def create_app_with_github_source(
             repo,
             asset_pattern=pattern,
             include_prereleases=payload.include_prereleases,
+            provider=provider_name,
+            base_url=base_url,
+            token=raw_token,
         )
     except GithubReleaseError as exc:
         raise HTTPException(
@@ -343,7 +364,9 @@ async def create_app_with_github_source(
 
     # Best-effort repo metadata fetch — feeds the server-side defaults
     # for the listing fields the user didn't explicitly set.
-    repo_meta = await fetch_repo_metadata(repo)
+    repo_meta = await fetch_repo_metadata(
+        repo, provider=provider_name, base_url=base_url, token=raw_token
+    )
 
     try:
         tmp_path = await download_asset(asset)
@@ -415,6 +438,8 @@ async def create_app_with_github_source(
             GithubSource(
                 app_id=app.id,
                 repo=repo,
+                provider=provider_enum,
+                base_url=base_url,
                 asset_pattern=pattern,
                 include_prereleases=payload.include_prereleases,
                 enabled=True,
@@ -423,6 +448,10 @@ async def create_app_with_github_source(
                 last_scanned_at=_dt.now(_UTC),
                 last_status=GithubSourceStatus.IMPORTED,
                 created_by=user.id,
+                # Encrypt + persist the PAT alongside the source so the
+                # daily cron uses the same credential. None means the
+                # cron falls back to the env-var default.
+                access_token_encrypted=_encrypt_token(raw_token) if raw_token else None,
             )
         )
 

@@ -94,10 +94,17 @@ class ApkInspect(BaseModel):
 
 
 class GithubInspectRequest(BaseModel):
-    """Body for ``POST /apks/inspect-github``."""
+    """Body for ``POST /apks/inspect-github``. The name is historical;
+    the endpoint now handles GitHub, GitLab and Gitea/Forgejo."""
     repo: str = Field(min_length=3, max_length=255)
     asset_pattern: str | None = Field(default=None, max_length=255)
     include_prereleases: bool = False
+    provider: str = Field(default="github", max_length=16)
+    base_url: str | None = Field(default=None, max_length=255)
+    # Optional one-shot PAT, used only for this inspect call. The
+    # backend never persists it — the create / upsert endpoints have
+    # their own token field for the on-disk row.
+    access_token: str | None = Field(default=None, max_length=1024)
 
 
 class AppCreateFromGithub(BaseModel):
@@ -119,11 +126,16 @@ class AppCreateFromGithub(BaseModel):
     issue_tracker: HttpUrl | None = None
     author_name: str | None = Field(default=None, max_length=255)
     visibility: AppVisibility = AppVisibility.PUBLIC
-    # GitHub source bits — the same shape as GithubSourceUpsert but
+    # Release source bits — the same shape as GithubSourceUpsert but
     # repeated here so this endpoint stays self-contained.
     repo: str = Field(min_length=3, max_length=255)
     asset_pattern: str | None = Field(default=None, max_length=255)
     include_prereleases: bool = False
+    provider: str = Field(default="github", max_length=16)
+    base_url: str | None = Field(default=None, max_length=255)
+    # Per-source PAT persisted alongside the source. Same write-only
+    # semantics as :class:`GithubSourceUpsert`.
+    access_token: str | None = Field(default=None, max_length=1024)
 
 
 class GithubApkInspect(ApkInspect):

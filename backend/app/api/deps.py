@@ -12,12 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import (
+    DEPLOY_TOKEN_PROTO,
     JWTError,
     decode_token,
     parse_api_key,
+    parse_deploy_token,
     verify_api_key_secret,
+    verify_deploy_token_secret,
 )
 from app.models.api_key import ApiKey
+from app.models.deploy_token import DeployToken
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
 
@@ -163,6 +167,79 @@ async def is_public_mode(db: AsyncSession) -> bool:
 # Backwards-compatible alias kept for any internal callers still using the
 # underscore-prefixed name.
 _public_mode = is_public_mode
+
+
+async def _deploy_token_user_for_app(
+    raw: str,
+    app_id: uuid.UUID,
+    db: AsyncSession,
+) -> User | None:
+    """Resolve a deploy token to the user it should impersonate for an
+    upload to ``app_id``. Returns ``None`` if the token is invalid,
+    revoked, or doesn't match this app. Caller raises 401 on None."""
+    parts = parse_deploy_token(raw)
+    if parts is None:
+        return None
+    prefix, secret_part = parts
+    token = (
+        await db.execute(select(DeployToken).where(DeployToken.prefix == prefix))
+    ).scalar_one_or_none()
+    if token is None or not token.is_active:
+        return None
+    if token.app_id != app_id:
+        # Hard-fail: a deploy token from app A must never authenticate
+        # an upload to app B even if the user knows both UUIDs.
+        return None
+    if not verify_deploy_token_secret(secret_part, token.hashed_secret):
+        return None
+    # Refresh ``last_used_at`` (rate-limited to once per minute, same as
+    # the user API-key path).
+    now = datetime.now(UTC)
+    if token.last_used_at is None or (now - token.last_used_at) >= timedelta(minutes=1):
+        token.last_used_at = now
+        await db.flush()
+    if token.created_by is None:
+        # Token's creator was deleted — refuse rather than orphan-attribute.
+        return None
+    return (
+        await db.execute(select(User).where(User.id == token.created_by))
+    ).scalar_one_or_none()
+
+
+async def get_uploader_for_app(
+    app_id: uuid.UUID,
+    db: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> User:
+    """Auth dependency for the per-app APK upload endpoint.
+
+    Accepts either:
+      * a regular ``Bearer <jwt>`` (interactive web flow), or
+      * a ``Bearer fdci_<prefix>_<secret>`` deploy token scoped to this
+        exact app (CI flow).
+
+    The deploy-token path returns the token's ``created_by`` user so
+    downstream quota + audit machinery attributes the upload to the
+    human that owns the credential, not a synthetic CI identity.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+        )
+    token = authorization.split(" ", 1)[1].strip()
+    # Route by the well-known protocol prefix so we never accidentally
+    # try a JWT decode on a deploy token (which would slot it as a
+    # generic invalid JWT 401 and hide the real failure mode).
+    if token.startswith(f"{DEPLOY_TOKEN_PROTO}_"):
+        user = await _deploy_token_user_for_app(token, app_id, db)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or revoked deploy token for this app",
+            )
+        return user
+    return await _user_from_jwt(token, db)
 
 
 async def require_browse_access(

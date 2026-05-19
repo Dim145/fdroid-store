@@ -73,11 +73,14 @@ services:
       CLAMAV_HOST: ${CLAMAV_HOST:-}
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
       CLAMAV_MAX_STREAM_MB: ${CLAMAV_MAX_STREAM_MB:-100}
-      # Optional GitHub PAT used for the release auto-fetch feature. Without
-      # it we hit GitHub's 60 req/h anonymous limit, which is fine for a
-      # handful of sources. Provide a fine-grained or classic PAT with
-      # "public_repo" (private repos require "repo") to lift the cap.
+      # Optional PATs used for the release auto-fetch feature (one per
+      # forge). Without them we hit each provider's anonymous limit
+      # (60 req/h on GitHub). Provide a fine-grained or classic PAT
+      # with read access; private repos require the appropriate scope
+      # on each side.
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
     # Lock the image down at runtime. ``read_only`` makes the entire root
     # filesystem immutable; the few paths the app legitimately writes to
     # are explicitly enumerated below as tmpfs (ephemeral, sized) or named
@@ -125,6 +128,8 @@ services:
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
       CLAMAV_MAX_STREAM_MB: ${CLAMAV_MAX_STREAM_MB:-100}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
     command: ["python", "-m", "arq", "app.workers.tasks.WorkerSettings"]
     read_only: true
     security_opt:

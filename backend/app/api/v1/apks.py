@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_current_user
+from app.api.deps import DbSession, get_current_user, get_uploader_for_app
 from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
@@ -326,6 +326,7 @@ async def inspect_github(
         download_asset,
         fetch_repo_metadata,
         find_latest_asset,
+        validate_base_url,
         validate_repo,
     )
 
@@ -336,18 +337,35 @@ async def inspect_github(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    try:
+        base_url = validate_base_url(payload.base_url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    provider = (payload.provider or "github").lower()
+    if provider not in {"github", "gitlab", "gitea"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown provider: {provider!r}",
+        )
 
     pattern = (payload.asset_pattern or "").strip() or None
     effective_pattern = pattern or "*.apk"
+    inspect_token = (payload.access_token or "").strip() or None
 
     try:
         asset = await find_latest_asset(
             repo,
             asset_pattern=pattern,
             include_prereleases=payload.include_prereleases,
+            provider=provider,
+            base_url=base_url,
+            token=inspect_token,
         )
     except GithubReleaseError as exc:
-        # 422 is right: the input is structurally valid but GitHub said no.
+        # 422 is right: the input is structurally valid but the forge said no.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
@@ -366,7 +384,9 @@ async def inspect_github(
     # the inspect flow.
     import asyncio as _asyncio
 
-    repo_meta_task = _asyncio.create_task(fetch_repo_metadata(repo))
+    repo_meta_task = _asyncio.create_task(
+        fetch_repo_metadata(repo, provider=provider, base_url=base_url, token=inspect_token)
+    )
 
     tmp_path = await download_asset(asset)
     repo_meta = await repo_meta_task
@@ -412,10 +432,18 @@ async def inspect_github(
 async def upload_apk(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_uploader_for_app)],
     file: UploadFile = File(...),
 ) -> ApkRead:
-    """Upload a new APK for an existing app (e.g. publishing a new version)."""
+    """Upload a new APK for an existing app.
+
+    Accepts both interactive JWT auth (publish from the web UI) and a
+    deploy token in the ``Authorization: Bearer fdci_…`` header (CI
+    push). Deploy tokens are scoped to a single app and short-circuit
+    the management-permission check below because that check is
+    enforced inside the auth dependency itself (the token *is* the
+    per-app capability).
+    """
     app = (
         await db.execute(
             select(App)
@@ -425,6 +453,12 @@ async def upload_apk(
     ).scalar_one_or_none()
     if app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+    # Always re-check management rights against the resolved user:
+    # whether they authenticated with a JWT or a deploy token, they
+    # must still currently have manage rights on this app. This means
+    # a token outlives its minter only as long as the minter retains
+    # ownership/co-maintainer status — ownership transfer auto-revokes
+    # in-flight CI access without an explicit token revoke.
     from app.services.app_permissions import assert_can_manage_app
     await assert_can_manage_app(db, user, app)
 

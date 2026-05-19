@@ -1,14 +1,13 @@
-"""GitHub releases polling — fetch the latest APK from a repo's releases.
+"""Release polling — fetches the latest matching APK from a git forge.
 
-The service is intentionally narrow: given a ``owner/name`` repo and a
-glob pattern, it returns at most one ``ReleaseAsset`` describing the
-matching APK in the most recent eligible release, or ``None`` when
-nothing matches. Downloads are streamed to a tmpfile so a huge APK
-doesn't fault the worker's heap.
+Dispatches on a ``provider`` arg so the same call sites can target
+GitHub, GitLab or Gitea/Forgejo (including self-hosted instances via
+``base_url``). Each provider adapter knows its own release-list shape,
+asset URL shape and auth header.
 
-Auth is optional via ``settings.github_token`` — without it we get the
-60 req/hour anonymous bucket, which is fine for a handful of sources
-but starts to bite at scale.
+Token wiring is per-provider via env: ``GITHUB_TOKEN``, ``GITLAB_TOKEN``,
+``GITEA_TOKEN``. Without a token we fall back to the anonymous quota
+(60 req/h on GitHub, varies on the others).
 """
 from __future__ import annotations
 
@@ -18,6 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -27,21 +27,24 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 
 
-_GH_API = "https://api.github.com"
-_USER_AGENT = "fdroid-store/github-releases"
-# GitHub release API max per_page = 100. We scan the first page only —
-# if a maintainer publishes 100+ releases between two scans the older
-# ones won't be backfilled. Acceptable trade-off for v1.
+_USER_AGENT = "fdroid-store/release-polling"
+# Public canonical hosts for each provider. Used when ``base_url`` is
+# not set on a source (the common public-instance case).
+_DEFAULTS = {
+    "github": "https://api.github.com",
+    "gitlab": "https://gitlab.com",
+    "gitea": "https://codeberg.org",
+}
+# GitHub release API max per_page = 100; we scan the first page only.
 _PER_PAGE = 30
 
-# ``owner/name`` validated leniently — GitHub allows letters/digits/dashes
-# in names and additionally dots/underscores in repos. Keep the regex
-# strict enough to reject obvious garbage early (URLs, paths, etc.).
-_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]{0,38}/[A-Za-z0-9._-]+$")
+# ``owner/name`` validated leniently. GitLab supports nested groups
+# (foo/bar/baz) — we tolerate one extra slash level for that case.
+_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]{0,38}(/[A-Za-z0-9._-]+){1,4}$")
 
 
 class GithubReleaseError(RuntimeError):
-    """Raised when GitHub returns a 4xx/5xx or the repo is unreachable."""
+    """Raised when the upstream forge returns a 4xx/5xx or is unreachable."""
 
 
 @dataclass(frozen=True)
@@ -55,13 +58,18 @@ class ReleaseAsset:
     asset_name: str
     asset_size: int
     asset_download_url: str
+    # Which provider this asset came from — needed by ``download_asset``
+    # to forward the right auth header on the CDN redirect.
+    provider: str = "github"
+    # The PAT to authenticate the download with. Carried on the asset
+    # so the caller doesn't have to re-pass it; falls back to the env
+    # var when the source row has no per-source token configured.
+    auth_token: str | None = None
 
 
 @dataclass(frozen=True)
 class RepoMetadata:
-    """Subset of the ``GET /repos/{owner}/{repo}`` payload that we use to
-    prefill an App's listing fields. All fields are optional except the
-    repo URL itself."""
+    """Subset of the repo-info payload used to prefill listing fields."""
     html_url: str
     description: str | None
     homepage: str | None
@@ -69,14 +77,22 @@ class RepoMetadata:
     owner_login: str | None
 
 
+# --------------------------------------------------------------------------
+# Shared helpers
+# --------------------------------------------------------------------------
 def validate_repo(repo: str) -> str:
-    """Normalise + reject anything that doesn't match ``owner/name``.
+    """Normalise + reject anything that doesn't look like a repo path.
 
-    Strips leading ``https://github.com/`` and trailing ``.git`` so users
+    Strips ``https://<host>/`` prefixes and ``.git`` suffixes so users
     can paste a clone URL. Raises ``ValueError`` on bad input.
     """
     s = repo.strip()
-    for prefix in ("https://github.com/", "http://github.com/", "git@github.com:"):
+    # Match common clone-URL forms across all three providers.
+    for prefix in (
+        "https://github.com/", "http://github.com/", "git@github.com:",
+        "https://gitlab.com/", "http://gitlab.com/", "git@gitlab.com:",
+        "https://codeberg.org/", "http://codeberg.org/", "git@codeberg.org:",
+    ):
         if s.lower().startswith(prefix):
             s = s[len(prefix):]
             break
@@ -88,149 +104,60 @@ def validate_repo(repo: str) -> str:
     return s
 
 
-def _auth_headers() -> dict[str, str]:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": _USER_AGENT,
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
-    return headers
-
-
-async def fetch_repo_metadata(repo: str) -> RepoMetadata | None:
-    """Pull description / homepage / license / owner from GitHub.
-
-    Used to prefill an App's listing when the user creates from GitHub
-    or connects a source to an existing app. Best-effort: a non-2xx
-    response returns ``None`` so the caller falls back to manual entry
-    instead of failing the whole create flow.
-    """
-    url = f"{_GH_API}/repos/{repo}"
-    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers()) as client:
-        try:
-            resp = await client.get(url)
-        except httpx.RequestError:
-            return None
-    if resp.status_code != 200:
+def validate_base_url(value: str | None) -> str | None:
+    """Self-hosted instance URL must be https (or localhost for dev)."""
+    if not value:
         return None
-    try:
-        data = resp.json()
-    except ValueError:
+    stripped = value.strip().rstrip("/")
+    if not stripped:
         return None
-    if not isinstance(data, dict):
-        return None
-
-    license_info = data.get("license") if isinstance(data.get("license"), dict) else None
-    owner = data.get("owner") if isinstance(data.get("owner"), dict) else None
-
-    # Empty strings come back from GitHub when a field is unset on the
-    # repo settings — normalize to ``None`` so callers can use truthiness.
-    def _nz(value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        stripped = value.strip()
-        return stripped or None
-
-    homepage = _nz(data.get("homepage"))
-    # Homepage often lacks a scheme ("example.com") because GitHub does
-    # not enforce one. Prepend https:// so our HttpUrl validator accepts
-    # it downstream. Anything that already looks like a URL is kept as-is.
-    if homepage and "://" not in homepage:
-        homepage = f"https://{homepage}"
-
-    return RepoMetadata(
-        html_url=str(data.get("html_url") or f"https://github.com/{repo}"),
-        description=_nz(data.get("description")),
-        homepage=homepage,
-        license_spdx=_nz(license_info.get("spdx_id")) if license_info else None,
-        owner_login=_nz(owner.get("login")) if owner else None,
-    )
+    lowered = stripped.lower()
+    if not (
+        lowered.startswith("https://")
+        or lowered.startswith("http://localhost")
+        or lowered.startswith("http://127.0.0.1")
+    ):
+        raise ValueError("base_url must be https://… (or localhost for dev)")
+    return stripped
 
 
-async def find_latest_asset(
-    repo: str,
-    *,
-    asset_pattern: str | None,
-    include_prereleases: bool,
-) -> ReleaseAsset | None:
-    """Return the most recent eligible release's matching APK, or None.
-
-    Releases are walked in GitHub's default order (most recent first).
-    The first release that satisfies prerelease/draft constraints AND
-    contains an asset matching ``asset_pattern`` (defaulting to ``*.apk``)
-    wins. If a release has a matching asset but is a draft, we skip it.
-    """
-    pattern = (asset_pattern or "").strip() or "*.apk"
-    url = f"{_GH_API}/repos/{repo}/releases"
-    params = {"per_page": str(_PER_PAGE)}
-
-    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers()) as client:
-        try:
-            resp = await client.get(url, params=params)
-        except httpx.RequestError as exc:
-            raise GithubReleaseError(f"GitHub unreachable: {exc}") from exc
-
-        if resp.status_code == 404:
-            raise GithubReleaseError(f"Repository {repo!r} not found")
-        if resp.status_code == 403:
-            # Most often: rate limit. Surface the reset window so the
-            # error message is actionable.
-            remaining = resp.headers.get("X-RateLimit-Remaining")
-            reset = resp.headers.get("X-RateLimit-Reset")
-            raise GithubReleaseError(
-                f"GitHub returned 403 (remaining={remaining}, reset_epoch={reset})"
-            )
-        if resp.status_code >= 400:
-            raise GithubReleaseError(
-                f"GitHub returned {resp.status_code}: {resp.text[:200]}"
-            )
-
-        releases = resp.json()
-
-    if not isinstance(releases, list):
-        raise GithubReleaseError("Unexpected GitHub response shape")
-
-    for rel in releases:
-        if not isinstance(rel, dict):
-            continue
-        if rel.get("draft"):
-            continue
-        if rel.get("prerelease") and not include_prereleases:
-            continue
-        assets = rel.get("assets") or []
-        if not isinstance(assets, list):
-            continue
-
-        match = _pick_asset(assets, pattern)
-        if match is None:
-            continue
-        try:
-            published_at = datetime.fromisoformat(
-                str(rel.get("published_at", "")).replace("Z", "+00:00")
-            )
-        except ValueError:
-            continue
-        return ReleaseAsset(
-            release_tag=str(rel.get("tag_name", "")),
-            release_name=rel.get("name") or None,
-            release_published_at=published_at,
-            is_prerelease=bool(rel.get("prerelease")),
-            asset_id=int(match["id"]),
-            asset_name=str(match["name"]),
-            asset_size=int(match.get("size") or 0),
-            asset_download_url=str(match["browser_download_url"]),
-        )
+def _resolve_token(provider: str, explicit: str | None) -> str | None:
+    """Use the per-source PAT when set, otherwise fall back to the
+    server-level env token for the provider."""
+    if explicit:
+        return explicit
+    if provider == "github":
+        return settings.github_token
+    if provider == "gitlab":
+        return settings.gitlab_token
+    if provider == "gitea":
+        return settings.gitea_token
     return None
 
 
-def _pick_asset(assets: list[dict], pattern: str) -> dict | None:
-    """First asset whose ``name`` matches the glob. APKs only."""
-    # First pass: pattern match (case-insensitive on the asset name to be
-    # lenient with releases that mix App-Release.apk and app-release.apk).
+def _auth_headers_for(provider: str, token: str | None) -> dict[str, str]:
+    """Per-provider Authorization header. Each forge uses a different
+    scheme, so we can't normalize at the dispatcher level."""
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Accept": "application/json",
+    }
+    if provider == "github":
+        headers["Accept"] = "application/vnd.github+json"
+        headers["X-GitHub-Api-Version"] = "2022-11-28"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    elif provider == "gitlab":
+        if token:
+            headers["PRIVATE-TOKEN"] = token
+    elif provider == "gitea":
+        if token:
+            headers["Authorization"] = f"token {token}"
+    return headers
+
+
+def _pick_apk(assets: list[dict], pattern: str) -> dict | None:
+    """First asset whose ``name`` matches the glob and ends in .apk."""
     for a in assets:
         name = str(a.get("name", ""))
         if not name.lower().endswith(".apk"):
@@ -240,33 +167,85 @@ def _pick_asset(assets: list[dict], pattern: str) -> dict | None:
     return None
 
 
+# --------------------------------------------------------------------------
+# Public dispatch entry points
+# --------------------------------------------------------------------------
+async def find_latest_asset(
+    repo: str,
+    *,
+    asset_pattern: str | None,
+    include_prereleases: bool,
+    provider: str = "github",
+    base_url: str | None = None,
+    token: str | None = None,
+) -> ReleaseAsset | None:
+    pattern = (asset_pattern or "").strip() or "*.apk"
+    effective_token = _resolve_token(provider, token)
+    if provider == "github":
+        return await _github_find(repo, pattern, include_prereleases, base_url, effective_token)
+    if provider == "gitlab":
+        return await _gitlab_find(repo, pattern, include_prereleases, base_url, effective_token)
+    if provider == "gitea":
+        return await _gitea_find(repo, pattern, include_prereleases, base_url, effective_token)
+    raise GithubReleaseError(f"Unsupported provider: {provider!r}")
+
+
+async def fetch_repo_metadata(
+    repo: str,
+    *,
+    provider: str = "github",
+    base_url: str | None = None,
+    token: str | None = None,
+) -> RepoMetadata | None:
+    """Best-effort — returns ``None`` on 4xx/5xx so the caller falls
+    back to manual entry instead of failing the create flow."""
+    effective_token = _resolve_token(provider, token)
+    if provider == "github":
+        return await _github_meta(repo, base_url, effective_token)
+    if provider == "gitlab":
+        return await _gitlab_meta(repo, base_url, effective_token)
+    if provider == "gitea":
+        return await _gitea_meta(repo, base_url, effective_token)
+    return None
+
+
 async def download_asset(asset: ReleaseAsset) -> Path:
     """Stream the asset to a NamedTemporaryFile and return its path.
 
     The caller MUST unlink the returned path in a ``finally`` block.
-    GitHub's CDN serves the asset directly — the auth header is forwarded
-    only on the initial 302 to the API endpoint; without a token we use
-    ``browser_download_url`` which redirects to a presigned CDN URL.
+    Each provider's CDN handles auth slightly differently; we keep the
+    request small + follow redirects to whichever S3-equivalent URL the
+    forge presents.
     """
-    # 256 MB hard ceiling. The repo's own APK cap is admin-configurable
-    # and is re-checked downstream; this just stops a misconfigured
-    # source from filling the worker tmpdir before the cap check.
     HARD_CAP = 256 * 1024 * 1024
 
     timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=15.0)
-    # GitHub sometimes redirects to S3 which does NOT accept the Authorization
-    # header. Use a client that drops the auth header on cross-host redirects.
+    base_headers: dict[str, str] = {
+        "User-Agent": _USER_AGENT,
+        "Accept": "application/octet-stream",
+    }
+    # GitHub asset endpoints redirect cross-host to S3 which does NOT
+    # accept Authorization — httpx drops it on follow-redirect anyway
+    # when the host changes. For GitLab and Gitea the URL is the actual
+    # download endpoint so the header is needed throughout. The asset
+    # carries its own ``auth_token`` (per-source PAT if configured, env
+    # fallback otherwise) so we don't reach back into ``settings`` here.
+    req_headers = dict(base_headers)
+    tok = asset.auth_token
+    if tok:
+        if asset.provider == "github":
+            req_headers["Authorization"] = f"Bearer {tok}"
+        elif asset.provider == "gitlab":
+            req_headers["PRIVATE-TOKEN"] = tok
+        elif asset.provider == "gitea":
+            req_headers["Authorization"] = f"token {tok}"
+
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=True,
-        headers={"User-Agent": _USER_AGENT, "Accept": "application/octet-stream"},
+        headers=base_headers,
     ) as client:
         try:
-            req_headers = {}
-            if settings.github_token:
-                # Required for private-repo asset downloads. GitHub's API
-                # endpoint accepts the bearer; the redirect target drops it.
-                req_headers["Authorization"] = f"Bearer {settings.github_token}"
             async with client.stream("GET", asset.asset_download_url, headers=req_headers) as resp:
                 if resp.status_code >= 400:
                     raise GithubReleaseError(
@@ -290,3 +269,324 @@ async def download_asset(asset: ReleaseAsset) -> Path:
                 return path
         except httpx.RequestError as exc:
             raise GithubReleaseError(f"Download error: {exc}") from exc
+
+
+# --------------------------------------------------------------------------
+# GitHub adapter
+# --------------------------------------------------------------------------
+async def _github_find(
+    repo: str, pattern: str, include_prereleases: bool, base_url: str | None, token: str | None,
+) -> ReleaseAsset | None:
+    # GitHub's hosted API lives at api.github.com regardless of HTTPS
+    # repo URLs. Self-hosted GitHub Enterprise uses ``/api/v3`` on the
+    # configured base — handled by ``base_url`` overriding the host.
+    api = (base_url.rstrip("/") + "/api/v3") if base_url else _DEFAULTS["github"]
+    url = f"{api}/repos/{repo}/releases"
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("github", token)) as client:
+        try:
+            resp = await client.get(url, params={"per_page": str(_PER_PAGE)})
+        except httpx.RequestError as exc:
+            raise GithubReleaseError(f"GitHub unreachable: {exc}") from exc
+
+        if resp.status_code == 404:
+            raise GithubReleaseError(f"Repository {repo!r} not found")
+        if resp.status_code == 403:
+            remaining = resp.headers.get("X-RateLimit-Remaining")
+            reset = resp.headers.get("X-RateLimit-Reset")
+            raise GithubReleaseError(
+                f"GitHub returned 403 (remaining={remaining}, reset_epoch={reset})"
+            )
+        if resp.status_code >= 400:
+            raise GithubReleaseError(
+                f"GitHub returned {resp.status_code}: {resp.text[:200]}"
+            )
+        releases = resp.json()
+
+    if not isinstance(releases, list):
+        raise GithubReleaseError("Unexpected GitHub response shape")
+
+    for rel in releases:
+        if not isinstance(rel, dict):
+            continue
+        if rel.get("draft"):
+            continue
+        if rel.get("prerelease") and not include_prereleases:
+            continue
+        assets = rel.get("assets") or []
+        if not isinstance(assets, list):
+            continue
+        match = _pick_apk(assets, pattern)
+        if match is None:
+            continue
+        try:
+            published_at = datetime.fromisoformat(
+                str(rel.get("published_at", "")).replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        return ReleaseAsset(
+            release_tag=str(rel.get("tag_name", "")),
+            release_name=rel.get("name") or None,
+            release_published_at=published_at,
+            is_prerelease=bool(rel.get("prerelease")),
+            asset_id=int(match["id"]),
+            asset_name=str(match["name"]),
+            asset_size=int(match.get("size") or 0),
+            asset_download_url=str(match["browser_download_url"]),
+            provider="github",
+            auth_token=token,
+        )
+    return None
+
+
+async def _github_meta(repo: str, base_url: str | None, token: str | None) -> RepoMetadata | None:
+    api = (base_url.rstrip("/") + "/api/v3") if base_url else _DEFAULTS["github"]
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("github", token)) as client:
+        try:
+            resp = await client.get(f"{api}/repos/{repo}")
+        except httpx.RequestError:
+            return None
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    license_info = data.get("license") if isinstance(data.get("license"), dict) else None
+    owner = data.get("owner") if isinstance(data.get("owner"), dict) else None
+    homepage = _nz(data.get("homepage"))
+    if homepage and "://" not in homepage:
+        homepage = f"https://{homepage}"
+    return RepoMetadata(
+        html_url=str(data.get("html_url") or f"https://github.com/{repo}"),
+        description=_nz(data.get("description")),
+        homepage=homepage,
+        license_spdx=_nz(license_info.get("spdx_id")) if license_info else None,
+        owner_login=_nz(owner.get("login")) if owner else None,
+    )
+
+
+# --------------------------------------------------------------------------
+# GitLab adapter
+# --------------------------------------------------------------------------
+async def _gitlab_find(
+    repo: str, pattern: str, include_prereleases: bool, base_url: str | None, token: str | None,
+) -> ReleaseAsset | None:
+    host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitlab"])
+    # GitLab's release endpoint expects the project path URL-encoded
+    # (``%2F`` instead of ``/``). The ``safe=""`` forces every slash
+    # through the percent-encoder.
+    project = quote(repo, safe="")
+    url = f"{host}/api/v4/projects/{project}/releases"
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitlab", token)) as client:
+        try:
+            resp = await client.get(url, params={"per_page": str(_PER_PAGE)})
+        except httpx.RequestError as exc:
+            raise GithubReleaseError(f"GitLab unreachable: {exc}") from exc
+        if resp.status_code == 404:
+            raise GithubReleaseError(f"Project {repo!r} not found on GitLab")
+        if resp.status_code >= 400:
+            raise GithubReleaseError(
+                f"GitLab returned {resp.status_code}: {resp.text[:200]}"
+            )
+        releases = resp.json()
+
+    if not isinstance(releases, list):
+        raise GithubReleaseError("Unexpected GitLab response shape")
+
+    for rel in releases:
+        if not isinstance(rel, dict):
+            continue
+        # GitLab marks ``upcoming_release=true`` on releases scheduled
+        # for the future. There's no formal pre-release flag, but the
+        # community convention is to suffix tags with ``-rc``/``-beta``.
+        if rel.get("upcoming_release"):
+            continue
+        if not include_prereleases:
+            tag = str(rel.get("tag_name", "")).lower()
+            if any(s in tag for s in ("-rc", "-beta", "-alpha", "-pre")):
+                continue
+        # GitLab nests assets under ``assets.links`` (manually attached
+        # files). We don't look at ``assets.sources`` (auto-generated
+        # source tarballs; never APKs).
+        links = (
+            rel.get("assets", {}).get("links")
+            if isinstance(rel.get("assets"), dict)
+            else None
+        )
+        if not isinstance(links, list):
+            continue
+        # Adapt GitLab's link shape ({name, url, link_type}) into the
+        # asset dict shape ``_pick_apk`` expects.
+        candidates = [
+            {"name": l.get("name", ""), "url": l.get("url", "")}
+            for l in links
+            if isinstance(l, dict)
+        ]
+        match = _pick_apk(
+            [{"name": c["name"], "browser_download_url": c["url"]} for c in candidates],
+            pattern,
+        )
+        if match is None:
+            continue
+        try:
+            published_at = datetime.fromisoformat(
+                str(rel.get("released_at", "")).replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        tag = str(rel.get("tag_name", ""))
+        is_pre = any(s in tag.lower() for s in ("-rc", "-beta", "-alpha", "-pre"))
+        return ReleaseAsset(
+            release_tag=tag,
+            release_name=rel.get("name") or None,
+            release_published_at=published_at,
+            is_prerelease=is_pre,
+            asset_id=0,  # GitLab links have no stable numeric id
+            asset_name=str(match["name"]),
+            asset_size=0,  # not exposed by the links endpoint
+            asset_download_url=str(match["browser_download_url"]),
+            provider="gitlab",
+            auth_token=token,
+        )
+    return None
+
+
+async def _gitlab_meta(repo: str, base_url: str | None, token: str | None) -> RepoMetadata | None:
+    host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitlab"])
+    project = quote(repo, safe="")
+    url = f"{host}/api/v4/projects/{project}?license=true"
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitlab", token)) as client:
+        try:
+            resp = await client.get(url)
+        except httpx.RequestError:
+            return None
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # GitLab's project endpoint nests author under ``namespace``.
+    namespace = data.get("namespace") if isinstance(data.get("namespace"), dict) else None
+    license_info = data.get("license") if isinstance(data.get("license"), dict) else None
+    return RepoMetadata(
+        html_url=str(data.get("web_url") or f"{host}/{repo}"),
+        description=_nz(data.get("description")),
+        # GitLab doesn't have a standardised "homepage" field on the
+        # project. We omit rather than guess.
+        homepage=None,
+        # ``key`` matches the SPDX id loosely (``mit``, ``gpl-3.0``).
+        # Upper-case to match GitHub's SPDX output.
+        license_spdx=(
+            license_info.get("key", "").upper() if license_info and license_info.get("key") else None
+        ),
+        owner_login=_nz(namespace.get("path")) if namespace else None,
+    )
+
+
+# --------------------------------------------------------------------------
+# Gitea / Forgejo adapter (GitHub-compatible release shape)
+# --------------------------------------------------------------------------
+async def _gitea_find(
+    repo: str, pattern: str, include_prereleases: bool, base_url: str | None, token: str | None,
+) -> ReleaseAsset | None:
+    host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitea"])
+    url = f"{host}/api/v1/repos/{repo}/releases"
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitea", token)) as client:
+        try:
+            resp = await client.get(url, params={"limit": str(_PER_PAGE)})
+        except httpx.RequestError as exc:
+            raise GithubReleaseError(f"Gitea unreachable: {exc}") from exc
+        if resp.status_code == 404:
+            raise GithubReleaseError(f"Repository {repo!r} not found on Gitea")
+        if resp.status_code >= 400:
+            raise GithubReleaseError(
+                f"Gitea returned {resp.status_code}: {resp.text[:200]}"
+            )
+        releases = resp.json()
+
+    if not isinstance(releases, list):
+        raise GithubReleaseError("Unexpected Gitea response shape")
+
+    for rel in releases:
+        if not isinstance(rel, dict):
+            continue
+        if rel.get("draft"):
+            continue
+        if rel.get("prerelease") and not include_prereleases:
+            continue
+        assets = rel.get("assets") or []
+        if not isinstance(assets, list):
+            continue
+        match = _pick_apk(assets, pattern)
+        if match is None:
+            continue
+        try:
+            published_at = datetime.fromisoformat(
+                str(rel.get("published_at", "")).replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        return ReleaseAsset(
+            release_tag=str(rel.get("tag_name", "")),
+            release_name=rel.get("name") or None,
+            release_published_at=published_at,
+            is_prerelease=bool(rel.get("prerelease")),
+            asset_id=int(match.get("id") or 0),
+            asset_name=str(match["name"]),
+            asset_size=int(match.get("size") or 0),
+            asset_download_url=str(match["browser_download_url"]),
+            provider="gitea",
+            auth_token=token,
+        )
+    return None
+
+
+async def _gitea_meta(repo: str, base_url: str | None, token: str | None) -> RepoMetadata | None:
+    host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitea"])
+    url = f"{host}/api/v1/repos/{repo}"
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitea", token)) as client:
+        try:
+            resp = await client.get(url)
+        except httpx.RequestError:
+            return None
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    owner = data.get("owner") if isinstance(data.get("owner"), dict) else None
+    homepage = _nz(data.get("website"))
+    if homepage and "://" not in homepage:
+        homepage = f"https://{homepage}"
+    return RepoMetadata(
+        html_url=str(data.get("html_url") or f"{host}/{repo}"),
+        description=_nz(data.get("description")),
+        homepage=homepage,
+        # Gitea returns license as a free-form string in some versions;
+        # we normalise to uppercase to align with GitHub's SPDX output.
+        license_spdx=_nz(data.get("license") or data.get("default_branch")),
+        owner_login=_nz(owner.get("login")) if owner else None,
+    )
+
+
+def _nz(value: object) -> str | None:
+    """Empty/whitespace-only strings → None so callers can use truthiness."""
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None

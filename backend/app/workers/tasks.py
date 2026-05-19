@@ -232,12 +232,22 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
             await db.commit()
             return {"status": "error", "error": "app owner missing"}
 
-        # ---- 1. Probe GitHub for the latest eligible release -----------
+        # Decrypt the per-source token. ``decrypt`` returns None when
+        # the blob is empty or the key has rotated — both paths fall
+        # through to the env-var default inside ``find_latest_asset``.
+        from app.services.crypto import decrypt as _decrypt
+
+        per_source_token = _decrypt(source.access_token_encrypted)
+
+        # ---- 1. Probe the forge for the latest eligible release --------
         try:
             asset = await find_latest_asset(
                 source.repo,
                 asset_pattern=source.asset_pattern,
                 include_prereleases=source.include_prereleases,
+                provider=source.provider.value,
+                base_url=source.base_url,
+                token=per_source_token,
             )
         except GithubReleaseError as exc:
             await _mark_source_error(db, source, str(exc))

@@ -27,6 +27,7 @@ import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
 import { AuthGuard } from "@/components/auth-guard";
 import { CollaboratorsSection } from "@/components/collaborators-section";
+import { DeployTokensSection } from "@/components/deploy-tokens-section";
 import { GithubSourceSection } from "@/components/github-source-section";
 import { LocalizationsEditor } from "@/components/localizations-editor";
 import { Badge } from "@/components/ui/badge";
@@ -409,18 +410,25 @@ function ManageAppInner() {
 
   // Section roster — drives both the sidebar rail and the section
   // chrome. Order matches the visual flow; "permissions" only renders
-  // when a published APK exists so we conditionally drop it.
-  const sectionRoster: { id: string; step: string; label: string }[] = [
-    { id: "listing", step: "01", label: t("myApps.edit.sections.listing") },
-    { id: "icon", step: "02", label: t("myApps.edit.sections.icon") },
-    { id: "graphics", step: "03", label: t("myApps.edit.sections.graphics") },
-    { id: "screenshots", step: "04", label: t("myApps.edit.sections.screenshots") },
-    { id: "translations", step: "05", label: t("myApps.edit.sections.translations") },
-    ...(latest ? [{ id: "permissions", step: "06", label: t("myApps.edit.sections.permissions") }] : []),
-    { id: "versions", step: latest ? "07" : "06", label: t("myApps.edit.sections.versions") },
-    { id: "github", step: latest ? "08" : "07", label: t("myApps.edit.sections.githubSource") },
-    { id: "collaborators", step: latest ? "09" : "08", label: t("myApps.edit.sections.collaborators") },
+  // when a published APK exists so we conditionally drop it. Auto-
+  // numbered from the position so we can rearrange without re-hand-
+  // numbering the call sites.
+  const baseRoster: { id: string; label: string }[] = [
+    { id: "listing", label: t("myApps.edit.sections.listing") },
+    { id: "icon", label: t("myApps.edit.sections.icon") },
+    { id: "graphics", label: t("myApps.edit.sections.graphics") },
+    { id: "screenshots", label: t("myApps.edit.sections.screenshots") },
+    { id: "translations", label: t("myApps.edit.sections.translations") },
+    ...(latest ? [{ id: "permissions", label: t("myApps.edit.sections.permissions") }] : []),
+    { id: "versions", label: t("myApps.edit.sections.versions") },
+    { id: "github", label: t("myApps.edit.sections.githubSource") },
+    { id: "ci", label: t("myApps.edit.sections.deployTokens") },
+    { id: "collaborators", label: t("myApps.edit.sections.collaborators") },
   ];
+  const sectionRoster = baseRoster.map((s, i) => ({
+    ...s,
+    step: String(i + 1).padStart(2, "0"),
+  }));
   const stepOf = (id: string) => sectionRoster.find((s) => s.id === id)?.step ?? "";
 
   return (
@@ -864,6 +872,18 @@ function ManageAppInner() {
       >
         <GithubSourceSection appId={app.id} onImported={() => void load()} />
       </Section>
+
+      {/* ──── CI deploy tokens ──── */}
+      {currentUser && (
+        <Section
+          id="ci"
+          step={stepOf("ci")}
+          title={t("myApps.edit.sections.deployTokens")}
+          subtitle={t("myApps.edit.sections.deployTokensSubtitle")}
+        >
+          <DeployTokensSection appId={app.id} />
+        </Section>
+      )}
 
       {/* ──── Collaborators ──── */}
       {currentUser && app.owner_id && (
