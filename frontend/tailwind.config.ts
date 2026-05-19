@@ -118,12 +118,17 @@ const config: Config = {
           "0%": { transform: "scale(0)", opacity: "0.35" },
           "100%": { transform: "scale(2.2)", opacity: "0" },
         },
+        "telemetry-sweep": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 0.35s ease-out both",
         "fade-up": "fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both",
         "slide-down": "slide-down 0.25s ease-out both",
         "slide-in-right": "slide-in-right 0.28s cubic-bezier(0.22, 1, 0.36, 1) both",
+        "telemetry-sweep": "telemetry-sweep 6s linear infinite",
       },
       transitionTimingFunction: {
         // Material standard easing — used by interactive components.
