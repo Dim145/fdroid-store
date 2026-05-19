@@ -458,6 +458,27 @@ export const api = {
       ),
   },
 
+  // ---------- GitHub release auto-fetch ----------
+  githubSource: {
+    /** Returns null when no source is configured. */
+    get: (appId: string) =>
+      apiFetch<GithubSource | null>(`/api/v1/apps/${appId}/github-source`),
+    upsert: (appId: string, payload: GithubSourceUpsert) =>
+      apiFetch<GithubSource>(`/api/v1/apps/${appId}/github-source`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+    remove: (appId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/github-source`, {
+        method: "DELETE",
+      }),
+    scanNow: (appId: string) =>
+      apiFetch<{ queued: boolean; source_id: string }>(
+        `/api/v1/apps/${appId}/github-source/scan`,
+        { method: "POST" },
+      ),
+  },
+
   // ---------- Upstream metadata.yml import ----------
   importMetadata: (yamlSource: string) =>
     apiFetch<MetadataImportResult>("/api/v1/apps/import-metadata", {
@@ -708,6 +729,37 @@ export type AppUpdatePayload = Partial<Omit<AppCreate, "package_name">> & {
   /** Pin (number) or clear (null) the suggested version. Omit the field
    *  entirely to leave the current state alone. */
   suggested_version_code?: number | null;
+};
+
+/** Status of the last GitHub-release scan for an app. */
+export type GithubSourceStatus =
+  | "idle"
+  | "up_to_date"
+  | "imported"
+  | "error"
+  | "skipped";
+
+export type GithubSource = {
+  id: string;
+  app_id: string;
+  repo: string;
+  asset_pattern: string | null;
+  include_prereleases: boolean;
+  enabled: boolean;
+  last_release_tag: string | null;
+  last_release_published_at: string | null;
+  last_scanned_at: string | null;
+  last_status: GithubSourceStatus;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GithubSourceUpsert = {
+  repo: string;
+  asset_pattern?: string | null;
+  include_prereleases?: boolean;
+  enabled?: boolean;
 };
 
 export type ApkInspect = {

@@ -11,6 +11,7 @@ from app.models.apk import Apk
 from app.models.apk_scan import ApkScan, ApkScanStatus
 from app.models.audit import DownloadEvent
 from app.models.audit_log import AuditLog
+from app.models.github_source import GithubSource, GithubSourceStatus
 from app.models.invite_code import InviteCode
 from app.models.package_signer import PackageSignerPin
 from app.models.refresh_token import RefreshToken
@@ -31,6 +32,8 @@ __all__ = [
     "AuditLog",
     "Category",
     "DownloadEvent",
+    "GithubSource",
+    "GithubSourceStatus",
     "InviteCode",
     "Localization",
     "PackageSignerPin",

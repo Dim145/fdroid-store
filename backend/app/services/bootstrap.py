@@ -18,6 +18,7 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     AppCategory,
     Category,
     DownloadEvent,
+    GithubSource,
     InviteCode,
     Localization,
     PackageSignerPin,

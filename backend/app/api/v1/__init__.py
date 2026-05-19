@@ -9,6 +9,7 @@ from app.api.v1 import (
     categories,
     collaborators,
     feeds,
+    github_sources,
     health,
     me,
     media,
@@ -28,6 +29,7 @@ api_router.include_router(totp.router, prefix="/me/totp", tags=["totp"])
 # the apps router's catch-all /{app_ref} path parameter
 api_router.include_router(media.router, prefix="/apps", tags=["media"])
 api_router.include_router(collaborators.router, prefix="/apps", tags=["collaborators"])
+api_router.include_router(github_sources.router, prefix="/apps", tags=["github-sources"])
 api_router.include_router(apps.router, prefix="/apps", tags=["apps"])
 api_router.include_router(apks.router, prefix="/apks", tags=["apks"])
 api_router.include_router(categories.router, prefix="/categories", tags=["categories"])

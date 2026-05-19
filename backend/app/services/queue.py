@@ -56,6 +56,35 @@ async def enqueue_clamav_scan() -> bool:
         return False
 
 
+async def enqueue_github_source_scan(source_id: str, *, immediate: bool = False) -> bool:
+    """Schedule a one-shot scan of a single GitHub source.
+
+    We deliberately let arq mint a fresh job id every time — the previous
+    run's result stays in redis for 24h and would otherwise dedup the
+    new enqueue, making the "Scan now" button silently a no-op.
+    The cron coordinator enqueues directly with a per-source job id so
+    that one run per day per repo is coalesced as expected.
+    """
+    import time
+
+    try:
+        pool = await create_pool(_redis_settings())
+        try:
+            # job_id encodes the source + epoch ms so every manual trigger
+            # is unique while still being grep-friendly in the jobs page.
+            await pool.enqueue_job(
+                "fetch_github_source",
+                source_id,
+                _job_id=f"fetch_github_source:{source_id}:{int(time.time() * 1000)}",
+            )
+            return True
+        finally:
+            await pool.close()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not enqueue github source scan", error=str(exc))
+        return False
+
+
 async def queue_snapshot() -> dict:
     """Best-effort introspection for the admin "Jobs" page.
 

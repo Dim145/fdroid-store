@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     # trusted proxy in front — otherwise a client can spoof their IP.
     trust_forwarded_headers: bool = True
 
+    # ----- GitHub releases auto-import --------------------------------------
+    # Optional personal-access-token used when polling the GitHub releases
+    # API. With the token set, the rate limit jumps from 60 to 5000 req/hour
+    # and private repos become reachable. Public-repo scans without a token
+    # still work but get throttled when many sources are configured.
+    github_token: str | None = None
+
     # ----- ClamAV (optional malware scanning) -------------------------------
     # When set, the backend exposes the "Malware scanning" section in the
     # admin panel and the worker is allowed to run periodic rescans. The

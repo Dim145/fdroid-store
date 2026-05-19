@@ -27,6 +27,7 @@ import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
 import { AuthGuard } from "@/components/auth-guard";
 import { CollaboratorsSection } from "@/components/collaborators-section";
+import { GithubSourceSection } from "@/components/github-source-section";
 import { LocalizationsEditor } from "@/components/localizations-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -795,9 +796,18 @@ function ManageAppInner() {
         </ul>
       </Section>
 
+      {/* ──── GitHub source auto-fetch ──── */}
+      <Section
+        step="07"
+        title={t("myApps.edit.sections.githubSource")}
+        subtitle={t("myApps.edit.sections.githubSourceSubtitle")}
+      >
+        <GithubSourceSection appId={app.id} onImported={() => void load()} />
+      </Section>
+
       {/* ──── Collaborators ──── */}
       {currentUser && app.owner_id && (
-        <Section step="07" title={t("myApps.edit.sections.collaborators")} subtitle={t("myApps.edit.sections.collaboratorsSubtitle")}>
+        <Section step="08" title={t("myApps.edit.sections.collaborators")} subtitle={t("myApps.edit.sections.collaboratorsSubtitle")}>
           <CollaboratorsSection
             appId={app.id}
             ownerId={app.owner_id}
