@@ -207,29 +207,40 @@ function NewAppInner() {
     }
   }
 
+  // Readiness checks — drive the hero progress dots and the bottom-bar
+  // status text. ``hasIdentity`` is the minimal "you can save this" set.
+  const hasSource = sourceReady;
+  const hasIdentity = name.trim().length > 0 && packageName.trim().length > 0;
+  const stepsDone = (hasSource ? 1 : 0) + (hasIdentity ? 1 : 0);
+
   return (
-    <div>
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <Link
-            href="/my-apps"
-            className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-ink-soft hover:text-ink"
-          >
-            <ArrowLeft className="h-4 w-4" /> {t("myApps.new.backLink")}
-          </Link>
-          <h1 className="text-3xl font-bold tracking-tight text-ink md:text-4xl">{t("myApps.new.title")}</h1>
-          <p className="mt-1 text-ink-soft">{t("myApps.new.subtitle")}</p>
-        </div>
-      </header>
+    <div className="relative pb-12">
+      {/* Engineer's dotted grid — the visual signature of this page.
+          1 px dots every 14 px at 3 % opacity, fixed so the texture
+          doesn't drift while the user scrolls. Distinct from the
+          /my-apps/[id] horizontal hairlines so the create/edit pair
+          reads as siblings rather than copies. */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 -z-10 opacity-[0.06]"
+        style={{
+          backgroundImage:
+            "radial-gradient(rgb(var(--ink)) 1px, transparent 1px)",
+          backgroundSize: "14px 14px",
+        }}
+      />
+
+      <Hero stepsDone={stepsDone} hasSource={hasSource} hasIdentity={hasIdentity} />
 
       {error && (
-        <p className="mb-4 rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
+        <p className="mb-4 mt-6 rounded-2xl border border-danger/40 bg-danger-container/40 px-4 py-3 text-sm text-danger-on-container">
+          {error}
+        </p>
       )}
 
-      <form onSubmit={onSubmit} className="space-y-6">
+      <form onSubmit={onSubmit} className="mt-8 space-y-6">
         {/* Step 1 — source */}
-        <section className="surface p-6">
-          <Step num="01" title={t("myApps.new.step1")} />
+        <DraftPanel step="01" total={3} title={t("myApps.new.step1")}>
 
           {/* Mode switcher — pill row that swaps the body below.
               We never show both forms at once: the user picks one
@@ -373,12 +384,14 @@ function NewAppInner() {
               {ghInspect && <GithubInspectCard inspect={ghInspect} />}
             </div>
           )}
-        </section>
+        </DraftPanel>
 
         {/* Step 2 — listing */}
-        <section className="surface p-6">
-          <div className="flex items-start justify-between gap-3">
-            <Step num="02" title={t("myApps.new.step2")} />
+        <DraftPanel
+          step="02"
+          total={3}
+          title={t("myApps.new.step2")}
+          actions={
             <button
               type="button"
               onClick={() => setMetadataOpen((o) => !o)}
@@ -387,7 +400,8 @@ function NewAppInner() {
               <FileCode2 className="h-3.5 w-3.5" />
               {t("myApps.new.metadataImportLabel")}
             </button>
-          </div>
+          }
+        >
           {metadataOpen && (
             <div className="mt-4 rounded-2xl border border-outline-soft bg-surface-2/40 p-4">
               <p className="mb-2 text-xs text-ink-soft">
@@ -461,12 +475,11 @@ function NewAppInner() {
               />
             </Field>
           </div>
-        </section>
+        </DraftPanel>
 
         {/* Step 3 — about */}
-        <section className="surface p-6">
-          <Step num="03" title={t("myApps.new.step3")} />
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <DraftPanel step="03" total={3} title={t("myApps.new.step3")} subtitle={t("myApps.new.step3Subtitle")}>
+          <div className="grid gap-4 md:grid-cols-2">
             <Field label={t("myApps.new.author")} htmlFor="author">
               <Input id="author" value={authorName} onChange={(e) => setAuthorName(e.target.value)} />
             </Field>
@@ -483,16 +496,14 @@ function NewAppInner() {
               <Input id="issue" type="url" value={issueTracker} onChange={(e) => setIssueTracker(e.target.value)} />
             </Field>
           </div>
-        </section>
+        </DraftPanel>
 
-        <div className="sticky bottom-4 flex items-center justify-between gap-3 rounded-2xl border border-outline-soft bg-surface/90 p-3 shadow-e3 backdrop-blur">
-          <p className="text-sm text-ink-soft">
-            {sourceReady
-              ? t("myApps.new.ready")
-              : mode === "github"
-                ? t("myApps.new.github.validateFirst")
-                : t("myApps.new.pickFirst")}
-          </p>
+        <ReadyTray
+          hasSource={hasSource}
+          hasIdentity={hasIdentity}
+          mode={mode}
+          submitting={submitting}
+        >
           <div className="flex gap-2">
             <Button asChild variant="text" type="button">
               <Link href="/my-apps">{t("myApps.new.cancel")}</Link>
@@ -501,19 +512,240 @@ function NewAppInner() {
               {submitting ? t("myApps.new.publishing") : t("myApps.new.publish")}
             </Button>
           </div>
-        </div>
+        </ReadyTray>
       </form>
     </div>
   );
 }
 
-function Step({ num, title }: { num: string; title: string }) {
+
+/* -------------------------------------------------------------------------- */
+/*  Drafting-table chrome: Hero, DraftPanel, ReadyTray                         */
+/* -------------------------------------------------------------------------- */
+
+function Hero({
+  stepsDone,
+  hasSource,
+  hasIdentity,
+}: {
+  stepsDone: number;
+  hasSource: boolean;
+  hasIdentity: boolean;
+}) {
+  const { t } = useTranslation();
   return (
-    <div className="flex items-center gap-3">
-      <span className="flex h-9 w-9 items-center justify-center rounded-pill bg-primary-container font-mono text-sm font-bold text-primary-on-container">
-        {num}
+    <header className="relative overflow-hidden rounded-3xl border border-outline-soft bg-surface px-6 py-7 md:px-10 md:py-9 animate-fade-up">
+      {/* Soft primary tint wash from the top-right — the only chromatic
+          accent in an otherwise restrained header so the title carries
+          the page. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(60% 80% at 100% 0%, rgb(var(--primary) / 0.10), transparent 65%)",
+        }}
+      />
+      {/* "DRAFT" watermark — rotated, very faint, in the bottom-right
+          corner. Reads as a wet-ink stamp on a fresh sheet. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-2 -bottom-3 hidden select-none rotate-[-8deg] font-mono text-7xl font-black uppercase tracking-tighter text-outline opacity-30 md:block"
+      >
+        Draft
+      </div>
+
+      <div className="relative">
+        <Link
+          href="/my-apps"
+          className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-ink-mute hover:text-ink"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> {t("myApps.new.backLink")}
+        </Link>
+
+        <div className="mt-4 flex flex-wrap items-end justify-between gap-6">
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute">
+              {t("myApps.new.eyebrow")}
+              <span className="mx-2 text-outline">·</span>
+              <span className="tabular-nums">{stepsDone} / 3</span>
+            </div>
+            <h1 className="mt-2 text-4xl font-bold tracking-tight text-ink md:text-5xl">
+              {t("myApps.new.title")}
+            </h1>
+            <p className="mt-2 max-w-prose text-ink-soft">{t("myApps.new.subtitle")}</p>
+          </div>
+
+          {/* Live readiness — two large dots reflect the only mandatory
+              steps; the third stays neutral because Step 03 is optional
+              by design. The page's bottom tray repeats this signal in
+              text form. */}
+          <ul className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-ink-mute">
+            <ReadinessDot filled={hasSource} label={t("myApps.new.readiness.source")} />
+            <span className="h-px w-4 bg-outline" aria-hidden />
+            <ReadinessDot filled={hasIdentity} label={t("myApps.new.readiness.identity")} />
+            <span className="h-px w-4 bg-outline" aria-hidden />
+            <ReadinessDot filled={hasSource && hasIdentity} label={t("myApps.new.readiness.ready")} highlight />
+          </ul>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+
+function ReadinessDot({
+  filled,
+  label,
+  highlight,
+}: {
+  filled: boolean;
+  label: string;
+  highlight?: boolean;
+}) {
+  return (
+    <li className="flex flex-col items-center gap-1.5">
+      <span
+        aria-hidden
+        className={cn(
+          "relative flex h-3 w-3 items-center justify-center",
+        )}
+      >
+        {filled && highlight && (
+          <span className="absolute inset-[-3px] animate-ping rounded-full bg-primary/40" />
+        )}
+        <span
+          className={cn(
+            "relative h-2.5 w-2.5 rounded-full transition-colors",
+            filled
+              ? highlight
+                ? "bg-primary"
+                : "bg-primary/70"
+              : "border border-outline bg-transparent",
+          )}
+        />
       </span>
-      <h2 className="text-xl font-bold tracking-tight text-ink">{title}</h2>
+      <span className={cn("font-mono", filled ? "text-ink-soft" : "text-ink-mute")}>{label}</span>
+    </li>
+  );
+}
+
+
+/** Numbered panel that frames each step like a blueprint specification.
+ *  Renders a vertical accent rail on the left, a SECTION 0X / 03
+ *  eyebrow + oversized gutter numeral, a title (+ optional subtitle and
+ *  right-aligned ``actions``), and a hairline-bordered body below. */
+function DraftPanel({
+  step,
+  total,
+  title,
+  subtitle,
+  actions,
+  children,
+}: {
+  step: string;
+  total: number;
+  title: string;
+  subtitle?: string;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="relative overflow-hidden rounded-3xl border border-outline-soft bg-surface p-6 md:p-8">
+      {/* Vertical accent rail on the left edge — dashed primary stroke
+          so the panel reads as a blueprint specification rather than a
+          card. Distinct from /my-apps/[id]'s solid section number. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-6 bottom-6 w-px"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(to bottom, rgb(var(--primary) / 0.6) 0 6px, transparent 6px 12px)",
+        }}
+      />
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-3 border-b border-outline-soft pb-5">
+        <div className="flex items-baseline gap-4">
+          <span className="hidden font-bold tabular-nums leading-none text-outline md:block md:text-5xl">
+            {step}
+          </span>
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute">
+              Section {step} / {String(total).padStart(2, "0")}
+            </div>
+            <h2 className="mt-1 text-2xl font-bold tracking-tight text-ink">{title}</h2>
+            {subtitle && (
+              <p className="mt-1 max-w-prose text-sm leading-relaxed text-ink-soft">{subtitle}</p>
+            )}
+          </div>
+        </div>
+        {actions}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+
+/** Sticky "ready to print" tray at the bottom of the form. Surfaces a
+ *  live status line that mirrors the hero's readiness dots, plus the
+ *  cancel/submit buttons (passed in as children to keep the existing
+ *  submit binding intact). */
+function ReadyTray({
+  hasSource,
+  hasIdentity,
+  mode,
+  submitting,
+  children,
+}: {
+  hasSource: boolean;
+  hasIdentity: boolean;
+  mode: SourceMode;
+  submitting: boolean;
+  children: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  let status: string;
+  if (submitting) status = t("myApps.new.publishing");
+  else if (!hasSource)
+    status = mode === "github" ? t("myApps.new.github.validateFirst") : t("myApps.new.pickFirst");
+  else if (!hasIdentity) status = t("myApps.new.needIdentity");
+  else status = t("myApps.new.ready");
+
+  const allReady = hasSource && hasIdentity;
+  return (
+    <div className="sticky bottom-4 z-10 rounded-2xl border border-outline-soft bg-surface/95 p-3 shadow-e3 backdrop-blur animate-fade-up">
+      {/* Dashed top edge — echoes the panel rail, signals "this is the
+          end of the draft". */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-3 top-0 h-px"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(to right, rgb(var(--outline)) 0 6px, transparent 6px 12px)",
+        }}
+      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <span
+            aria-hidden
+            className={cn(
+              "relative flex h-2 w-2",
+            )}
+          >
+            {allReady && (
+              <span className="absolute inset-[-3px] animate-ping rounded-full bg-primary/40" />
+            )}
+            <span
+              className={cn(
+                "relative h-2 w-2 rounded-full",
+                allReady ? "bg-primary" : "bg-ink-mute/50",
+              )}
+            />
+          </span>
+          <span className={cn("text-sm", allReady ? "text-ink" : "text-ink-soft")}>{status}</span>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }

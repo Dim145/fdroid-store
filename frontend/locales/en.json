@@ -578,9 +578,17 @@
       "backLink": "My apps",
       "title": "New release",
       "subtitle": "Drop an APK or point at a GitHub repository — we'll pre-fill what we can.",
+      "eyebrow": "New draft",
       "step1": "Pick the source",
+      "step3Subtitle": "Optional. Add the bits F-Droid clients surface as buttons on the listing.",
       "modeApk": "Upload APK",
       "modeGithub": "From GitHub",
+      "needIdentity": "Title and package name are required.",
+      "readiness": {
+        "source": "Source",
+        "identity": "Identity",
+        "ready": "Ready"
+      },
       "step2": "Listing",
       "step3": "Links & credits (optional)",
       "dropPrompt": "Click to choose an APK",

@@ -578,9 +578,17 @@
       "backLink": "Mes apps",
       "title": "Nouvelle sortie",
       "subtitle": "Dépose un APK ou pointe vers un dépôt GitHub — on pré-remplit ce qu'on peut.",
+      "eyebrow": "Nouveau brouillon",
       "step1": "Choisir la source",
+      "step3Subtitle": "Optionnel. Ajoute les éléments que les clients F-Droid affichent comme boutons sur la fiche.",
       "modeApk": "Uploader un APK",
       "modeGithub": "Depuis GitHub",
+      "needIdentity": "Titre et nom de paquet requis.",
+      "readiness": {
+        "source": "Source",
+        "identity": "Identité",
+        "ready": "Prêt"
+      },
       "step2": "Fiche",
       "step3": "Liens & crédits (optionnel)",
       "dropPrompt": "Cliquer pour choisir un APK",
