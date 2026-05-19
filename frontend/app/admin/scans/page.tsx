@@ -167,7 +167,7 @@ export default function AdminScansPage() {
             {scans.map((s) => (
               <li
                 key={s.id}
-                className="grid gap-2 rounded-xl border border-outline-soft bg-surface px-3 py-2 text-xs md:grid-cols-[160px_100px_120px_1fr]"
+                className="grid gap-2 rounded-xl border border-outline-soft bg-surface px-3 py-2 text-xs md:grid-cols-[160px_100px_minmax(0,1.4fr)_minmax(0,1fr)]"
               >
                 <span className="font-mono text-ink-mute">
                   {s.scanned_at ? formatDate(s.scanned_at) : formatDate(s.created_at)}
@@ -178,7 +178,20 @@ export default function AdminScansPage() {
                   {s.status === "error" && <Badge variant="soft">{t("admin.scans.error")}</Badge>}
                   {s.status === "pending" && <Badge variant="soft">{t("admin.scans.pending")}</Badge>}
                 </span>
-                <span className="font-mono">{s.scanner}</span>
+                <span className="min-w-0 truncate text-ink" title={s.package_name || s.apk_id}>
+                  {s.app_name ? (
+                    <>
+                      <span className="font-medium">{s.app_name}</span>
+                      {s.version_name && (
+                        <span className="ml-1.5 font-mono text-[10px] text-ink-mute">
+                          v{s.version_name}{s.version_code != null ? ` (${s.version_code})` : ""}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="font-mono text-ink-mute">{s.apk_id.slice(0, 8)}…</span>
+                  )}
+                </span>
                 <span className="min-w-0 truncate text-ink-soft" title={s.signatures || s.error || ""}>
                   {s.signatures || s.error || "—"}
                 </span>

@@ -574,27 +574,41 @@ async def admin_recent_scans(
     limit: int = Query(default=50, ge=1, le=200),
     only_infected: bool = Query(default=False),
 ) -> list[dict]:
-    """Most recent ApkScan rows, newest first. The admin UI uses this to
-    surface signatures hit during the periodic rescan or rejected
-    uploads."""
+    """Most recent ApkScan rows, newest first. Each row is joined with
+    the underlying Apk + App so the admin UI can show "Nextcloud v3.30.0
+    (330010090)" instead of the bare scanner name + UUID."""
     from app.models.apk_scan import ApkScan, ApkScanStatus
 
-    stmt = select(ApkScan).order_by(desc(ApkScan.created_at)).limit(limit)
+    stmt = (
+        select(ApkScan, Apk, App)
+        .join(Apk, Apk.id == ApkScan.apk_id, isouter=True)
+        .join(App, App.id == Apk.app_id, isouter=True)
+        .order_by(desc(ApkScan.created_at))
+        .limit(limit)
+    )
     if only_infected:
         stmt = stmt.where(ApkScan.status == ApkScanStatus.INFECTED)
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = (await db.execute(stmt)).all()
     return [
         {
-            "id": str(r.id),
-            "apk_id": str(r.apk_id),
-            "scanner": r.scanner,
-            "status": r.status.value,
-            "signatures": r.signatures,
-            "error": r.error,
-            "scanned_at": r.scanned_at.isoformat() if r.scanned_at else None,
-            "created_at": r.created_at.isoformat(),
+            "id": str(scan.id),
+            "apk_id": str(scan.apk_id),
+            "scanner": scan.scanner,
+            "status": scan.status.value,
+            "signatures": scan.signatures,
+            "error": scan.error,
+            "scanned_at": scan.scanned_at.isoformat() if scan.scanned_at else None,
+            "created_at": scan.created_at.isoformat(),
+            # ``app`` / ``apk`` may be NULL when the row outlives its
+            # target (cascade-deleted apk). The UI falls back to the
+            # bare apk_id in that case.
+            "app_id": str(app.id) if app else None,
+            "app_name": app.name if app else None,
+            "package_name": app.package_name if app else None,
+            "version_name": apk.version_name if apk else None,
+            "version_code": apk.version_code if apk else None,
         }
-        for r in rows
+        for scan, apk, app in rows
     ]
 
 

@@ -936,6 +936,13 @@ export type ApkScanRow = {
   error: string | null;
   scanned_at: string | null;
   created_at: string;
+  // Joined app + apk metadata — null when the underlying rows were
+  // deleted between the scan and the read.
+  app_id: string | null;
+  app_name: string | null;
+  package_name: string | null;
+  version_name: string | null;
+  version_code: number | null;
 };
 
 export type MetadataImportResult = {
