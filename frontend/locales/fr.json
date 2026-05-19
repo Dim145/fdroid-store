@@ -577,8 +577,10 @@
     "new": {
       "backLink": "Mes apps",
       "title": "Nouvelle sortie",
-      "subtitle": "Dépose un APK, on pré-remplit ce qu'on peut.",
-      "step1": "Choisir l'APK",
+      "subtitle": "Dépose un APK ou pointe vers un dépôt GitHub — on pré-remplit ce qu'on peut.",
+      "step1": "Choisir la source",
+      "modeApk": "Uploader un APK",
+      "modeGithub": "Depuis GitHub",
       "step2": "Fiche",
       "step3": "Liens & crédits (optionnel)",
       "dropPrompt": "Cliquer pour choisir un APK",
@@ -618,7 +620,23 @@
       "metadataImportLabel": "Importer metadata.yml",
       "metadataImportBody": "Colle un metadata.yml upstream (format fdroiddata). Les champs vides seront remplis ; ceux que tu as déjà saisis sont préservés.",
       "metadataImportApply": "Pré-remplir",
-      "metadataImportFailed": "Impossible de parser metadata.yml"
+      "metadataImportFailed": "Impossible de parser metadata.yml",
+      "github": {
+        "intro": "Fournis un couple <code>owner/name</code>. On résout la dernière release, télécharge l'APK correspondant et importe ses métadonnées. Un scan auto quotidien garde ensuite l'app à jour avec les futures releases.",
+        "repoLabel": "Dépôt GitHub *",
+        "repoPlaceholder": "ex. Dim145/fdroid-store",
+        "validate": "Valider",
+        "validating": "Validation…",
+        "validateFirst": "Étape 1 : valide un dépôt GitHub pour continuer.",
+        "validateFailed": "Impossible de résoudre une release",
+        "advanced": "Options avancées",
+        "patternLabel": "Motif d'asset",
+        "patternHint": "Motif glob appliqué au nom du fichier de la release. Vide = premier .apk trouvé. Exemples : *-universal.apk, app-release.apk.",
+        "includePrereleases": "Inclure les pre-releases",
+        "includePrereleasesHint": "Désactivé — seules les versions stables sont considérées. Les drafts sont toujours ignorés.",
+        "resolved": "Release résolue",
+        "packageReadOnly": "Dérivé du manifest de l'APK analysé."
+      }
     },
     "fields": {
       "apkFile": "Fichier APK",
@@ -854,7 +872,22 @@
         "statusImported": "Importé",
         "statusSkipped": "Ignoré",
         "statusError": "Erreur",
-        "statusScanning": "Scan en cours"
+        "statusScanning": "Scan en cours",
+        "proposed": {
+          "title": "Remplir ces champs depuis le dépôt ?",
+          "body": "GitHub nous a donné des valeurs pour des champs que tu n'as pas encore renseignés. Coche ceux à garder.",
+          "apply_one": "Appliquer {{count}} champ",
+          "apply_other": "Appliquer {{count}} champs",
+          "applied": "Fiche mise à jour depuis GitHub.",
+          "applyFailed": "Impossible d'appliquer les changements",
+          "field": {
+            "summary": "Résumé",
+            "license": "Licence",
+            "website": "Site web",
+            "source_code": "Code source",
+            "author_name": "Auteur"
+          }
+        }
       },
       "collaborators": {
         "body": "Les co-mainteneurs peuvent déposer des APK, modifier la fiche, gérer les captures et traductions. Ils ne peuvent pas supprimer l'app, changer la visibilité, ni gérer cette liste — ça reste à toi.",

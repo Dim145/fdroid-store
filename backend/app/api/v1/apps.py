@@ -27,6 +27,7 @@ from app.models.audit import DownloadEvent
 from app.models.user import User, UserRole
 from app.schemas.app import (
     AppCreate,
+    AppCreateFromGithub,
     AppDetail,
     AppRead,
     AppUpdate,
@@ -279,6 +280,176 @@ async def create_app_with_apk(
         payload = AppDetail.model_validate(result)
         payload.owner_username = result.owner.username if result.owner else None
         return payload
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/with-github-source", response_model=AppDetail, status_code=status.HTTP_201_CREATED)
+async def create_app_with_github_source(
+    payload: AppCreateFromGithub,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> AppDetail:
+    """Create an App + first APK + GithubSource in one shot.
+
+    Mirror of :func:`create_app_with_apk` but the APK comes from a
+    GitHub release. The repo is re-resolved + re-downloaded server-side
+    so the client can't smuggle a tampered binary through the inspect
+    response. After creation the daily cron will keep this app in sync
+    with the configured repo.
+    """
+    from datetime import UTC as _UTC, datetime as _dt
+    from app.models.github_source import GithubSource, GithubSourceStatus
+    from app.services.github_releases import (
+        GithubReleaseError,
+        download_asset,
+        fetch_repo_metadata,
+        find_latest_asset,
+        validate_repo,
+    )
+    from app.services.quotas import ensure_can_create_app, ensure_can_upload_apk
+
+    try:
+        repo = validate_repo(payload.repo)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    pattern = (payload.asset_pattern or "").strip() or None
+
+    await ensure_can_create_app(db, user)
+
+    # 1. Resolve + download the matching release asset.
+    try:
+        asset = await find_latest_asset(
+            repo,
+            asset_pattern=pattern,
+            include_prereleases=payload.include_prereleases,
+        )
+    except GithubReleaseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"No release with a matching APK found for {repo!r}"
+            ),
+        )
+
+    # Best-effort repo metadata fetch — feeds the server-side defaults
+    # for the listing fields the user didn't explicitly set.
+    repo_meta = await fetch_repo_metadata(repo)
+
+    try:
+        tmp_path = await download_asset(asset)
+    except GithubReleaseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    try:
+        # 2. Quota + AV scan + parse, identical to the manual-upload path.
+        await ensure_can_upload_apk(db, user, incoming_size_bytes=tmp_path.stat().st_size)
+        from app.api.v1.apks import _maybe_scan_upload as _apks_scan
+
+        await _apks_scan(db, tmp_path=tmp_path)
+        meta = await parse_or_400(tmp_path)
+        if not _PACKAGE_NAME_RE.match(meta.package_name):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="parsed package name is not a valid Android package id",
+            )
+        if (
+            await db.execute(select(App).where(App.package_name == meta.package_name))
+        ).scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Package {meta.package_name} already exists",
+            )
+
+        # 3. Create the App + first Apk row. When the caller leaves a
+        # listing field empty AND GitHub has a value for it, we fill it
+        # — the explicit-empty case (an API client that wants to keep
+        # the field blank) is indistinguishable from "not provided", so
+        # we err on the side of "more populated is more useful".
+        gh_summary = repo_meta.description if repo_meta else None
+        gh_homepage = repo_meta.homepage if repo_meta else None
+        gh_license = repo_meta.license_spdx if repo_meta else None
+        gh_owner_login = repo_meta.owner_login if repo_meta else None
+        gh_html_url = repo_meta.html_url if repo_meta else f"https://github.com/{repo}"
+
+        app = App(
+            package_name=meta.package_name,
+            name=payload.name,
+            summary=payload.summary or gh_summary,
+            description=payload.description,
+            license=payload.license or gh_license,
+            website=str(payload.website) if payload.website else gh_homepage,
+            source_code=str(payload.source_code) if payload.source_code else gh_html_url,
+            issue_tracker=str(payload.issue_tracker) if payload.issue_tracker else None,
+            author_name=payload.author_name or gh_owner_login,
+            visibility=payload.visibility,
+            status=AppStatus.DRAFT,
+            owner_id=user.id,
+            apks=[],
+            screenshots=[],
+            localizations=[],
+        )
+        db.add(app)
+        await db.flush()
+
+        apk = await attach_apk_to_app(
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+        )
+
+        # 4. Wire the persistent GithubSource so the cron can keep
+        # importing future releases. Snapshot the just-imported tag so
+        # the next scan considers it up_to_date instead of re-importing.
+        db.add(
+            GithubSource(
+                app_id=app.id,
+                repo=repo,
+                asset_pattern=pattern,
+                include_prereleases=payload.include_prereleases,
+                enabled=True,
+                last_release_tag=asset.release_tag,
+                last_release_published_at=asset.release_published_at,
+                last_scanned_at=_dt.now(_UTC),
+                last_status=GithubSourceStatus.IMPORTED,
+                created_by=user.id,
+            )
+        )
+
+        if apk.status == ApkStatus.PUBLISHED:
+            await enqueue_reindex()
+
+        # 5. Reload with eager relationships for the response. We must
+        # also hydrate ``localizations`` because AppDetail iterates it
+        # during serialisation and a lazy load inside an async context
+        # would raise MissingGreenlet.
+        result = (
+            await db.execute(
+                select(App)
+                .execution_options(populate_existing=True)
+                .options(
+                    selectinload(App.categories),
+                    selectinload(App.apks),
+                    selectinload(App.owner),
+                    selectinload(App.screenshots),
+                    selectinload(App.localizations),
+                )
+                .where(App.id == app.id)
+            )
+        ).scalar_one()
+        out = AppDetail.model_validate(result)
+        out.owner_username = result.owner.username if result.owner else None
+        return out
     finally:
         tmp_path.unlink(missing_ok=True)
 

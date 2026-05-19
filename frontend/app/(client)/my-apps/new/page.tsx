@@ -1,25 +1,40 @@
 "use client";
 
-import { ArrowLeft, FileCode2, ShieldAlert, Upload } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, FileCode2, GitBranch, ShieldAlert, Upload } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 
 import { AuthGuard } from "@/components/auth-guard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type ApkInspect } from "@/lib/api";
-import { formatBytes } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
+import { api, type ApkInspect, type GithubApkInspect } from "@/lib/api";
+import { cn, formatBytes, formatDate } from "@/lib/utils";
+
+type SourceMode = "apk" | "github";
 
 function NewAppInner() {
   const { t } = useTranslation();
   const router = useRouter();
+  const [mode, setMode] = useState<SourceMode>("apk");
+
+  // ---------- APK path state ----------
   const [file, setFile] = useState<File | null>(null);
   const [inspect, setInspect] = useState<ApkInspect | null>(null);
   const [inspecting, setInspecting] = useState(false);
+
+  // ---------- GitHub path state ----------
+  const [ghRepo, setGhRepo] = useState("");
+  const [ghPattern, setGhPattern] = useState("");
+  const [ghPrereleases, setGhPrereleases] = useState(false);
+  const [ghAdvancedOpen, setGhAdvancedOpen] = useState(false);
+  const [ghValidating, setGhValidating] = useState(false);
+  const [ghInspect, setGhInspect] = useState<GithubApkInspect | null>(null);
+
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
@@ -82,18 +97,96 @@ function NewAppInner() {
     }
   }
 
+  async function onValidateGithub() {
+    if (!ghRepo.trim()) return;
+    setError(null);
+    setGhInspect(null);
+    setGhValidating(true);
+    try {
+      const info = await api.apps.inspectGithub({
+        repo: ghRepo.trim(),
+        asset_pattern: ghPattern.trim() || null,
+        include_prereleases: ghPrereleases,
+      });
+      setGhInspect(info);
+      // Mirror the APK path: prefill the Listing form with values we can
+      // derive from the parsed APK. We don't clobber existing user input.
+      if (!packageName) setPackageName(info.package_name);
+      if (!name && info.app_name) setName(info.app_name);
+      // Repo-level metadata enrichments — the GitHub tagline becomes
+      // the summary, license/homepage/source/author follow the natural
+      // mapping. Skipped when the user already typed something.
+      if (!summary && info.repo_description) setSummary(info.repo_description);
+      if (!license && info.repo_license_spdx) setLicense(info.repo_license_spdx);
+      if (!website && info.repo_homepage) setWebsite(info.repo_homepage);
+      if (!sourceCode) setSourceCode(info.repo_html_url);
+      if (!authorName && info.repo_owner_login) setAuthorName(info.repo_owner_login);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("myApps.new.github.validateFailed"));
+    } finally {
+      setGhValidating(false);
+    }
+  }
+
+  // Source has been validated (either an APK is parsed or a repo has
+  // a confirmed downloadable release). Drives the submit button.
+  const sourceReady = mode === "apk" ? !!(file && inspect) : !!ghInspect;
+
+  function switchMode(next: SourceMode) {
+    if (next === mode) return;
+    setMode(next);
+    setError(null);
+    // Clearing the inspect state forces the user to re-validate after
+    // switching, so the submit button can never be hot for the wrong
+    // source. Keeps both pre-fill paths honest.
+    if (next === "apk") {
+      setGhInspect(null);
+    } else {
+      setFile(null);
+      setInspect(null);
+    }
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file || !inspect) {
-      setError(t("myApps.new.dropApkFirst"));
+    setError(null);
+    if (mode === "apk") {
+      if (!file || !inspect) {
+        setError(t("myApps.new.dropApkFirst"));
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const created = await api.apps.createWithApk({
+          file,
+          name,
+          package_name: packageName || inspect.package_name,
+          summary: summary || undefined,
+          description: description || undefined,
+          license: license || undefined,
+          website: website || undefined,
+          source_code: sourceCode || undefined,
+          issue_tracker: issueTracker || undefined,
+          author_name: authorName || undefined,
+          visibility,
+        });
+        router.replace(`/my-apps/${created.id}`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t("myApps.new.createFailed"));
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
-    setError(null); setSubmitting(true);
+    // GitHub mode
+    if (!ghInspect) {
+      setError(t("myApps.new.github.validateFirst"));
+      return;
+    }
+    setSubmitting(true);
     try {
-      const created = await api.apps.createWithApk({
-        file,
+      const created = await api.apps.createWithGithub({
         name,
-        package_name: packageName || inspect.package_name,
         summary: summary || undefined,
         description: description || undefined,
         license: license || undefined,
@@ -102,6 +195,9 @@ function NewAppInner() {
         issue_tracker: issueTracker || undefined,
         author_name: authorName || undefined,
         visibility,
+        repo: ghInspect.repo,
+        asset_pattern: ghPattern.trim() || null,
+        include_prereleases: ghPrereleases,
       });
       router.replace(`/my-apps/${created.id}`);
     } catch (e) {
@@ -131,82 +227,151 @@ function NewAppInner() {
       )}
 
       <form onSubmit={onSubmit} className="space-y-6">
-        {/* Step 1 — drop zone */}
+        {/* Step 1 — source */}
         <section className="surface p-6">
           <Step num="01" title={t("myApps.new.step1")} />
-          <label className="mt-4 block">
-            <div className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-outline px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5">
-              <div className="flex h-12 w-12 items-center justify-center rounded-pill bg-primary-container text-primary-on-container">
-                <Upload className="h-5 w-5" strokeWidth={2.2} />
-              </div>
-              <div>
-                <div className="text-sm font-semibold text-ink">
-                  {file ? file.name : t("myApps.new.dropPrompt")}
-                </div>
-                <div className="text-xs text-ink-mute">
-                  {file ? formatBytes(file.size) : t("myApps.new.dropHint")}
-                </div>
-              </div>
-            </div>
-            <input
-              type="file"
-              accept=".apk,application/vnd.android.package-archive"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onPickFile(f);
-              }}
-              className="sr-only"
+
+          {/* Mode switcher — pill row that swaps the body below.
+              We never show both forms at once: the user picks one
+              source per app, additional APKs can be uploaded after
+              creation from the manage page. */}
+          <div className="mt-4 inline-flex rounded-pill border border-outline-soft bg-surface-2 p-0.5">
+            <ModeTab
+              active={mode === "apk"}
+              onClick={() => switchMode("apk")}
+              icon={<Upload className="h-3.5 w-3.5" />}
+              label={t("myApps.new.modeApk")}
             />
-          </label>
+            <ModeTab
+              active={mode === "github"}
+              onClick={() => switchMode("github")}
+              icon={<GitBranch className="h-3.5 w-3.5" />}
+              label={t("myApps.new.modeGithub")}
+            />
+          </div>
 
-          {inspecting && (
-            <p className="mt-3 inline-flex items-center gap-2 text-sm text-ink-mute">
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-outline-soft border-t-primary" />
-              {t("myApps.new.parsingManifest")}
-            </p>
-          )}
-
-          {inspect && (
-            <>
-              <dl className="mt-5 grid gap-3 rounded-xl bg-surface-2 p-4 md:grid-cols-3">
-                <Spec label={t("myApps.new.specPackage")} value={inspect.package_name} mono />
-                <Spec label={t("myApps.new.specVersion")} value={`${inspect.version_name} (${inspect.version_code})`} mono />
-                <Spec label={t("myApps.new.specSize")} value={formatBytes(inspect.size_bytes)} mono />
-                <Spec label={t("myApps.new.specSdk")} value={`${inspect.min_sdk}–${inspect.target_sdk}`} mono />
-                <Spec label={t("myApps.new.specAbis")} value={inspect.native_code.join(", ") || "—"} mono />
-                <Spec label={t("myApps.new.specPermissions")} value={String(inspect.permissions.length)} mono />
-              </dl>
-              {/* Heuristic anti-feature suggestion. Each chip is a flag the
-                  scanner detected inside the APK; the user can review and
-                  toggle them once on the app detail page (the scanner can
-                  false-positive on shaded libs). */}
-              {Object.keys(inspect.detected_anti_features).length > 0 && (
-                <div className="mt-5 rounded-xl border border-accent/40 bg-accent-container/30 p-4">
-                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-accent-on-container">
-                    <ShieldAlert className="h-4 w-4" />
-                    {t("myApps.new.detectedHeader")}
+          {mode === "apk" ? (
+            <div className="mt-5">
+              <label className="block">
+                <div className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-outline px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-pill bg-primary-container text-primary-on-container">
+                    <Upload className="h-5 w-5" strokeWidth={2.2} />
                   </div>
-                  <p className="mb-3 text-xs text-ink-soft">
-                    {t("myApps.new.detectedBody")}
-                  </p>
-                  <ul className="flex flex-wrap gap-1.5">
-                    {Object.entries(inspect.detected_anti_features).flatMap(([flag, labels]) =>
-                      labels.map((label) => (
-                        <li
-                          key={`${flag}:${label}`}
-                          className="rounded-pill bg-surface px-2.5 py-1 text-xs"
-                          title={label}
-                        >
-                          <span className="font-mono text-[10px] text-ink-mute">{flag}</span>
-                          {" "}
-                          <span className="text-ink">{label}</span>
-                        </li>
-                      ))
-                    )}
-                  </ul>
+                  <div>
+                    <div className="text-sm font-semibold text-ink">
+                      {file ? file.name : t("myApps.new.dropPrompt")}
+                    </div>
+                    <div className="text-xs text-ink-mute">
+                      {file ? formatBytes(file.size) : t("myApps.new.dropHint")}
+                    </div>
+                  </div>
+                </div>
+                <input
+                  type="file"
+                  accept=".apk,application/vnd.android.package-archive"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onPickFile(f);
+                  }}
+                  className="sr-only"
+                />
+              </label>
+
+              {inspecting && (
+                <p className="mt-3 inline-flex items-center gap-2 text-sm text-ink-mute">
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-outline-soft border-t-primary" />
+                  {t("myApps.new.parsingManifest")}
+                </p>
+              )}
+
+              {inspect && (
+                <ApkInspectCard inspect={inspect} />
+              )}
+            </div>
+          ) : (
+            <div className="mt-5 space-y-4">
+              <p className="text-xs leading-relaxed text-ink-soft">
+                <Trans
+                  i18nKey="myApps.new.github.intro"
+                  components={{ code: <span className="font-mono" /> }}
+                />
+              </p>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="gh-repo" className="text-sm font-medium text-ink-soft">
+                  {t("myApps.new.github.repoLabel")}
+                </Label>
+                <div className="flex items-center gap-2">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-pill bg-surface-2 text-ink-soft">
+                    <GitBranch className="h-4 w-4" />
+                  </span>
+                  <Input
+                    id="gh-repo"
+                    value={ghRepo}
+                    onChange={(e) => { setGhRepo(e.target.value); setGhInspect(null); }}
+                    placeholder={t("myApps.new.github.repoPlaceholder")}
+                    className="font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="filled"
+                    onClick={onValidateGithub}
+                    disabled={ghValidating || !ghRepo.trim()}
+                  >
+                    {ghValidating ? (
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-surface-2 border-t-primary-fg" />
+                    ) : null}
+                    {ghValidating ? t("myApps.new.github.validating") : t("myApps.new.github.validate")}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Advanced disclosure — pattern + prereleases. Collapsed by
+                  default so the common case is a single field + Validate. */}
+              <button
+                type="button"
+                onClick={() => setGhAdvancedOpen((o) => !o)}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-mute hover:text-ink"
+              >
+                {ghAdvancedOpen
+                  ? <ChevronDown className="h-3.5 w-3.5" />
+                  : <ChevronRight className="h-3.5 w-3.5" />}
+                {t("myApps.new.github.advanced")}
+              </button>
+
+              {ghAdvancedOpen && (
+                <div className="grid gap-3 rounded-2xl border border-outline-soft bg-surface-2/40 p-4 md:grid-cols-[1.4fr_auto] md:items-end">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="gh-pattern" className="text-xs font-medium uppercase tracking-wider text-ink-mute">
+                      {t("myApps.new.github.patternLabel")}
+                    </Label>
+                    <Input
+                      id="gh-pattern"
+                      value={ghPattern}
+                      onChange={(e) => { setGhPattern(e.target.value); setGhInspect(null); }}
+                      placeholder="*.apk"
+                      className="font-mono"
+                    />
+                    <p className="text-[11px] text-ink-mute">
+                      {t("myApps.new.github.patternHint")}
+                    </p>
+                  </div>
+                  <label className="flex cursor-pointer items-start justify-between gap-3 rounded-2xl border border-outline-soft bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-ink">{t("myApps.new.github.includePrereleases")}</div>
+                      <div className="mt-0.5 text-[11px] leading-relaxed text-ink-mute">{t("myApps.new.github.includePrereleasesHint")}</div>
+                    </div>
+                    <Switch
+                      checked={ghPrereleases}
+                      onCheckedChange={(v) => { setGhPrereleases(v); setGhInspect(null); }}
+                      ariaLabel={t("myApps.new.github.includePrereleases")}
+                    />
+                  </label>
                 </div>
               )}
-            </>
+
+              {ghInspect && <GithubInspectCard inspect={ghInspect} />}
+            </div>
           )}
         </section>
 
@@ -261,7 +426,15 @@ function NewAppInner() {
               <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
             <Field label={t("myApps.new.packageNameLabel")} htmlFor="pkg">
-              <Input id="pkg" required value={packageName} onChange={(e) => setPackageName(e.target.value)} className="font-mono text-xs" />
+              <Input
+                id="pkg"
+                required
+                value={packageName}
+                onChange={(e) => setPackageName(e.target.value)}
+                disabled={mode === "github"}
+                className="font-mono text-xs"
+                title={mode === "github" ? t("myApps.new.github.packageReadOnly") : undefined}
+              />
             </Field>
             <Field label={t("myApps.new.visibilityLabel")} htmlFor="vis">
               <select
@@ -314,13 +487,17 @@ function NewAppInner() {
 
         <div className="sticky bottom-4 flex items-center justify-between gap-3 rounded-2xl border border-outline-soft bg-surface/90 p-3 shadow-e3 backdrop-blur">
           <p className="text-sm text-ink-soft">
-            {inspect ? t("myApps.new.ready") : t("myApps.new.pickFirst")}
+            {sourceReady
+              ? t("myApps.new.ready")
+              : mode === "github"
+                ? t("myApps.new.github.validateFirst")
+                : t("myApps.new.pickFirst")}
           </p>
           <div className="flex gap-2">
             <Button asChild variant="text" type="button">
               <Link href="/my-apps">{t("myApps.new.cancel")}</Link>
             </Button>
-            <Button type="submit" variant="filled" size="lg" disabled={!inspect || submitting}>
+            <Button type="submit" variant="filled" size="lg" disabled={!sourceReady || submitting}>
               {submitting ? t("myApps.new.publishing") : t("myApps.new.publish")}
             </Button>
           </div>
@@ -365,6 +542,123 @@ function Spec({ label, value, mono }: { label: string; value: string; mono?: boo
     <div>
       <div className="text-[10px] uppercase tracking-wider text-ink-mute">{label}</div>
       <div className={mono ? "font-mono text-xs text-ink" : "text-sm text-ink"}>{value}</div>
+    </div>
+  );
+}
+
+
+function ModeTab({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-pill px-3 py-1.5 text-sm font-medium transition-colors",
+        active
+          ? "bg-primary text-primary-fg shadow-e1"
+          : "text-ink-soft hover:text-ink",
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+
+/** Shared "parsed APK metadata" card used by both source modes — the
+ *  GitHub variant wraps this and adds the release context above it. */
+function ApkInspectCard({ inspect }: { inspect: ApkInspect }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-5">
+      <dl className="grid gap-3 rounded-xl bg-surface-2 p-4 md:grid-cols-3">
+        <Spec label={t("myApps.new.specPackage")} value={inspect.package_name} mono />
+        <Spec label={t("myApps.new.specVersion")} value={`${inspect.version_name} (${inspect.version_code})`} mono />
+        <Spec label={t("myApps.new.specSize")} value={formatBytes(inspect.size_bytes)} mono />
+        <Spec label={t("myApps.new.specSdk")} value={`${inspect.min_sdk}–${inspect.target_sdk}`} mono />
+        <Spec label={t("myApps.new.specAbis")} value={inspect.native_code.join(", ") || "—"} mono />
+        <Spec label={t("myApps.new.specPermissions")} value={String(inspect.permissions.length)} mono />
+      </dl>
+      {Object.keys(inspect.detected_anti_features).length > 0 && (
+        <div className="mt-4 rounded-xl border border-accent/40 bg-accent-container/30 p-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-accent-on-container">
+            <ShieldAlert className="h-4 w-4" />
+            {t("myApps.new.detectedHeader")}
+          </div>
+          <p className="mb-3 text-xs text-ink-soft">
+            {t("myApps.new.detectedBody")}
+          </p>
+          <ul className="flex flex-wrap gap-1.5">
+            {Object.entries(inspect.detected_anti_features).flatMap(([flag, labels]) =>
+              labels.map((label) => (
+                <li
+                  key={`${flag}:${label}`}
+                  className="rounded-pill bg-surface px-2.5 py-1 text-xs"
+                  title={label}
+                >
+                  <span className="font-mono text-[10px] text-ink-mute">{flag}</span>
+                  {" "}
+                  <span className="text-ink">{label}</span>
+                </li>
+              ))
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function GithubInspectCard({ inspect }: { inspect: GithubApkInspect }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-5 space-y-4">
+      {/* Release context — tag, asset name, prerelease flag. Sits above
+          the parsed-APK card so the user sees what we resolved before
+          inspecting the manifest details. */}
+      <div className="rounded-2xl border border-primary/30 bg-primary-container/30 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary-on-container">
+              <GitBranch className="h-3.5 w-3.5" />
+              {t("myApps.new.github.resolved")}
+            </div>
+            <div className="mt-1 flex flex-wrap items-baseline gap-2">
+              <a
+                href={`https://github.com/${inspect.repo}/releases/tag/${inspect.release_tag}`}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-mono text-sm text-ink hover:text-primary"
+              >
+                {inspect.repo}
+              </a>
+              <span className="text-ink-mute">·</span>
+              <span className="font-mono text-sm text-primary">{inspect.release_tag}</span>
+              {inspect.release_is_prerelease && (
+                <Badge variant="accent" className="text-[10px] uppercase tracking-wider">pre-release</Badge>
+              )}
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-ink-mute">
+              {inspect.asset_name} · {formatBytes(inspect.size_bytes)} · {formatDate(inspect.release_published_at)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <ApkInspectCard inspect={inspect} />
     </div>
   );
 }

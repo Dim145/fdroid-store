@@ -27,6 +27,26 @@ class GithubSourceRead(BaseModel):
     updated_at: datetime
 
 
+class ProposedAppField(BaseModel):
+    """A listing field the GitHub repo could fill in for the user.
+
+    ``field`` matches the App column name (``summary``, ``license``,
+    ``website``, ``source_code``, ``author_name``). The frontend renders
+    these as checkbox + value rows under the saved source so the
+    operator can opt-in to each one explicitly.
+    """
+    field: str
+    current_value: str | None = None
+    proposed_value: str
+
+
+class GithubSourceUpsertResponse(BaseModel):
+    """PUT /apps/{id}/github-source returns the saved source plus a
+    list of empty listing fields the GitHub repo could populate."""
+    source: GithubSourceRead
+    proposed_app_updates: list[ProposedAppField] = []
+
+
 class GithubSourceUpsert(BaseModel):
     """Payload for PUT /apps/{id}/github-source.
 

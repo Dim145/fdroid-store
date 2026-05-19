@@ -57,6 +57,18 @@ class ReleaseAsset:
     asset_download_url: str
 
 
+@dataclass(frozen=True)
+class RepoMetadata:
+    """Subset of the ``GET /repos/{owner}/{repo}`` payload that we use to
+    prefill an App's listing fields. All fields are optional except the
+    repo URL itself."""
+    html_url: str
+    description: str | None
+    homepage: str | None
+    license_spdx: str | None
+    owner_login: str | None
+
+
 def validate_repo(repo: str) -> str:
     """Normalise + reject anything that doesn't match ``owner/name``.
 
@@ -85,6 +97,57 @@ def _auth_headers() -> dict[str, str]:
     if settings.github_token:
         headers["Authorization"] = f"Bearer {settings.github_token}"
     return headers
+
+
+async def fetch_repo_metadata(repo: str) -> RepoMetadata | None:
+    """Pull description / homepage / license / owner from GitHub.
+
+    Used to prefill an App's listing when the user creates from GitHub
+    or connects a source to an existing app. Best-effort: a non-2xx
+    response returns ``None`` so the caller falls back to manual entry
+    instead of failing the whole create flow.
+    """
+    url = f"{_GH_API}/repos/{repo}"
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers()) as client:
+        try:
+            resp = await client.get(url)
+        except httpx.RequestError:
+            return None
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    license_info = data.get("license") if isinstance(data.get("license"), dict) else None
+    owner = data.get("owner") if isinstance(data.get("owner"), dict) else None
+
+    # Empty strings come back from GitHub when a field is unset on the
+    # repo settings — normalize to ``None`` so callers can use truthiness.
+    def _nz(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    homepage = _nz(data.get("homepage"))
+    # Homepage often lacks a scheme ("example.com") because GitHub does
+    # not enforce one. Prepend https:// so our HttpUrl validator accepts
+    # it downstream. Anything that already looks like a URL is kept as-is.
+    if homepage and "://" not in homepage:
+        homepage = f"https://{homepage}"
+
+    return RepoMetadata(
+        html_url=str(data.get("html_url") or f"https://github.com/{repo}"),
+        description=_nz(data.get("description")),
+        homepage=homepage,
+        license_spdx=_nz(license_info.get("spdx_id")) if license_info else None,
+        owner_login=_nz(owner.get("login")) if owner else None,
+    )
 
 
 async def find_latest_asset(

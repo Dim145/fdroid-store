@@ -20,7 +20,7 @@ from app.models.app import App, AppStatus, AppVisibility
 from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
-from app.schemas.app import ApkInspect, ApkRead, ApkUpdate
+from app.schemas.app import ApkInspect, ApkRead, ApkUpdate, GithubApkInspect, GithubInspectRequest
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
 
@@ -303,6 +303,106 @@ async def inspect_apk(
             native_code=meta.native_code,
             has_icon=bool(meta.icon_data),
             detected_anti_features=detected,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/inspect-github", response_model=GithubApkInspect)
+async def inspect_github(
+    payload: GithubInspectRequest,
+    user: Annotated[User, Depends(get_current_user)],
+) -> GithubApkInspect:
+    """Resolve the latest matching release on a GitHub repo, download
+    the APK, parse it and return the metadata — no DB writes.
+
+    Powers the "From GitHub" mode of the New App page so the operator
+    sees what they're about to import before committing. The created-by
+    side of the workflow lives at ``POST /apps/with-github-source``,
+    which re-downloads (the file is discarded between the two calls).
+    """
+    from app.services.github_releases import (
+        GithubReleaseError,
+        download_asset,
+        fetch_repo_metadata,
+        find_latest_asset,
+        validate_repo,
+    )
+
+    try:
+        repo = validate_repo(payload.repo)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    pattern = (payload.asset_pattern or "").strip() or None
+    effective_pattern = pattern or "*.apk"
+
+    try:
+        asset = await find_latest_asset(
+            repo,
+            asset_pattern=pattern,
+            include_prereleases=payload.include_prereleases,
+        )
+    except GithubReleaseError as exc:
+        # 422 is right: the input is structurally valid but GitHub said no.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"No release with a matching APK found for {repo!r} "
+                f"(pattern: {effective_pattern})"
+            ),
+        )
+
+    # Pull the repo-level metadata in parallel with the asset download —
+    # best-effort, so a missing/private repo description doesn't break
+    # the inspect flow.
+    import asyncio as _asyncio
+
+    repo_meta_task = _asyncio.create_task(fetch_repo_metadata(repo))
+
+    tmp_path = await download_asset(asset)
+    repo_meta = await repo_meta_task
+    try:
+        meta = await parse_or_400(tmp_path)
+        try:
+            from app.fdroid.anti_feature_scan import scan_apk, summarise
+
+            detected = summarise(scan_apk(tmp_path))
+        except Exception:  # noqa: BLE001
+            detected = {}
+        return GithubApkInspect(
+            package_name=meta.package_name,
+            app_name=meta.app_name,
+            version_code=meta.version_code,
+            version_name=meta.version_name,
+            min_sdk=meta.min_sdk,
+            target_sdk=meta.target_sdk,
+            sha256=meta.sha256,
+            size_bytes=meta.size_bytes,
+            signer_sha256=meta.signer_sha256,
+            permissions=meta.permissions,
+            native_code=meta.native_code,
+            has_icon=bool(meta.icon_data),
+            detected_anti_features=detected,
+            repo=repo,
+            release_tag=asset.release_tag,
+            release_published_at=asset.release_published_at,
+            release_is_prerelease=asset.is_prerelease,
+            asset_name=asset.asset_name,
+            asset_pattern_used=effective_pattern,
+            repo_html_url=repo_meta.html_url if repo_meta else f"https://github.com/{repo}",
+            repo_description=repo_meta.description if repo_meta else None,
+            repo_homepage=repo_meta.homepage if repo_meta else None,
+            repo_license_spdx=repo_meta.license_spdx if repo_meta else None,
+            repo_owner_login=repo_meta.owner_login if repo_meta else None,
         )
     finally:
         tmp_path.unlink(missing_ok=True)

@@ -16,7 +16,12 @@ from app.api.deps import DbSession, get_current_user
 from app.models.app import App
 from app.models.github_source import GithubSource, GithubSourceStatus
 from app.models.user import User
-from app.schemas.github_source import GithubSourceRead, GithubSourceUpsert
+from app.schemas.github_source import (
+    GithubSourceRead,
+    GithubSourceUpsert,
+    GithubSourceUpsertResponse,
+    ProposedAppField,
+)
 from app.services.app_permissions import assert_can_manage_app
 from app.services.audit import write_event
 from app.services.queue import enqueue_github_source_scan
@@ -55,7 +60,7 @@ async def get_github_source(
 
 @router.put(
     "/{app_id}/github-source",
-    response_model=GithubSourceRead,
+    response_model=GithubSourceUpsertResponse,
 )
 async def upsert_github_source(
     app_id: uuid.UUID,
@@ -63,11 +68,17 @@ async def upsert_github_source(
     db: DbSession,
     request: Request,
     actor: Annotated[User, Depends(get_current_user)],
-) -> GithubSourceRead:
+) -> GithubSourceUpsertResponse:
     """Create or replace the GitHub source. Triggers an immediate scan so
     the user sees results without waiting for the daily cron — even if
     the source is in disabled state, the explicit save is treated as a
-    one-shot scan trigger."""
+    one-shot scan trigger.
+
+    Also fetches the repo's metadata (description / homepage / license
+    / owner) and returns a list of currently-empty App fields that the
+    repo could populate. The UI surfaces this as a preview card the user
+    can opt-in to, field by field — the source upsert itself never
+    touches the App row, so this stays explicit."""
     app = await _load_app_or_404(db, app_id)
     await assert_can_manage_app(db, actor, app)
 
@@ -134,7 +145,44 @@ async def upsert_github_source(
             select(GithubSource).where(GithubSource.id == existing.id)
         )
     ).scalar_one()
-    return GithubSourceRead.model_validate(refreshed)
+
+    # Pull repo metadata in parallel-ish (the source upsert is committed,
+    # the metadata fetch is best-effort). Used to compute the preview
+    # card of fields that could be filled on the App row.
+    from app.services.github_releases import fetch_repo_metadata
+
+    proposed: list[ProposedAppField] = []
+    try:
+        meta = await fetch_repo_metadata(payload.repo)
+    except Exception:  # noqa: BLE001
+        meta = None
+    if meta is not None:
+        # Tuples of (field name, current app value, candidate from GitHub).
+        candidates = [
+            ("summary", app.summary, meta.description),
+            ("license", app.license, meta.license_spdx),
+            ("website", app.website, meta.homepage),
+            ("source_code", app.source_code, meta.html_url),
+            ("author_name", app.author_name, meta.owner_login),
+        ]
+        for field_name, current, candidate in candidates:
+            current_value = (current or "").strip() if isinstance(current, str) else None
+            candidate_value = candidate.strip() if isinstance(candidate, str) else None
+            if current_value or not candidate_value:
+                # User already filled it OR GitHub has nothing — skip.
+                continue
+            proposed.append(
+                ProposedAppField(
+                    field=field_name,
+                    current_value=None,
+                    proposed_value=candidate_value,
+                )
+            )
+
+    return GithubSourceUpsertResponse(
+        source=GithubSourceRead.model_validate(refreshed),
+        proposed_app_updates=proposed,
+    )
 
 
 @router.delete(

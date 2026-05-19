@@ -279,6 +279,20 @@ export const api = {
       fd.append("file", file);
       return apiFetch<ApkInspect>("/api/v1/apks/inspect", { method: "POST", body: fd });
     },
+    /** Probe a GitHub repository: resolve latest matching release, download
+     *  + parse the APK, return metadata. No DB writes. */
+    inspectGithub: (payload: { repo: string; asset_pattern?: string | null; include_prereleases?: boolean }) =>
+      apiFetch<GithubApkInspect>("/api/v1/apks/inspect-github", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    /** Create the App + first APK + GithubSource in a single call. The
+     *  backend re-downloads the release server-side. */
+    createWithGithub: (payload: AppCreateFromGithubPayload) =>
+      apiFetch<AppDetail>("/api/v1/apps/with-github-source", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     deleteApk: (apkId: string) =>
       apiFetch<void>(`/api/v1/apks/${apkId}`, { method: "DELETE" }),
     // Signed, time-limited URL the browser can hit directly via <a href>
@@ -464,7 +478,7 @@ export const api = {
     get: (appId: string) =>
       apiFetch<GithubSource | null>(`/api/v1/apps/${appId}/github-source`),
     upsert: (appId: string, payload: GithubSourceUpsert) =>
-      apiFetch<GithubSource>(`/api/v1/apps/${appId}/github-source`, {
+      apiFetch<GithubSourceUpsertResponse>(`/api/v1/apps/${appId}/github-source`, {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
@@ -724,6 +738,46 @@ export type AppCreate = {
 export type AppCreateWithApk = Omit<AppCreate, "package_name" | "category_ids"> & {
   package_name?: string;
   file: File;
+};
+
+/** Payload for ``POST /apps/with-github-source`` — package name is
+ *  derived from the parsed APK, so the client doesn't send it. */
+export type AppCreateFromGithubPayload =
+  Omit<AppCreate, "package_name" | "category_ids" | "author_email" | "donate" | "liberapay" | "bitcoin" | "open_collective" | "translation"> & {
+    repo: string;
+    asset_pattern?: string | null;
+    include_prereleases?: boolean;
+  };
+
+/** Result returned by ``POST /apks/inspect-github`` — same fields as
+ *  ``ApkInspect`` plus the GitHub context AND the repo-level metadata
+ *  (description, homepage, license, owner) used to prefill the New
+ *  App listing form. */
+export type GithubApkInspect = ApkInspect & {
+  repo: string;
+  release_tag: string;
+  release_published_at: string;
+  release_is_prerelease: boolean;
+  asset_name: string;
+  asset_pattern_used: string;
+  repo_html_url: string;
+  repo_description: string | null;
+  repo_homepage: string | null;
+  repo_license_spdx: string | null;
+  repo_owner_login: string | null;
+};
+
+/** A listing field GitHub could populate on the App row. */
+export type ProposedAppField = {
+  field: "summary" | "license" | "website" | "source_code" | "author_name";
+  current_value: string | null;
+  proposed_value: string;
+};
+
+/** Wrapper response for the PUT github-source endpoint. */
+export type GithubSourceUpsertResponse = {
+  source: GithubSource;
+  proposed_app_updates: ProposedAppField[];
 };
 export type AppUpdatePayload = Partial<Omit<AppCreate, "package_name">> & {
   /** Pin (number) or clear (null) the suggested version. Omit the field

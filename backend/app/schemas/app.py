@@ -93,6 +93,61 @@ class ApkInspect(BaseModel):
     detected_anti_features: dict[str, list[str]] = {}
 
 
+class GithubInspectRequest(BaseModel):
+    """Body for ``POST /apks/inspect-github``."""
+    repo: str = Field(min_length=3, max_length=255)
+    asset_pattern: str | None = Field(default=None, max_length=255)
+    include_prereleases: bool = False
+
+
+class AppCreateFromGithub(BaseModel):
+    """Body for ``POST /apps/with-github-source`` — creates the App,
+    downloads the latest matching release as the first APK, and stores
+    a :class:`~app.models.github_source.GithubSource` row so the daily
+    cron keeps the app in sync. The package name is taken from the
+    parsed APK manifest; the client must not provide it.
+    """
+    name: str = Field(min_length=1, max_length=255)
+    summary: str | None = Field(default=None, max_length=255)
+    # Same cap as ``AppCreate.description`` — kept literal here so this
+    # class body doesn't depend on the module-level constant defined
+    # further down.
+    description: str | None = Field(default=None, max_length=20_000)
+    license: str | None = Field(default=None, max_length=128)
+    website: HttpUrl | None = None
+    source_code: HttpUrl | None = None
+    issue_tracker: HttpUrl | None = None
+    author_name: str | None = Field(default=None, max_length=255)
+    visibility: AppVisibility = AppVisibility.PUBLIC
+    # GitHub source bits — the same shape as GithubSourceUpsert but
+    # repeated here so this endpoint stays self-contained.
+    repo: str = Field(min_length=3, max_length=255)
+    asset_pattern: str | None = Field(default=None, max_length=255)
+    include_prereleases: bool = False
+
+
+class GithubApkInspect(ApkInspect):
+    """Extends :class:`ApkInspect` with the GitHub release context. The
+    New App page surfaces these alongside the parsed APK metadata so
+    the operator can confirm they're about to import the right binary."""
+    repo: str
+    release_tag: str
+    release_published_at: datetime
+    release_is_prerelease: bool
+    asset_name: str
+    asset_pattern_used: str
+
+    # Repository-level metadata pulled from ``GET /repos/{owner}/{repo}``.
+    # Surfaced so the New App page can prefill the listing fields that
+    # GitHub already knows about (summary, license, etc.). All optional
+    # — a repo without a description or homepage just leaves them empty.
+    repo_html_url: str
+    repo_description: str | None = None
+    repo_homepage: str | None = None
+    repo_license_spdx: str | None = None
+    repo_owner_login: str | None = None
+
+
 class ScreenshotRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

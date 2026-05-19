@@ -7,7 +7,9 @@ import {
   GitBranch,
   Loader2,
   RefreshCw,
+  Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { api, type GithubSource, type GithubSourceStatus } from "@/lib/api";
+import { api, type GithubSource, type GithubSourceStatus, type ProposedAppField } from "@/lib/api";
 import { toast } from "@/lib/toast-store";
 import { cn, formatDate } from "@/lib/utils";
 
@@ -46,6 +48,13 @@ export function GithubSourceSection({
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [removing, setRemoving] = useState(false);
+
+  // After a save returns proposed fields, we surface them as an inline
+  // preview card with per-field checkboxes. ``applyingFields`` blocks
+  // double-clicks while the PATCH is in flight.
+  const [proposed, setProposed] = useState<ProposedAppField[]>([]);
+  const [pickedFields, setPickedFields] = useState<Set<string>>(new Set());
+  const [applyingFields, setApplyingFields] = useState(false);
 
   const lastSeenTag = useRef<string | null>(null);
   // Baseline timestamp captured the moment a scan is triggered. Polling
@@ -145,14 +154,19 @@ export function GithubSourceSection({
     if (!repo.trim()) return;
     setSaving(true);
     try {
-      const saved = await api.githubSource.upsert(appId, {
+      const resp = await api.githubSource.upsert(appId, {
         repo: repo.trim(),
         asset_pattern: assetPattern.trim() || null,
         include_prereleases: includePrereleases,
         enabled,
       });
-      setSource(saved);
+      setSource(resp.source);
       setDirty(false);
+      // Surface the preview card with every proposed field pre-selected
+      // so a single Apply click fills them all (which matches the user's
+      // most likely intent — they just connected the repo for this).
+      setProposed(resp.proposed_app_updates ?? []);
+      setPickedFields(new Set((resp.proposed_app_updates ?? []).map((p) => p.field)));
       toast.success(t("myApps.edit.githubSource.saved"));
       // The PUT triggers an immediate scan server-side. We use the
       // pre-save source state as the baseline so any change in
@@ -166,6 +180,47 @@ export function GithubSourceSection({
     } finally {
       setSaving(false);
     }
+  }
+
+  async function applyProposed() {
+    const picks = proposed.filter((p) => pickedFields.has(p.field));
+    if (picks.length === 0) {
+      // Nothing checked — treat as a dismiss.
+      setProposed([]);
+      setPickedFields(new Set());
+      return;
+    }
+    setApplyingFields(true);
+    try {
+      const patch: Record<string, string> = {};
+      for (const p of picks) patch[p.field] = p.proposed_value;
+      await api.apps.update(appId, patch);
+      toast.success(t("myApps.edit.githubSource.proposed.applied"));
+      setProposed([]);
+      setPickedFields(new Set());
+      onImported?.(); // parent reloads the App so the new values show up
+    } catch (e) {
+      toast.error(
+        t("myApps.edit.githubSource.proposed.applyFailed"),
+        e instanceof Error ? e.message : undefined,
+      );
+    } finally {
+      setApplyingFields(false);
+    }
+  }
+
+  function dismissProposed() {
+    setProposed([]);
+    setPickedFields(new Set());
+  }
+
+  function togglePicked(field: string) {
+    setPickedFields((s) => {
+      const n = new Set(s);
+      if (n.has(field)) n.delete(field);
+      else n.add(field);
+      return n;
+    });
   }
 
   async function onScanNow() {
@@ -222,6 +277,17 @@ export function GithubSourceSection({
     <div className="space-y-5">
       {/* Status banner — only present when a source exists */}
       {source && <StatusBanner source={source} scanning={awaitingScan} />}
+
+      {proposed.length > 0 && (
+        <ProposedFieldsCard
+          proposed={proposed}
+          picked={pickedFields}
+          onToggle={togglePicked}
+          onApply={applyProposed}
+          onDismiss={dismissProposed}
+          busy={applyingFields}
+        />
+      )}
 
       <form onSubmit={onSave} className="space-y-4">
         <div className="grid gap-3 md:grid-cols-2">
@@ -426,5 +492,105 @@ function ToggleRow({
       </div>
       <Switch checked={checked} onCheckedChange={onChange} ariaLabel={label} />
     </label>
+  );
+}
+
+
+/** Inline preview card that surfaces App listing fields the connected
+ *  GitHub repo could populate. Each row has a checkbox so the operator
+ *  picks which ones to apply — pre-checked on first appearance because
+ *  the most likely intent is "fill them all". The card disappears on
+ *  Apply (success) or Dismiss. */
+function ProposedFieldsCard({
+  proposed,
+  picked,
+  onToggle,
+  onApply,
+  onDismiss,
+  busy,
+}: {
+  proposed: ProposedAppField[];
+  picked: Set<string>;
+  onToggle: (field: string) => void;
+  onApply: () => void;
+  onDismiss: () => void;
+  busy: boolean;
+}) {
+  const { t } = useTranslation();
+  const pickedCount = proposed.filter((p) => picked.has(p.field)).length;
+  return (
+    <div className="rounded-2xl border border-primary/30 bg-primary-container/30 p-4 animate-fade-up">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <div>
+            <div className="text-sm font-semibold text-primary-on-container">
+              {t("myApps.edit.githubSource.proposed.title")}
+            </div>
+            <p className="text-[11px] leading-relaxed text-ink-soft">
+              {t("myApps.edit.githubSource.proposed.body")}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={t("common.close")}
+          className="flex h-7 w-7 items-center justify-center rounded-pill text-ink-mute transition-colors hover:bg-surface hover:text-ink"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <ul className="mt-3 space-y-1.5">
+        {proposed.map((p) => {
+          const id = `proposed-${p.field}`;
+          const isPicked = picked.has(p.field);
+          return (
+            <li key={p.field}>
+              <label
+                htmlFor={id}
+                className={cn(
+                  "flex cursor-pointer items-start gap-2.5 rounded-xl border bg-surface px-3 py-2 transition-colors",
+                  isPicked
+                    ? "border-primary/40"
+                    : "border-outline-soft hover:border-outline",
+                )}
+              >
+                <input
+                  id={id}
+                  type="checkbox"
+                  checked={isPicked}
+                  onChange={() => onToggle(p.field)}
+                  className="mt-0.5"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-ink-mute">
+                    {t(`myApps.edit.githubSource.proposed.field.${p.field}`)}
+                  </div>
+                  <div className="mt-0.5 break-words text-sm text-ink">{p.proposed_value}</div>
+                </div>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
+          {t("common.cancel")}
+        </Button>
+        <Button
+          type="button"
+          variant="filled"
+          size="sm"
+          onClick={onApply}
+          disabled={busy || pickedCount === 0}
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {t("myApps.edit.githubSource.proposed.apply", { count: pickedCount })}
+        </Button>
+      </div>
+    </div>
   );
 }

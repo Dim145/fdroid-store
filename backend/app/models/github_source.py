@@ -12,7 +12,7 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.mixins import IdMixin, TimestampMixin
@@ -74,4 +74,16 @@ class GithubSource(Base, IdMixin, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"),
     )
 
-    app = relationship("App", backref="github_source", uselist=False)
+    app = relationship(
+        "App",
+        # ``passive_deletes`` lets the DB-level ``ondelete=CASCADE`` on
+        # ``app_id`` actually fire — without it SQLAlchemy fetches the
+        # relationship and tries to NULL the FK first, which violates
+        # the NOT NULL constraint and aborts the App delete.
+        backref=backref(
+            "github_source",
+            uselist=False,
+            cascade="all, delete-orphan",
+            passive_deletes=True,
+        ),
+    )

@@ -577,8 +577,10 @@
     "new": {
       "backLink": "My apps",
       "title": "New release",
-      "subtitle": "Drop an APK and we'll pre-fill what we can.",
-      "step1": "Pick the APK",
+      "subtitle": "Drop an APK or point at a GitHub repository — we'll pre-fill what we can.",
+      "step1": "Pick the source",
+      "modeApk": "Upload APK",
+      "modeGithub": "From GitHub",
       "step2": "Listing",
       "step3": "Links & credits (optional)",
       "dropPrompt": "Click to choose an APK",
@@ -618,7 +620,23 @@
       "metadataImportLabel": "Import metadata.yml",
       "metadataImportBody": "Paste an upstream fdroiddata metadata.yml. Empty form fields will be filled in; anything you've already typed is preserved.",
       "metadataImportApply": "Prefill fields",
-      "metadataImportFailed": "Could not parse metadata.yml"
+      "metadataImportFailed": "Could not parse metadata.yml",
+      "github": {
+        "intro": "Provide a <code>owner/name</code> pair. We resolve the latest release, download the matching APK and import its metadata. A daily auto-scan then keeps the app in sync with future releases.",
+        "repoLabel": "GitHub repository *",
+        "repoPlaceholder": "e.g. Dim145/fdroid-store",
+        "validate": "Validate",
+        "validating": "Validating…",
+        "validateFirst": "Step 1: validate a GitHub repository to continue.",
+        "validateFailed": "Could not resolve a release",
+        "advanced": "Advanced options",
+        "patternLabel": "Asset pattern",
+        "patternHint": "Glob applied to the release asset name. Leave empty for the first .apk. Examples: *-universal.apk, app-release.apk.",
+        "includePrereleases": "Include pre-releases",
+        "includePrereleasesHint": "Off — only published, non-prerelease tags are considered. Drafts are always skipped.",
+        "resolved": "Resolved release",
+        "packageReadOnly": "Derived from the parsed APK manifest."
+      }
     },
     "fields": {
       "apkFile": "APK file",
@@ -871,7 +889,22 @@
         "statusImported": "Imported",
         "statusSkipped": "Skipped",
         "statusError": "Error",
-        "statusScanning": "Scanning"
+        "statusScanning": "Scanning",
+        "proposed": {
+          "title": "Want to fill these from the repo?",
+          "body": "GitHub gave us values for fields you haven't set yet. Pick the ones you want to keep.",
+          "apply_one": "Apply {{count}} field",
+          "apply_other": "Apply {{count}} fields",
+          "applied": "Listing updated from GitHub.",
+          "applyFailed": "Could not apply changes",
+          "field": {
+            "summary": "Summary",
+            "license": "License",
+            "website": "Website",
+            "source_code": "Source code",
+            "author_name": "Author"
+          }
+        }
       }
     }
   },
