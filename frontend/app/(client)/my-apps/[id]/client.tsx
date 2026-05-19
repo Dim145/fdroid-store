@@ -94,6 +94,45 @@ function ManageAppInner() {
   const [savingChangelog, setSavingChangelog] = useState(false);
   const [savingApkId, setSavingApkId] = useState<string | null>(null);
 
+  // Drives the editorial sidebar — the rail highlights whichever section
+  // is currently dominating the viewport, and click-scroll falls back to
+  // a smooth jump for keyboard users.
+  const [activeSection, setActiveSection] = useState<string>("listing");
+  useEffect(() => {
+    if (!app) return;
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-section]"));
+    if (nodes.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Pick the entry closest to the top edge of our "live band".
+        // rootMargin shrinks the viewport so only the middle third
+        // counts as "in view" — prevents jitter when two sections share
+        // the screen.
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]?.target) {
+          const key = (visible[0].target as HTMLElement).dataset.section;
+          if (key) setActiveSection(key);
+        }
+      },
+      { rootMargin: "-30% 0px -55% 0px", threshold: 0 },
+    );
+    for (const n of nodes) observer.observe(n);
+    return () => observer.disconnect();
+  }, [app?.id]);
+
+  function scrollToSection(key: string) {
+    const el = document.querySelector<HTMLElement>(`[data-section="${key}"]`);
+    if (el) {
+      // Account for the sticky site header (~64px) so the section title
+      // lands just below it rather than under it.
+      const top = el.getBoundingClientRect().top + window.scrollY - 80;
+      window.scrollTo({ top, behavior: "smooth" });
+      setActiveSection(key);
+    }
+  }
+
   async function load() {
     try {
       // raw=true returns canonical en-US fields, not the localized overlay —
@@ -368,32 +407,48 @@ function ManageAppInner() {
   const published = [...app.apks].filter((a) => a.status === "published").sort((a, b) => b.version_code - a.version_code);
   const latest = published[0];
 
+  // Section roster — drives both the sidebar rail and the section
+  // chrome. Order matches the visual flow; "permissions" only renders
+  // when a published APK exists so we conditionally drop it.
+  const sectionRoster: { id: string; step: string; label: string }[] = [
+    { id: "listing", step: "01", label: t("myApps.edit.sections.listing") },
+    { id: "icon", step: "02", label: t("myApps.edit.sections.icon") },
+    { id: "graphics", step: "03", label: t("myApps.edit.sections.graphics") },
+    { id: "screenshots", step: "04", label: t("myApps.edit.sections.screenshots") },
+    { id: "translations", step: "05", label: t("myApps.edit.sections.translations") },
+    ...(latest ? [{ id: "permissions", step: "06", label: t("myApps.edit.sections.permissions") }] : []),
+    { id: "versions", step: latest ? "07" : "06", label: t("myApps.edit.sections.versions") },
+    { id: "github", step: latest ? "08" : "07", label: t("myApps.edit.sections.githubSource") },
+    { id: "collaborators", step: latest ? "09" : "08", label: t("myApps.edit.sections.collaborators") },
+  ];
+  const stepOf = (id: string) => sectionRoster.find((s) => s.id === id)?.step ?? "";
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <header className="surface flex flex-wrap items-start gap-5 p-6">
-        <AppIcon iconPath={app.icon_path} name={app.name} size={88} version={app.updated_at} className="shadow-e2" />
-        <div className="min-w-0 flex-1">
-          <Link href="/my-apps" className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-soft hover:text-ink">
-            <ArrowLeft className="h-4 w-4" /> {t("myApps.edit.back")}
-          </Link>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">{app.name}</h1>
-          <p className="mt-0.5 font-mono text-xs text-ink-mute">{app.package_name}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <Badge variant={app.visibility === "private" ? "accent" : "outline"}>{app.visibility}</Badge>
-            <Badge variant={app.status === "published" ? "primary" : "soft"}>{app.status.replace("_", " ")}</Badge>
-          </div>
-        </div>
-        <Button asChild variant="outlined" size="md">
-          <Link href={`/apps/${app.package_name}`}>
-            <Eye className="h-4 w-4" /> {t("myApps.edit.publicPage")}
-          </Link>
-        </Button>
-      </header>
+    <div className="relative space-y-8 pb-12">
+      {/* Letterhead rule — extremely faint horizontal hairlines every 4 px
+          create a typesetter's ruled-paper feel unique to this page.
+          Fixed so it doesn't drift while the page scrolls. */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 -z-10 opacity-[0.025]"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(to bottom, rgb(var(--ink)) 0 1px, transparent 1px 4px)",
+        }}
+      />
 
+      <Hero app={app} />
 
+      <div className="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <Rail
+          sections={sectionRoster}
+          active={activeSection}
+          onPick={scrollToSection}
+        />
+
+        <div className="min-w-0 space-y-6">
       {/* ──── Listing ──── */}
-      <Section step="01" title={t("myApps.edit.sections.listing")} subtitle={t("myApps.edit.sections.listingSubtitle")}>
+      <Section id="listing" step={stepOf("listing")} title={t("myApps.edit.sections.listing")} subtitle={t("myApps.edit.sections.listingSubtitle")}>
         <form onSubmit={save} className="grid gap-4 md:grid-cols-2">
           <FormField label={t("myApps.edit.fields.title")} htmlFor="name" className="md:col-span-2">
             <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} />
@@ -485,7 +540,7 @@ function ManageAppInner() {
       </Section>
 
       {/* ──── Icon ──── */}
-      <Section step="02" title={t("myApps.edit.sections.icon")} subtitle={t("myApps.edit.sections.iconSubtitle")}>
+      <Section id="icon" step={stepOf("icon")} title={t("myApps.edit.sections.icon")} subtitle={t("myApps.edit.sections.iconSubtitle")}>
         <div className="flex flex-wrap items-center gap-5">
           <AppIcon iconPath={app.icon_path} name={app.name} size={96} version={app.updated_at} className="shadow-e2" />
           <div className="flex-1 space-y-2">
@@ -519,7 +574,8 @@ function ManageAppInner() {
 
       {/* ──── Banners ──── */}
       <Section
-        step="2b"
+        id="graphics"
+        step={stepOf("graphics")}
         title={t("myApps.edit.sections.graphics")}
         subtitle={t("myApps.edit.sections.graphicsSubtitle")}
       >
@@ -553,7 +609,8 @@ function ManageAppInner() {
 
       {/* ──── Screenshots ──── */}
       <Section
-        step="03"
+        id="screenshots"
+        step={stepOf("screenshots")}
         title={t("myApps.edit.sections.screenshots")}
         subtitle={
           screenshots.length > 1
@@ -602,7 +659,8 @@ function ManageAppInner() {
 
       {/* ──── Translations ──── */}
       <Section
-        step="04"
+        id="translations"
+        step={stepOf("translations")}
         title={t("myApps.edit.sections.translations")}
         subtitle={t("myApps.edit.sections.translationsSubtitle")}
       >
@@ -615,14 +673,15 @@ function ManageAppInner() {
 
       {/* ──── Permissions ──── */}
       {latest && (
-        <Section step="05" title={t("myApps.edit.sections.permissions")} subtitle={t("myApps.edit.sections.permissionsSubtitle", { name: latest.version_name, code: latest.version_code })}>
+        <Section id="permissions" step={stepOf("permissions")} title={t("myApps.edit.sections.permissions")} subtitle={t("myApps.edit.sections.permissionsSubtitle", { name: latest.version_name, code: latest.version_code })}>
           <AppPermissions permissions={latest.permissions} />
         </Section>
       )}
 
       {/* ──── Versions ──── */}
       <Section
-        step="06"
+        id="versions"
+        step={stepOf("versions")}
         title={t("myApps.edit.sections.versions")}
         subtitle={
           app.suggested_version_is_manual
@@ -798,7 +857,8 @@ function ManageAppInner() {
 
       {/* ──── GitHub source auto-fetch ──── */}
       <Section
-        step="07"
+        id="github"
+        step={stepOf("github")}
         title={t("myApps.edit.sections.githubSource")}
         subtitle={t("myApps.edit.sections.githubSourceSubtitle")}
       >
@@ -807,7 +867,7 @@ function ManageAppInner() {
 
       {/* ──── Collaborators ──── */}
       {currentUser && app.owner_id && (
-        <Section step="08" title={t("myApps.edit.sections.collaborators")} subtitle={t("myApps.edit.sections.collaboratorsSubtitle")}>
+        <Section id="collaborators" step={stepOf("collaborators")} title={t("myApps.edit.sections.collaborators")} subtitle={t("myApps.edit.sections.collaboratorsSubtitle")}>
           <CollaboratorsSection
             appId={app.id}
             ownerId={app.owner_id}
@@ -816,45 +876,219 @@ function ManageAppInner() {
         </Section>
       )}
 
-      {/* ──── Danger zone ──── */}
-      <section className="rounded-3xl border-2 border-danger/40 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-bold tracking-tight text-danger">{t("myApps.edit.sections.danger")}</h2>
-            <p className="text-sm text-ink-soft">{t("myApps.edit.sections.dangerSubtitle")}</p>
-          </div>
-          <Button variant="danger" onClick={deleteApp}>
-            <Trash2 className="h-4 w-4" /> {t("myApps.edit.deleteApp")}
-          </Button>
+          <DangerZone onDelete={deleteApp} />
         </div>
-      </section>
+      </div>
     </div>
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Editorial chrome: Hero, Rail, Section, DangerZone                          */
+/* -------------------------------------------------------------------------- */
+
+function Hero({ app }: { app: AppDetail }) {
+  const { t } = useTranslation();
+  return (
+    <header className="relative overflow-hidden rounded-3xl border border-outline-soft bg-surface px-6 py-7 md:px-10 md:py-9 animate-fade-up">
+      {/* Editorial header decoration: a soft tint wash + a hairline pair
+          at the corner — like the trim mark in a printed layout. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(60% 80% at 100% 0%, rgb(var(--primary) / 0.10), transparent 65%)",
+        }}
+      />
+      <div aria-hidden className="pointer-events-none absolute right-6 top-6 h-12 w-12">
+        <div className="absolute inset-x-0 top-0 h-px bg-outline" />
+        <div className="absolute inset-y-0 right-0 w-px bg-outline" />
+      </div>
+
+      <div className="relative">
+        <Link href="/my-apps" className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-ink-mute hover:text-ink">
+          <ArrowLeft className="h-3.5 w-3.5" /> {t("myApps.edit.back")}
+        </Link>
+
+        <div className="mt-4 flex flex-wrap items-start gap-6">
+          <AppIcon
+            iconPath={app.icon_path}
+            name={app.name}
+            size={96}
+            version={app.updated_at}
+            className="shadow-e2"
+          />
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-4xl font-bold tracking-tight text-ink md:text-5xl">
+              {app.name}
+            </h1>
+            {/* Hairline + package — a typesetter's slug under the title. */}
+            <div className="mt-2 flex items-center gap-3">
+              <span className="h-px w-8 bg-outline" aria-hidden />
+              <span className="truncate font-mono text-xs text-ink-mute">
+                {app.package_name}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              <Badge variant={app.visibility === "private" ? "accent" : "outline"}>
+                {app.visibility}
+              </Badge>
+              <Badge variant={app.status === "published" ? "primary" : "soft"}>
+                {app.status.replace("_", " ")}
+              </Badge>
+            </div>
+          </div>
+          <Button asChild variant="outlined" size="md">
+            <Link href={`/apps/${app.package_name}`}>
+              <Eye className="h-4 w-4" /> {t("myApps.edit.publicPage")}
+            </Link>
+          </Button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+
+function Rail({
+  sections,
+  active,
+  onPick,
+}: {
+  sections: { id: string; step: string; label: string }[];
+  active: string;
+  onPick: (id: string) => void;
+}) {
+  // Hidden on mobile — the long content already provides natural flow.
+  // On desktop it sits sticky just under the site header so the operator
+  // can jump between sections without losing place.
+  return (
+    <nav aria-label="Sections" className="hidden lg:block">
+      <div className="sticky top-20 space-y-3">
+        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute">
+          / sections
+        </div>
+        <ul className="space-y-0.5">
+          {sections.map((s) => {
+            const isActive = s.id === active;
+            return (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => onPick(s.id)}
+                  className={cn(
+                    "group flex w-full items-baseline gap-3 rounded-xl px-2 py-1.5 text-left transition-colors",
+                    isActive
+                      ? "bg-primary-container/40 text-primary-on-container"
+                      : "text-ink-soft hover:bg-surface-2 hover:text-ink",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "w-7 shrink-0 font-mono text-[10px] tabular-nums tracking-wider",
+                      isActive ? "text-primary" : "text-ink-mute",
+                    )}
+                  >
+                    {s.step}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{s.label}</span>
+                  {isActive && (
+                    <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-primary" />
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </nav>
+  );
+}
+
+
 function Section({
+  id,
   step,
   title,
   subtitle,
   children,
 }: {
+  id: string;
   step: string;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="surface p-6">
-      <header className="mb-5 flex items-center gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-pill bg-primary-container font-mono text-sm font-bold text-primary-on-container">
-          {step}
-        </span>
-        <div>
-          <h2 className="text-xl font-bold tracking-tight text-ink">{title}</h2>
-          {subtitle && <p className="text-sm text-ink-mute">{subtitle}</p>}
+    <section
+      data-section={id}
+      id={`section-${id}`}
+      className="relative scroll-mt-24 rounded-3xl border border-outline-soft bg-surface p-6 md:p-8"
+    >
+      <header className="mb-6 flex flex-col gap-2 border-b border-outline-soft pb-5">
+        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute">
+          Section {step}
+        </div>
+        <div className="flex items-baseline gap-4">
+          {/* Oversized faint section number in the gutter — the editorial
+              signature of this page. tabular-nums keeps it stable. */}
+          <span className="hidden font-bold text-outline tabular-nums leading-none md:block md:text-6xl">
+            {step}
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-2xl font-bold tracking-tight text-ink">{title}</h2>
+            {subtitle && (
+              <p className="mt-1 max-w-prose text-sm leading-relaxed text-ink-soft">
+                {subtitle}
+              </p>
+            )}
+          </div>
         </div>
       </header>
       {children}
+    </section>
+  );
+}
+
+
+function DangerZone({ onDelete }: { onDelete: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <section
+      className="relative overflow-hidden rounded-3xl border-2 border-danger/40 p-6"
+      style={{
+        background:
+          "linear-gradient(135deg, rgb(var(--danger) / 0.06) 0%, transparent 60%)",
+      }}
+    >
+      {/* Diagonal hazard hatch in the corner — distinct from the page's
+          horizontal rule texture, signals "this is the destructive end
+          of the workshop". */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 opacity-30"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(45deg, rgb(var(--danger)) 0 2px, transparent 2px 8px)",
+        }}
+      />
+      <div className="relative flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-danger">
+            ⚠ {t("myApps.edit.sections.dangerEyebrow")}
+          </div>
+          <h2 className="mt-1 text-xl font-bold tracking-tight text-danger">
+            {t("myApps.edit.sections.danger")}
+          </h2>
+          <p className="mt-1 max-w-prose text-sm text-ink-soft">
+            {t("myApps.edit.sections.dangerSubtitle")}
+          </p>
+        </div>
+        <Button variant="danger" onClick={onDelete}>
+          <Trash2 className="h-4 w-4" /> {t("myApps.edit.deleteApp")}
+        </Button>
+      </div>
     </section>
   );
 }

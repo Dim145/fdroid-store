@@ -660,6 +660,7 @@
         "versionsSubtitleAuto": "Mets en ligne un nouvel APK pour publier une nouvelle version. Le signataire doit correspondre. La dernière version publiée est suggérée automatiquement aux clients F-Droid.",
         "versionsSubtitleManual": "Mets en ligne un nouvel APK pour publier une nouvelle version. Le signataire doit correspondre. La version suggérée est verrouillée — les uploads ne la déplacent plus automatiquement.",
         "danger": "Zone dangereuse",
+        "dangerEyebrow": "Destructif",
         "dangerSubtitle": "Supprime l'app et toutes ses versions, icônes et captures.",
         "collaborators": "Co-mainteneurs",
         "collaboratorsSubtitle": "Utilisateurs qui peuvent gérer cette fiche avec toi. Ils ont toutes les permissions sauf supprimer l'app, transférer la propriété, changer la visibilité et gérer cette liste.",

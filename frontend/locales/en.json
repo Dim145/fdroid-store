@@ -660,6 +660,7 @@
         "versionsSubtitleAuto": "Upload a new APK to publish a new version. The signer must match. The latest published version is auto-suggested to F-Droid clients.",
         "versionsSubtitleManual": "Upload a new APK to publish a new version. The signer must match. Suggested version is pinned — uploads no longer auto-bump it.",
         "danger": "Danger zone",
+        "dangerEyebrow": "Destructive",
         "dangerSubtitle": "Deletes the app and all of its versions, icons and screenshots.",
         "collaborators": "Co-maintainers",
         "collaboratorsSubtitle": "Users who can manage this listing alongside you. They get every permission except deleting the app, transferring ownership, changing visibility, and managing this list.",
