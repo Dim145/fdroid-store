@@ -2,6 +2,7 @@
 
 import { Check, Copy, Smartphone } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { RepoQrCode } from "@/components/repo-qr-code";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
  * QR for cross-device handoff (scan from your phone). Both pull the LIVE
  * repo address through useRepoInfo so admin edits propagate immediately. */
 export function RepoCta() {
+  const { t } = useTranslation();
   const repo = useRepoInfo();
   const [copied, setCopied] = useState(false);
 
@@ -41,11 +43,10 @@ export function RepoCta() {
         </div>
         <div>
           <h3 className="text-2xl font-bold tracking-tight text-ink md:text-3xl">
-            Subscribe with the F-Droid client.
+            {t("repoCta.title")}
           </h3>
           <p className="mt-1 max-w-xl text-sm text-ink-soft md:text-base">
-            Scan the code with your phone, or paste the URL in F-Droid →
-            Settings → Repositories → +.
+            {t("repoCta.body")}
           </p>
           <button
             type="button"
@@ -62,7 +63,7 @@ export function RepoCta() {
           <div className="mt-4">
             <Button asChild variant="filled" size="lg">
               <a href={fdroidDeepLink(repo.url, { fingerprint: repo.fingerprint })}>
-                Open in F-Droid
+                {t("repoCta.open")}
               </a>
             </Button>
           </div>

@@ -1,3 +1,7 @@
+"use client";
+
+import { useTranslation } from "react-i18next";
+
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -13,10 +17,11 @@ type Props = {
  * caller is responsible for placing this inside a ``relative`` parent — the
  * NsfwTag positions itself absolutely against that. */
 export function NsfwTag({ active, size = "sm", className }: Props) {
+  const { t } = useTranslation();
   if (!active) return null;
   return (
     <span
-      aria-label="NSFW content"
+      aria-label={t("appDetail.nsfw.tagline")}
       className={cn(
         "pointer-events-none absolute z-10 select-none rounded-md bg-danger",
         "font-mono font-bold uppercase tracking-wider text-danger-fg shadow-e1",
@@ -27,7 +32,7 @@ export function NsfwTag({ active, size = "sm", className }: Props) {
         className,
       )}
     >
-      NSFW
+      {t("nsfwTag")}
     </span>
   );
 }

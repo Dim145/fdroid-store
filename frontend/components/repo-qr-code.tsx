@@ -2,6 +2,7 @@
 
 import { QrCode as QrIcon } from "lucide-react";
 import QRCode from "react-qr-code";
+import { useTranslation } from "react-i18next";
 
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ export function RepoQrCode({
   repoUrl,
   showCaption = false,
 }: Props) {
+  const { t } = useTranslation();
   const repo = useRepoInfo();
   const effectiveFingerprint = fingerprint ?? repo.fingerprint;
   const effectiveRepoUrl = repoUrl ?? repo.url;
@@ -57,13 +59,13 @@ export function RepoQrCode({
           bgColor="#FFFFFF"
           fgColor="#0A0A0A"
           level="M"
-          aria-label="F-Droid repository QR code"
+          aria-label={t("repoQr.ariaLabel")}
         />
       </div>
       {showCaption && (
         <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-mute">
           <QrIcon className="h-3 w-3" />
-          Scan in F-Droid
+          {t("repoQr.caption")}
         </p>
       )}
     </div>

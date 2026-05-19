@@ -2,6 +2,7 @@
 
 import * as RToast from "@radix-ui/react-toast";
 import { CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { useToastStore, type ToastItem } from "@/lib/toast-store";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,7 @@ const VARIANT_STYLES: Record<
  * Zustand store so any module can fire ``toast.success(...)`` without
  * passing a ref through props. */
 export function Toaster() {
+  const { t: tr } = useTranslation();
   const toasts = useToastStore((s) => s.toasts);
   const dismiss = useToastStore((s) => s.dismiss);
 
@@ -61,7 +63,7 @@ export function Toaster() {
               )}
             </div>
             <RToast.Close
-              aria-label="Dismiss"
+              aria-label={tr("common.close")}
               className="flex h-6 w-6 shrink-0 items-center justify-center rounded-pill opacity-60 transition-opacity hover:opacity-100"
             >
               <X className="h-3.5 w-3.5" />
