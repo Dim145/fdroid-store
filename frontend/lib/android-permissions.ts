@@ -143,16 +143,31 @@ const KNOWN: Record<string, { group: PermissionGroupKey; key: string }> = {
   "android.permission.FOREGROUND_SERVICE":                 { group: "SYSTEM", key: "FOREGROUND_SERVICE" },
   "android.permission.FOREGROUND_SERVICE_DATA_SYNC":       { group: "SYSTEM", key: "FOREGROUND_SERVICE_DATA_SYNC" },
   "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK":  { group: "SYSTEM", key: "FOREGROUND_SERVICE_MEDIA_PLAYBACK" },
+  "android.permission.FOREGROUND_SERVICE_SPECIAL_USE":     { group: "SYSTEM", key: "FOREGROUND_SERVICE_SPECIAL_USE" },
+  "android.permission.FOREGROUND_SERVICE_LOCATION":        { group: "SYSTEM", key: "FOREGROUND_SERVICE_LOCATION" },
+  "android.permission.FOREGROUND_SERVICE_CAMERA":          { group: "SYSTEM", key: "FOREGROUND_SERVICE_CAMERA" },
+  "android.permission.FOREGROUND_SERVICE_MICROPHONE":      { group: "SYSTEM", key: "FOREGROUND_SERVICE_MICROPHONE" },
+  "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE":{ group: "SYSTEM", key: "FOREGROUND_SERVICE_CONNECTED_DEVICE" },
+  "android.permission.FOREGROUND_SERVICE_PHONE_CALL":      { group: "SYSTEM", key: "FOREGROUND_SERVICE_PHONE_CALL" },
+  "android.permission.FOREGROUND_SERVICE_HEALTH":          { group: "SYSTEM", key: "FOREGROUND_SERVICE_HEALTH" },
+  "android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING":{ group: "SYSTEM", key: "FOREGROUND_SERVICE_REMOTE_MESSAGING" },
+  "android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED": { group: "SYSTEM", key: "FOREGROUND_SERVICE_SYSTEM_EXEMPTED" },
   "android.permission.VIBRATE":                            { group: "SYSTEM", key: "VIBRATE" },
+  "android.permission.FLASHLIGHT":                         { group: "SYSTEM", key: "FLASHLIGHT" },
   "android.permission.MODIFY_AUDIO_SETTINGS":              { group: "SYSTEM", key: "MODIFY_AUDIO_SETTINGS" },
   "android.permission.DISABLE_KEYGUARD":                   { group: "SYSTEM", key: "DISABLE_KEYGUARD" },
+  "android.permission.TURN_SCREEN_ON":                     { group: "SYSTEM", key: "TURN_SCREEN_ON" },
+  "android.permission.USE_FULL_SCREEN_INTENT":             { group: "SYSTEM", key: "USE_FULL_SCREEN_INTENT" },
+  "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS": { group: "SYSTEM", key: "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" },
   "android.permission.SYSTEM_ALERT_WINDOW":                { group: "SYSTEM", key: "SYSTEM_ALERT_WINDOW" },
   "android.permission.READ_LOGS":                          { group: "SYSTEM", key: "READ_LOGS" },
   "android.permission.REQUEST_INSTALL_PACKAGES":           { group: "SYSTEM", key: "REQUEST_INSTALL_PACKAGES" },
+  "android.permission.REQUEST_DELETE_PACKAGES":            { group: "SYSTEM", key: "REQUEST_DELETE_PACKAGES" },
   "android.permission.QUERY_ALL_PACKAGES":                 { group: "SYSTEM", key: "QUERY_ALL_PACKAGES" },
   "android.permission.SCHEDULE_EXACT_ALARM":               { group: "SYSTEM", key: "SCHEDULE_EXACT_ALARM" },
   "android.permission.USE_EXACT_ALARM":                    { group: "SYSTEM", key: "USE_EXACT_ALARM" },
   "android.permission.SET_WALLPAPER":                      { group: "SYSTEM", key: "SET_WALLPAPER" },
+  "android.permission.SET_WALLPAPER_HINTS":                { group: "SYSTEM", key: "SET_WALLPAPER_HINTS" },
   "android.permission.EXPAND_STATUS_BAR":                  { group: "SYSTEM", key: "EXPAND_STATUS_BAR" },
   "android.permission.REORDER_TASKS":                      { group: "SYSTEM", key: "REORDER_TASKS" },
   "android.permission.KILL_BACKGROUND_PROCESSES":          { group: "SYSTEM", key: "KILL_BACKGROUND_PROCESSES" },
@@ -162,6 +177,9 @@ const KNOWN: Record<string, { group: PermissionGroupKey; key: string }> = {
   "android.permission.READ_SYNC_SETTINGS":                 { group: "SYSTEM", key: "READ_SYNC_SETTINGS" },
   "android.permission.WRITE_SYNC_SETTINGS":                { group: "SYSTEM", key: "WRITE_SYNC_SETTINGS" },
   "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE": { group: "SYSTEM", key: "BIND_NOTIFICATION_LISTENER_SERVICE" },
+  "android.permission.BIND_ACCESSIBILITY_SERVICE":         { group: "SYSTEM", key: "BIND_ACCESSIBILITY_SERVICE" },
+  "android.permission.BIND_DEVICE_ADMIN":                  { group: "SYSTEM", key: "BIND_DEVICE_ADMIN" },
+  "android.permission.BIND_INPUT_METHOD":                  { group: "SYSTEM", key: "BIND_INPUT_METHOD" },
 };
 
 export type ResolvedPermission = {
@@ -180,9 +198,20 @@ export type ResolvedPermission = {
  *  best-effort humanisation of its short name (snake_case → " "). */
 export function resolvePermission(raw: string): ResolvedPermission {
   const known = KNOWN[raw];
-  const short = raw.startsWith("android.permission.")
-    ? raw.slice("android.permission.".length)
-    : raw;
+  // Strip the platform/vendor namespace so a permission like
+  // ``org.codeaurora.permission.power_off_alarm`` renders as "Power off
+  // alarm" instead of leaking the full constant path.
+  let short = raw;
+  if (short.startsWith("android.permission.")) {
+    short = short.slice("android.permission.".length);
+  } else {
+    const idx = short.lastIndexOf(".permission.");
+    if (idx !== -1) short = short.slice(idx + ".permission.".length);
+    else {
+      const dot = short.lastIndexOf(".");
+      if (dot !== -1) short = short.slice(dot + 1);
+    }
+  }
   const humanised = short
     .toLowerCase()
     .replace(/_/g, " ")
