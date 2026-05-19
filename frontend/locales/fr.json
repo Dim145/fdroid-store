@@ -335,8 +335,15 @@
     "backToApps": "Retour aux apps"
   },
   "myApps": {
+    "eyebrow": "Développeur",
     "title": "Mes apps",
-    "subtitle": "Les apps que tu as mises en ligne sur ce dépôt. Clique pour gérer, ou démarre une nouvelle fiche.",
+    "subtitle": "Gère les sorties, versions et métadonnées.",
+    "newRelease": "Nouvelle sortie",
+    "createFirst": "Créer ta première app",
+    "nothingYet": "Rien de publié pour l'instant",
+    "nothingYetBody": "Commence par déposer ton premier APK — on extrait les métadonnées pour toi.",
+    "manage": "Gérer",
+    "updated": "Mise à jour {{date}}",
     "newApp": "Nouvelle app",
     "empty": "Tu n'as encore aucune app en ligne.",
     "loadFailed": "Échec du chargement des apps",
@@ -549,12 +556,31 @@
       "setupWizard": "Assistant de setup"
     },
     "overview": {
-      "title": "Vue d'ensemble",
-      "subtitle": "Un aperçu rapide du contenu du dépôt et de l'activité récente."
+      "eyebrow": "Admin · vue d'ensemble",
+      "title": "Tableau de bord",
+      "subtitle": "Un aperçu rapide du contenu du dépôt et de l'activité récente.",
+      "triggerReindex": "Lancer un reindex",
+      "reindexFailed": "Échec du reindex",
+      "stats": {
+        "users": "Utilisateurs",
+        "apps": "Apps",
+        "publishedCount": "{{count}} publiées",
+        "pendingApks": "APKs en attente",
+        "downloads": "Téléchargements"
+      },
+      "recentDownloads": "Téléchargements récents",
+      "last20": "20 derniers événements",
+      "noDownloads": "Aucun téléchargement pour l'instant.",
+      "deletedApp": "app supprimée",
+      "deletedUser": "utilisateur supprimé",
+      "anon": "anon"
     },
     "apps": {
       "title": "Apps & APKs",
       "subtitle": "Modère les fiches et publie les pressages.",
+      "rejectPrompt": "Motif du rejet ?",
+      "rejectDefault": "Rejeté",
+      "loadFailed": "Échec",
       "rescanAll": "Tout rescanner",
       "rescanning": "Rescan en cours…",
       "rescanAllConfirm": "Rescanner chaque APK publié ?",
@@ -650,7 +676,25 @@
       "delete": "Supprimer",
       "deleteConfirm": "Supprimer l'utilisateur {{name}} ?",
       "yes": "oui",
-      "no": "non"
+      "no": "non",
+      "loadFailed": "Échec",
+      "createFailed": "Échec de la création",
+      "addTitle": "Ajouter un utilisateur",
+      "create": "Créer",
+      "columns2": {
+        "email": "E-mail",
+        "username": "Identifiant",
+        "role": "Rôle",
+        "provider": "Fournisseur",
+        "lastLogin": "Dernière connexion",
+        "actions": "Actions"
+      },
+      "disabled": "Désactivé",
+      "disable": "Désactiver",
+      "enable": "Activer",
+      "makeUser": "Passer utilisateur",
+      "makeAdmin": "Passer admin",
+      "emptyUsers": "Aucun utilisateur."
     },
     "access": {
       "title": "Accès",

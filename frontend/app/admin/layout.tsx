@@ -3,6 +3,7 @@
 import { LayoutDashboard, AppWindow, Tags, Users, Settings2, Wand2, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslation } from "react-i18next";
 
 import { AuthGuard } from "@/components/auth-guard";
 import { SiteHeader } from "@/components/site-header";
@@ -10,16 +11,17 @@ import { Toaster } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { href: "/admin", label: "Overview", icon: LayoutDashboard },
-  { href: "/admin/apps", label: "Apps & APKs", icon: AppWindow },
-  { href: "/admin/categories", label: "Categories", icon: Tags },
-  { href: "/admin/users", label: "Users", icon: Users },
-  { href: "/admin/access", label: "Access", icon: ShieldCheck },
-  { href: "/admin/repo", label: "Repo config", icon: Settings2 },
-  { href: "/admin/setup", label: "Setup wizard", icon: Wand2 },
-];
+  { href: "/admin", labelKey: "admin.nav.overview", icon: LayoutDashboard },
+  { href: "/admin/apps", labelKey: "admin.nav.appsApks", icon: AppWindow },
+  { href: "/admin/categories", labelKey: "admin.nav.categories", icon: Tags },
+  { href: "/admin/users", labelKey: "admin.nav.users", icon: Users },
+  { href: "/admin/access", labelKey: "admin.nav.access", icon: ShieldCheck },
+  { href: "/admin/repo", labelKey: "admin.nav.repoConfig", icon: Settings2 },
+  { href: "/admin/setup", labelKey: "admin.nav.setupWizard", icon: Wand2 },
+] as const;
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const pathname = usePathname();
   return (
     <AuthGuard requireAdmin>
@@ -30,7 +32,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="sticky top-20 space-y-1">
               <div className="eyebrow mb-3 flex items-center gap-2">
                 <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-                Admin
+                {t("admin.eyebrow")}
               </div>
               {NAV.map((item) => {
                 const Icon = item.icon;
@@ -47,7 +49,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     )}
                   >
                     <Icon className="h-4 w-4" strokeWidth={2.2} />
-                    {item.label}
+                    {t(item.labelKey)}
                   </Link>
                 );
               })}

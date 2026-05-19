@@ -335,8 +335,15 @@
     "backToApps": "Back to apps"
   },
   "myApps": {
+    "eyebrow": "Developer",
     "title": "My apps",
-    "subtitle": "Apps you've uploaded to this repo. Click one to manage it, or start a new listing.",
+    "subtitle": "Manage releases, versions and metadata.",
+    "newRelease": "New release",
+    "createFirst": "Create your first app",
+    "nothingYet": "Nothing published yet",
+    "nothingYetBody": "Start by uploading your first APK — we extract metadata for you.",
+    "manage": "Manage",
+    "updated": "Updated {{date}}",
     "newApp": "New app",
     "empty": "You haven't uploaded any app yet.",
     "loadFailed": "Failed to load apps",
@@ -549,12 +556,31 @@
       "setupWizard": "Setup wizard"
     },
     "overview": {
-      "title": "Overview",
-      "subtitle": "A quick read of what's in the repo and recent activity."
+      "eyebrow": "Admin · overview",
+      "title": "Dashboard",
+      "subtitle": "A quick read of what's in the repo and recent activity.",
+      "triggerReindex": "Trigger reindex",
+      "reindexFailed": "Reindex failed",
+      "stats": {
+        "users": "Users",
+        "apps": "Apps",
+        "publishedCount": "{{count}} published",
+        "pendingApks": "Pending APKs",
+        "downloads": "Downloads"
+      },
+      "recentDownloads": "Recent downloads",
+      "last20": "Last 20 events",
+      "noDownloads": "No downloads yet.",
+      "deletedApp": "deleted app",
+      "deletedUser": "deleted user",
+      "anon": "anon"
     },
     "apps": {
       "title": "Apps & APKs",
       "subtitle": "Moderate listings and publish pressings.",
+      "rejectPrompt": "Reason for rejection?",
+      "rejectDefault": "Rejected",
+      "loadFailed": "Failed",
       "rescanAll": "Rescan all",
       "rescanning": "Rescanning…",
       "rescanAllConfirm": "Rescan every published APK?",
@@ -650,7 +676,25 @@
       "delete": "Delete",
       "deleteConfirm": "Delete user {{name}}?",
       "yes": "yes",
-      "no": "no"
+      "no": "no",
+      "loadFailed": "Failed",
+      "createFailed": "Create failed",
+      "addTitle": "Add a user",
+      "create": "Create",
+      "columns2": {
+        "email": "Email",
+        "username": "Username",
+        "role": "Role",
+        "provider": "Provider",
+        "lastLogin": "Last login",
+        "actions": "Actions"
+      },
+      "disabled": "Disabled",
+      "disable": "Disable",
+      "enable": "Enable",
+      "makeUser": "Make user",
+      "makeAdmin": "Make admin",
+      "emptyUsers": "No users."
     },
     "access": {
       "title": "Access",
