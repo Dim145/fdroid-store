@@ -942,8 +942,27 @@
       "addNamePlaceholder": "ex. Productivité",
       "addDescriptionLabel": "Description (optionnelle)",
       "addDescriptionPlaceholder": "Indice court pour les utilisateurs qui parcourent ce groupe.",
-      "addBtn": "Ajouter",
+      "addBtn": "Ajouter une catégorie",
       "adding": "Ajout…",
+      "noDescription": "sans description",
+      "stats": {
+        "total": "Total",
+        "used": "Utilisées",
+        "empty": "Vides",
+        "top": "La plus utilisée"
+      },
+      "sort": {
+        "usage": "Par usage",
+        "name": "A–Z",
+        "emptyOnly": "Vides seulement"
+      },
+      "cleanup_one": "Nettoyer {{count}} vide",
+      "cleanup_other": "Nettoyer {{count}} vides",
+      "cleanupConfirm_one": "Supprimer la {{count}} catégorie vide ? Action irréversible.",
+      "cleanupConfirm_other": "Supprimer les {{count}} catégories vides ? Action irréversible.",
+      "cleanupOk_one": "{{count}} catégorie supprimée.",
+      "cleanupOk_other": "{{count}} catégories supprimées.",
+      "cleanupPartial": "{{ok}} supprimées, {{fail}} échec.",
       "columns": {
         "name": "Nom",
         "description": "Description",
@@ -956,6 +975,11 @@
       "cancel": "Annuler",
       "edit": "Modifier",
       "delete": "Supprimer",
+      "deletePrompt": "Supprimer « {{name}} » ?",
+      "deleteHintEmpty": "Aucune app n'est taguée avec cette catégorie.",
+      "deleteHintWithApps_one": "{{count}} app sera détachée.",
+      "deleteHintWithApps_other": "{{count}} apps seront détachées.",
+      "deleteConfirm": "Confirmer la suppression",
       "created": "Catégorie créée.",
       "renamed": "Renommée en « {{name}} ».",
       "deleted": "« {{name}} » supprimée.",
@@ -965,7 +989,8 @@
       "saveFailed": "Échec de l'enregistrement",
       "deleteFailed": "Échec de la suppression",
       "loadFailed": "Échec du chargement des catégories",
-      "empty": "Aucune catégorie pour l'instant. Ajoutes-en une pour commencer."
+      "empty": "Aucune catégorie pour l'instant. Ajoutes-en une pour commencer.",
+      "noEmpty": "Rien à nettoyer — chaque catégorie a au moins une app."
     },
     "users": {
       "title": "Utilisateurs",

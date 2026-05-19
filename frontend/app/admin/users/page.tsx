@@ -231,7 +231,10 @@ export default function AdminUsersPage() {
 /*  Stats hero                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/** Big number that counts up over ~700 ms the first time it renders. */
+/** Big number that animates from the previously-shown value to the
+ *  new one whenever ``value`` changes. The first useful change is when
+ *  the fetch resolves (0 → N), which gives us the count-up. Subsequent
+ *  CRUD also animates short transitions (e.g. 5 → 4 after a delete). */
 function Stat({
   label,
   value,
@@ -241,21 +244,21 @@ function Stat({
   value: number;
   accent?: "ink" | "primary" | "accent" | "danger" | "mute";
 }) {
-  const [display, setDisplay] = useState(value);
-  const initial = useRef(true);
+  // Start at 0 so the first paint is the "before fetch" snapshot, and
+  // the effect below animates up to the real number once it lands.
+  const [display, setDisplay] = useState(0);
+  const prev = useRef(0);
 
-  // Only animate on mount; subsequent updates snap so the page doesn't
-  // re-count every time the list refreshes.
   useEffect(() => {
-    if (!initial.current) {
-      setDisplay(value);
+    const from = prev.current;
+    const to = value;
+    prev.current = to;
+    if (from === to) {
+      setDisplay(to);
       return;
     }
-    initial.current = false;
     const duration = 700;
     const start = performance.now();
-    const from = 0;
-    const to = value;
     let raf = 0;
     function tick(now: number) {
       const p = Math.min(1, (now - start) / duration);
@@ -265,12 +268,6 @@ function Stat({
     }
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Snap on real updates after mount.
-  useEffect(() => {
-    if (!initial.current) setDisplay(value);
   }, [value]);
 
   const color = {

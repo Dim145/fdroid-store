@@ -942,8 +942,27 @@
       "addNamePlaceholder": "e.g. Productivity",
       "addDescriptionLabel": "Description (optional)",
       "addDescriptionPlaceholder": "One-line hint for users browsing this group.",
-      "addBtn": "Add",
+      "addBtn": "Add a category",
       "adding": "Adding…",
+      "noDescription": "no description",
+      "stats": {
+        "total": "Total",
+        "used": "In use",
+        "empty": "Empty",
+        "top": "Most used"
+      },
+      "sort": {
+        "usage": "By usage",
+        "name": "A–Z",
+        "emptyOnly": "Empty only"
+      },
+      "cleanup_one": "Cleanup {{count}} empty",
+      "cleanup_other": "Cleanup {{count}} empties",
+      "cleanupConfirm_one": "Delete the {{count}} empty category? This cannot be undone.",
+      "cleanupConfirm_other": "Delete the {{count}} empty categories? This cannot be undone.",
+      "cleanupOk_one": "{{count}} category removed.",
+      "cleanupOk_other": "{{count}} categories removed.",
+      "cleanupPartial": "Removed {{ok}}, {{fail}} failed.",
       "columns": {
         "name": "Name",
         "description": "Description",
@@ -956,6 +975,11 @@
       "cancel": "Cancel",
       "edit": "Edit",
       "delete": "Delete",
+      "deletePrompt": "Delete \"{{name}}\"?",
+      "deleteHintEmpty": "This category has no apps tagged.",
+      "deleteHintWithApps_one": "{{count}} app will be un-tagged.",
+      "deleteHintWithApps_other": "{{count}} apps will be un-tagged.",
+      "deleteConfirm": "Confirm delete",
       "created": "Category created.",
       "renamed": "Renamed to \"{{name}}\".",
       "deleted": "Deleted \"{{name}}\".",
@@ -965,7 +989,8 @@
       "saveFailed": "Save failed",
       "deleteFailed": "Delete failed",
       "loadFailed": "Failed to load categories",
-      "empty": "No categories yet. Add one above to get started."
+      "empty": "No categories yet. Add one above to get started.",
+      "noEmpty": "Nothing to clean up — every category has at least one app."
     },
     "users": {
       "title": "Users",
