@@ -896,23 +896,45 @@
     },
     "apps": {
       "title": "Apps & APKs",
-      "subtitle": "Modère les fiches et publie les pressages.",
+      "subtitle": "Modère les fiches, valide les pressages, garde le catalogue propre.",
+      "search": "Rechercher par nom, paquet ou auteur…",
       "rejectPrompt": "Motif du rejet ?",
       "rejectDefault": "Rejeté",
-      "loadFailed": "Échec",
+      "rejectReasonLabel": "Motif — visible par l'utilisateur",
+      "rejectPlaceholder": "ex. signature qui change, pas de politique de confidentialité…",
+      "loadFailed": "Échec du chargement",
       "rescanAll": "Tout rescanner",
       "rescanning": "Rescan en cours…",
       "rescanAllConfirm": "Rescanner chaque APK publié ?",
+      "stats": {
+        "total": "Total",
+        "published": "Publiés",
+        "draft": "Brouillons",
+        "pending": "En attente",
+        "archived": "Archivés"
+      },
       "filter": {
-        "all": "Tous statuts",
+        "all": "Tous",
         "draft": "Brouillon",
-        "pending": "En attente de revue",
+        "pending": "En attente",
         "published": "Publié",
         "rejected": "Rejeté",
-        "archived": "Archivé"
+        "archived": "Archivé",
+        "private": "Privée"
       },
+      "pendingTitle_one": "{{count}} APK à valider",
+      "pendingTitle_other": "{{count}} APK à valider",
       "pendingPressings_one": "{{count}} pressage en attente",
       "pendingPressings_other": "{{count}} pressages en attente",
+      "pending": {
+        "uploaded": "Déposé"
+      },
+      "row": {
+        "updated": "Mise à jour",
+        "manage": "Gérer",
+        "pendingApks_one": "{{count}} APK en attente",
+        "pendingApks_other": "{{count}} APK en attente"
+      },
       "columns": {
         "title": "Titre",
         "package": "Paquet",
@@ -926,12 +948,41 @@
         "rescan": "Rescanner",
         "publish": "Publier",
         "archive": "Archiver",
-        "reject": "Rejeter"
+        "reject": "Rejeter",
+        "confirmReject": "Confirmer le rejet"
+      },
+      "drawer": {
+        "viewPublic": "Voir la page publique",
+        "fullEdit": "Édition complète",
+        "rescan": "Rescanner les APK",
+        "rescanning": "Rescan…",
+        "lifecycle": "Cycle de vie",
+        "lifecycleBody": "Change le statut public de cette app. Publier la rend visible ; archiver la masque sans la supprimer.",
+        "versions_one": "{{count}} version",
+        "versions_other": "{{count}} versions",
+        "versionsBody": "Toutes les APK déposées pour cette app. Les pressages en attente peuvent être validés ou rejetés avec un motif.",
+        "noVersions": "Aucune APK déposée pour l'instant.",
+        "publishedOn": "publiée le {{when}}",
+        "signature": "Certificat de signature",
+        "signatureUnset": "Sera verrouillé à la première APK publiée."
+      },
+      "toast": {
+        "statusUpdated": "Statut mis à jour.",
+        "statusFailed": "Échec du changement de statut",
+        "apkPublished": "APK publiée.",
+        "apkPublishFailed": "Échec de la publication",
+        "apkRejected": "APK rejetée.",
+        "apkRejectFailed": "Échec du rejet",
+        "rescanned": "{{name}} : {{apks}} APK · {{icons}} icônes · {{errors}} erreurs",
+        "rescanFailed": "Échec du rescan",
+        "rescanAll": "{{apks}} APK rescannées · {{icons}} icônes rafraîchies"
       },
       "rescanResult": "{{name}} : {{apks}} APKs · {{icon}} icône · {{errors}} erreurs",
       "rescanAllResult": "{{apks}} APKs rescannés · {{icons}} icônes rafraîchies",
       "rescanFailed": "Échec du rescan",
-      "empty": "Aucune app ne correspond à ce filtre."
+      "empty": "Aucune app pour l'instant. Demande à quelqu'un d'en publier une !",
+      "emptyFilter": "Aucune app ne correspond au filtre actuel.",
+      "clearFilters": "Réinitialiser les filtres"
     },
     "categories": {
       "title": "Catégories",

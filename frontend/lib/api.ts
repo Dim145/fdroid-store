@@ -474,7 +474,7 @@ export const api = {
       apiFetch<CurrentUser>(`/api/v1/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
     deleteUser: (id: string) => apiFetch<void>(`/api/v1/admin/users/${id}`, { method: "DELETE" }),
     listApps: (statusFilter?: string) =>
-      apiFetch<Array<AppSummary>>(`/api/v1/admin/apps${statusFilter ? `?status_filter=${statusFilter}` : ""}`),
+      apiFetch<Array<AppDetail>>(`/api/v1/admin/apps${statusFilter ? `?status_filter=${statusFilter}` : ""}`),
     updateApp: (id: string, payload: Record<string, unknown>) =>
       apiFetch<AppSummary>(`/api/v1/admin/apps/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
     publishApk: (id: string) =>

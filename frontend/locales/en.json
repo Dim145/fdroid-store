@@ -896,23 +896,45 @@
     },
     "apps": {
       "title": "Apps & APKs",
-      "subtitle": "Moderate listings and publish pressings.",
+      "subtitle": "Moderate listings, approve pressings, and keep the catalogue tidy.",
+      "search": "Search by name, package or author…",
       "rejectPrompt": "Reason for rejection?",
       "rejectDefault": "Rejected",
-      "loadFailed": "Failed",
+      "rejectReasonLabel": "Reason — shown to the uploader",
+      "rejectPlaceholder": "e.g. signature mismatch, missing privacy policy…",
+      "loadFailed": "Failed to load apps",
       "rescanAll": "Rescan all",
       "rescanning": "Rescanning…",
       "rescanAllConfirm": "Rescan every published APK?",
-      "filter": {
-        "all": "All statuses",
-        "draft": "Draft",
-        "pending": "Pending review",
+      "stats": {
+        "total": "Total",
         "published": "Published",
-        "rejected": "Rejected",
+        "draft": "Draft",
+        "pending": "Pending",
         "archived": "Archived"
       },
+      "filter": {
+        "all": "All",
+        "draft": "Draft",
+        "pending": "Pending",
+        "published": "Published",
+        "rejected": "Rejected",
+        "archived": "Archived",
+        "private": "Private"
+      },
+      "pendingTitle_one": "{{count}} APK awaiting review",
+      "pendingTitle_other": "{{count}} APKs awaiting review",
       "pendingPressings_one": "{{count}} pending pressing",
       "pendingPressings_other": "{{count}} pending pressings",
+      "pending": {
+        "uploaded": "Uploaded"
+      },
+      "row": {
+        "updated": "Updated",
+        "manage": "Manage",
+        "pendingApks_one": "{{count}} APK pending",
+        "pendingApks_other": "{{count}} APKs pending"
+      },
       "columns": {
         "title": "Title",
         "package": "Package",
@@ -926,12 +948,41 @@
         "rescan": "Rescan",
         "publish": "Publish",
         "archive": "Archive",
-        "reject": "Reject"
+        "reject": "Reject",
+        "confirmReject": "Confirm reject"
+      },
+      "drawer": {
+        "viewPublic": "View public page",
+        "fullEdit": "Full edit",
+        "rescan": "Rescan APKs",
+        "rescanning": "Rescanning…",
+        "lifecycle": "Lifecycle",
+        "lifecycleBody": "Switch the public visibility status of this app. Publishing surfaces it in the catalogue; archive hides it without deleting.",
+        "versions_one": "{{count}} version",
+        "versions_other": "{{count}} versions",
+        "versionsBody": "Every APK ever uploaded to this app. Pending ones can be published or rejected with a reason.",
+        "noVersions": "No APK uploaded yet.",
+        "publishedOn": "shipped {{when}}",
+        "signature": "Signing certificate",
+        "signatureUnset": "Will be locked the first time an APK is published."
+      },
+      "toast": {
+        "statusUpdated": "Status updated.",
+        "statusFailed": "Status change failed",
+        "apkPublished": "APK published.",
+        "apkPublishFailed": "Publish failed",
+        "apkRejected": "APK rejected.",
+        "apkRejectFailed": "Reject failed",
+        "rescanned": "{{name}}: {{apks}} APKs · {{icons}} icons · {{errors}} errors",
+        "rescanFailed": "Rescan failed",
+        "rescanAll": "{{apks}} APKs rescanned · {{icons}} icons refreshed"
       },
       "rescanResult": "{{name}}: {{apks}} APKs · {{icon}} icon · {{errors}} errors",
       "rescanAllResult": "{{apks}} APKs rescanned · {{icons}} icons refreshed",
       "rescanFailed": "Rescan failed",
-      "empty": "No apps match this filter."
+      "empty": "No apps yet. Have someone upload one!",
+      "emptyFilter": "No apps match the current filter.",
+      "clearFilters": "Clear filters"
     },
     "categories": {
       "title": "Categories",

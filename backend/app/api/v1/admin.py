@@ -21,7 +21,7 @@ from app.models.invite_code import InviteCode
 from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
-from app.schemas.app import AppAdminUpdate, AppRead
+from app.schemas.app import AppAdminUpdate, AppDetail, AppRead
 from app.schemas.audit_log import AuditLogPage, AuditLogRead
 from app.schemas.invite import InviteCodeCreate, InviteCodeRead
 from app.schemas.repo import RepoConfigRead, RepoConfigUpdate
@@ -213,23 +213,40 @@ async def delete_user(
 # --------------------------------------------------------------------------
 # Apps moderation
 # --------------------------------------------------------------------------
-@router.get("/apps", response_model=list[AppRead])
+@router.get("/apps", response_model=list[AppDetail])
 async def admin_list_apps(
     db: DbSession,
     _: Annotated[User, Depends(get_current_admin)],
     status_filter: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-) -> list[AppRead]:
+) -> list[AppDetail]:
+    """Admin catalogue listing. Returns ``AppDetail`` (rather than the
+    public ``AppRead``) so the moderation UI sees the embedded ``apks``
+    list — that's what powers the "pending review" queue and the
+    per-version Publish / Reject controls without a second roundtrip."""
     stmt = (
         select(App)
-        .options(selectinload(App.categories), selectinload(App.apks))
+        .options(
+            selectinload(App.categories),
+            selectinload(App.apks),
+            selectinload(App.screenshots),
+            selectinload(App.localizations),
+            selectinload(App.owner),
+        )
         .order_by(App.created_at.desc())
     )
     if status_filter:
         stmt = stmt.where(App.status == status_filter)
     rows = (await db.execute(stmt.limit(min(limit, 500)).offset(offset))).scalars().unique().all()
-    return [AppRead.model_validate(a) for a in rows]
+    out: list[AppDetail] = []
+    for a in rows:
+        detail = AppDetail.model_validate(a)
+        if a.owner is not None:
+            detail.owner_id = a.owner.id
+            detail.owner_username = a.owner.username
+        out.append(detail)
+    return out
 
 
 @router.patch("/apps/{app_id}", response_model=AppRead)
