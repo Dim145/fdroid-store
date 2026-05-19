@@ -3,6 +3,7 @@
 import { ArrowUpRight, Calendar, Download, History as HistoryIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
 import { AuthGuard } from "@/components/auth-guard";
@@ -12,6 +13,7 @@ import { api, type DownloadHistoryItem } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/utils";
 
 function HistoryInner() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<DownloadHistoryItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -20,7 +22,7 @@ function HistoryInner() {
     let cancelled = false;
     api.downloadHistory()
       .then((res) => { if (!cancelled) { setItems(res.items); setLoaded(true); } })
-      .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : "Failed"); setLoaded(true); } });
+      .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : t("history.loadFailed")); setLoaded(true); } });
     return () => { cancelled = true; };
   }, []);
 
@@ -40,25 +42,21 @@ function HistoryInner() {
   return (
     <div>
       <header className="mb-6">
-        <div className="eyebrow">Library</div>
+        <div className="eyebrow">{t("history.eyebrow")}</div>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">
-          Download history
+          {t("history.title")}
         </h1>
         <p className="mt-1 max-w-2xl text-ink-soft">
-          Every app you've grabbed from this repo, grouped by package. F-Droid
-          clients don't report back installation status, so this is the
-          closest the repo can come to a "what do I have installed?" view —
-          downloaded ≠ installed, but the version comparison lets you spot
-          out-of-date copies on your devices.
+          {t("history.subtitle")}
         </p>
       </header>
 
       {/* Stats strip */}
       <section className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat icon={<HistoryIcon className="h-5 w-5" />} label="Apps" value={String(items.length)} />
-        <Stat icon={<Download className="h-5 w-5" />} label="Downloads" value={String(totalDownloads)} />
-        <Stat icon={<ArrowUpRight className="h-5 w-5" />} label="Updates available" value={String(updatableCount)} highlight={updatableCount > 0} />
-        <Stat icon={<Calendar className="h-5 w-5" />} label="Total fetched" value={formatBytes(totalBytes)} mono />
+        <Stat icon={<HistoryIcon className="h-5 w-5" />} label={t("history.stats.apps")} value={String(items.length)} />
+        <Stat icon={<Download className="h-5 w-5" />} label={t("history.stats.downloads")} value={String(totalDownloads)} />
+        <Stat icon={<ArrowUpRight className="h-5 w-5" />} label={t("history.stats.updatesAvailable")} value={String(updatableCount)} highlight={updatableCount > 0} />
+        <Stat icon={<Calendar className="h-5 w-5" />} label={t("history.stats.totalFetched")} value={formatBytes(totalBytes)} mono />
       </section>
 
       {error && (
@@ -74,7 +72,7 @@ function HistoryInner() {
           </div>
         ) : items.length === 0 ? (
           <div className="px-6 py-12 text-center italic text-ink-mute">
-            You haven&apos;t downloaded anything from this repo yet.
+            {t("history.empty")}
           </div>
         ) : (
           <ul>
@@ -101,7 +99,7 @@ function HistoryInner() {
                       {it.app_name}
                     </Link>
                     {it.has_update_available && (
-                      <Badge variant="primary">update available</Badge>
+                      <Badge variant="primary">{t("history.updateAvailable")}</Badge>
                     )}
                   </div>
                   <div className="mt-0.5 font-mono text-[11px] text-ink-mute truncate">
@@ -109,7 +107,7 @@ function HistoryInner() {
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-soft">
                     <span>
-                      You downloaded{" "}
+                      {t("history.youDownloaded")}{" "}
                       <span className="font-semibold text-ink">
                         v{it.last_apk_version_name ?? "?"}
                       </span>
@@ -119,26 +117,26 @@ function HistoryInner() {
                     </span>
                     {it.has_update_available && (
                       <span>
-                        latest is{" "}
+                        {t("history.latestIs")}{" "}
                         <span className="font-semibold text-primary">
                           v{it.latest_apk_version_name ?? "?"}
                         </span>
                       </span>
                     )}
                     <span>·</span>
-                    <span>{it.download_count} download{it.download_count === 1 ? "" : "s"}</span>
+                    <span>{t("history.downloadCount", { count: it.download_count })}</span>
                     <span>·</span>
                     <span className="font-mono">{formatBytes(it.bytes_total)}</span>
                   </div>
                   {it.last_downloaded_at && (
                     <div className="mt-1 font-mono text-[10px] text-ink-mute">
-                      last fetched {formatDate(it.last_downloaded_at)}
+                      {t("history.lastFetched", { date: formatDate(it.last_downloaded_at) })}
                     </div>
                   )}
                 </div>
                 <Button asChild variant={it.has_update_available ? "filled" : "outlined"} size="sm">
                   <Link href={`/apps/${encodeURIComponent(it.package_name)}`}>
-                    {it.has_update_available ? "Update" : "View"}
+                    {it.has_update_available ? t("history.update") : t("history.view")}
                   </Link>
                 </Button>
               </li>
@@ -148,11 +146,7 @@ function HistoryInner() {
       </section>
 
       <p className="mt-6 max-w-2xl text-xs text-ink-mute">
-        <strong>Why no "installed" indicator?</strong> The F-Droid Android
-        client doesn't broadcast install status to the repository, so we
-        can't truly know if an APK is still on your device. We show the
-        latest version you downloaded plus whether a newer one is available
-        — the closest approximation a server-side view can offer.
+        <strong>{t("history.whyNoInstalled")}</strong> {t("history.whyNoInstalledBody")}
       </p>
     </div>
   );

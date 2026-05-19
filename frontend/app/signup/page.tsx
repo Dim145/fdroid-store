@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import pkg from "@/package.json";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -22,6 +23,7 @@ export default function SignupPage() {
 }
 
 function SignupInner() {
+  const { t } = useTranslation();
   const router = useRouter();
   const search = useSearchParams();
   const { signup } = useAuth();
@@ -87,18 +89,17 @@ function SignupInner() {
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-fg shadow-e1">
             <span className="text-sm font-bold tracking-tight">fS</span>
           </span>
-          <span className="text-base font-bold tracking-tight">fdroid-store</span>
+          <span className="text-base font-bold tracking-tight">{t("header.brand")}</span>
         </Link>
         <div className="relative">
           <p className="font-mono text-xs uppercase tracking-widest text-primary-on-container/70">
-            publish · sync · install
+            {t("auth.signup.heroEyebrow")}
           </p>
-          <h1 className="mt-3 text-5xl font-bold tracking-tight text-primary-on-container md:text-6xl">
-            Open an account.<br /> Ship your apps.
+          <h1 className="mt-3 whitespace-pre-line text-5xl font-bold tracking-tight text-primary-on-container md:text-6xl">
+            {t("auth.signup.heroTitle")}
           </h1>
           <p className="mt-4 max-w-md text-primary-on-container/80">
-            Publish your Android releases on your own F-Droid repo. Manage API
-            keys, screenshots, changelogs — all from the same place.
+            {t("auth.signup.heroSubtitle")}
           </p>
         </div>
         <div className="relative font-mono text-xs text-primary-on-container/60">v{pkg.version}</div>
@@ -107,32 +108,32 @@ function SignupInner() {
       <section className="flex items-center justify-center p-6 md:p-12">
         <div className="w-full max-w-sm">
           <div className="mb-6 flex items-center justify-between md:hidden">
-            <Link href="/" className="text-sm font-semibold text-ink-soft hover:text-ink">← Back</Link>
+            <Link href="/" className="text-sm font-semibold text-ink-soft hover:text-ink">{t("auth.back")}</Link>
             <ThemeToggle />
           </div>
           <div className="mb-6 hidden md:flex md:justify-end">
             <ThemeToggle />
           </div>
           <h2 className="text-3xl font-bold tracking-tight text-ink">
-            {isClosed ? "Signups are closed" : "Create your account"}
+            {isClosed ? t("auth.signup.closedTitle") : t("auth.signup.title")}
           </h2>
           <p className="mt-1 text-ink-soft">
             {isClosed
-              ? "Ask an administrator to create an account for you."
+              ? t("auth.signup.closedSubtitle")
               : requiresInvite
-              ? "An invite code is required to sign up here."
-              : "It only takes a moment."}
+              ? t("auth.signup.inviteRequiredSubtitle")
+              : t("auth.signup.subtitle")}
           </p>
           {isClosed ? (
             <div className="mt-8 space-y-4">
               <Button asChild variant="outlined" size="xl" className="w-full">
-                <Link href="/login">Back to sign in</Link>
+                <Link href="/login">{t("auth.signup.backToSignIn")}</Link>
               </Button>
             </div>
           ) : (
           <form onSubmit={onSubmit} className="mt-8 space-y-4">
             {requiresInvite && (
-              <Field label="Invite code" htmlFor="invite">
+              <Field label={t("auth.signup.inviteLabel")} htmlFor="invite">
                 <Input
                   id="invite"
                   required
@@ -142,28 +143,28 @@ function SignupInner() {
                 />
               </Field>
             )}
-            <Field label="Email" htmlFor="email">
+            <Field label={t("auth.signup.emailLabel")} htmlFor="email">
               <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
-            <Field label="Username" htmlFor="username">
+            <Field label={t("auth.signup.usernameLabel")} htmlFor="username">
               <Input id="username" required value={username} onChange={(e) => setUsername(e.target.value)} />
             </Field>
-            <Field label="Full name (optional)" htmlFor="fullname">
+            <Field label={t("auth.signup.fullNameLabel")} htmlFor="fullname">
               <Input id="fullname" value={fullName} onChange={(e) => setFullName(e.target.value)} />
             </Field>
-            <Field label="Password" htmlFor="password">
+            <Field label={t("auth.signup.passwordLabel")} htmlFor="password">
               <Input id="password" type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
             {error && (
               <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
             )}
             <Button type="submit" variant="filled" size="xl" className="w-full" disabled={submitting}>
-              {submitting ? "Creating…" : "Create account"}
+              {submitting ? t("auth.signup.submitting") : t("auth.signup.submit")}
             </Button>
             <p className="text-center text-sm text-ink-soft">
-              Already have an account?{" "}
+              {t("auth.signup.alreadyHaveAccount")}{" "}
               <Link href="/login" className="font-medium text-primary hover:underline">
-                Sign in
+                {t("auth.signup.loginLink")}
               </Link>
             </p>
           </form>

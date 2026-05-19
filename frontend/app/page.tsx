@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { AppCard } from "@/components/app-card";
 import { FeatureHero } from "@/components/feature-hero";
@@ -21,6 +22,7 @@ import { useAuth } from "@/lib/auth-store";
  * updated (list) · categories grid · repo CTA.
  * ============================================================================ */
 export default function Home() {
+  const { t } = useTranslation();
   const router = useRouter();
   const { user, loading } = useAuth();
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -89,18 +91,16 @@ export default function Home() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center px-6 text-center">
         <div className="surface max-w-md p-10">
-          <div className="eyebrow text-primary">Setup required</div>
+          <div className="eyebrow text-primary">{t("home.setupRequired")}</div>
           <h1 className="mt-3 text-3xl font-bold tracking-tight">
-            The repo isn&apos;t ready yet.
+            {t("home.setupNotReady")}
           </h1>
           <p className="mt-3 text-ink-soft">
-            {user
-              ? "An administrator needs to finish the wizard."
-              : "Sign in as an administrator to complete the one-time setup."}
+            {user ? t("home.setupAdminCta") : t("home.setupAnonCta")}
           </p>
           {!user && (
             <Button asChild size="lg" variant="filled" className="mt-6">
-              <Link href="/login?next=/admin/setup">Sign in to set up</Link>
+              <Link href="/login?next=/admin/setup">{t("home.setupSignIn")}</Link>
             </Button>
           )}
         </div>
@@ -115,9 +115,9 @@ export default function Home() {
         <PrivateAccessGuard>
         {/* ──── Welcome / repo title ──── */}
         <header className="mb-6 md:mb-8">
-          <div className="eyebrow">Welcome</div>
+          <div className="eyebrow">{t("home.welcome")}</div>
           <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">
-            {repoName || "Your indie app shelf"}
+            {repoName || t("home.defaultRepoName")}
           </h1>
           {repoDescription && (
             <p className="mt-1 max-w-2xl text-ink-soft">{repoDescription}</p>
@@ -127,7 +127,7 @@ export default function Home() {
         {/* ──── Feature hero ──── */}
         {hero ? (
           <section className="animate-fade-up">
-            <FeatureHero app={hero} kicker="Editor’s pick" />
+            <FeatureHero app={hero} kicker={t("home.editorsPick")} />
           </section>
         ) : (
           <EmptyShelf />
@@ -136,8 +136,8 @@ export default function Home() {
         {/* ──── Top picks (tiles) ──── */}
         {topPicks.length > 0 && (
           <Section
-            title="Top picks"
-            subtitle="Curated highlights from the catalogue"
+            title={t("home.topPicks")}
+            subtitle={t("home.topPicksSubtitle")}
             href="/apps"
             delay={60}
           >
@@ -152,8 +152,8 @@ export default function Home() {
         {/* ──── Recently updated (list rows) ──── */}
         {recentlyUpdated.length > 0 && (
           <Section
-            title="Recently updated"
-            subtitle="Freshest releases shipped"
+            title={t("home.recentlyUpdated")}
+            subtitle={t("home.recentlyUpdatedSubtitle")}
             href="/apps"
             delay={120}
           >
@@ -167,7 +167,7 @@ export default function Home() {
 
         {/* ──── Categories grid ──── */}
         {liveCategories.length > 0 && (
-          <Section title="Categories" subtitle="Browse by interest" delay={180}>
+          <Section title={t("home.categoriesTitle")} subtitle={t("home.categoriesSubtitle")} delay={180}>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
               {liveCategories.map((c) => {
                 const count = apps.filter((a) =>
@@ -227,15 +227,7 @@ function Section({
             <p className="mt-0.5 text-sm text-ink-mute">{subtitle}</p>
           )}
         </div>
-        {href && (
-          <Link
-            href={href}
-            className="inline-flex items-center gap-1 rounded-pill px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/8"
-          >
-            See all
-            <ChevronRight className="h-4 w-4" strokeWidth={2.4} />
-          </Link>
-        )}
+        {href && <SeeAllLink href={href} />}
       </header>
       {children}
     </section>
@@ -243,16 +235,34 @@ function Section({
 }
 
 function EmptyShelf() {
+  const { t } = useTranslation();
   return (
     <div className="surface flex flex-col items-center gap-3 p-12 text-center">
       <div className="text-2xl font-bold tracking-tight text-ink">
-        Nothing on the shelf yet.
+        {t("home.emptyShelfTitle")}
       </div>
       <p className="max-w-md text-ink-soft">
-        Once an APK is published you&apos;ll see it featured here. Admin: head
-        to <Link href="/my-apps/new" className="text-primary underline underline-offset-4">My apps → New release</Link>.
+        <Trans
+          i18nKey="home.emptyShelfBody"
+          components={{
+            link: <Link href="/my-apps/new" className="text-primary underline underline-offset-4" />,
+          }}
+        />
       </p>
     </div>
+  );
+}
+
+function SeeAllLink({ href }: { href: string }) {
+  const { t } = useTranslation();
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-center gap-1 rounded-pill px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/8"
+    >
+      {t("home.seeAll")}
+      <ChevronRight className="h-4 w-4" strokeWidth={2.4} />
+    </Link>
   );
 }
 

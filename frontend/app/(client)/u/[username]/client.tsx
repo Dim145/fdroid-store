@@ -4,6 +4,7 @@ import { ArrowLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ import { cn, formatDate } from "@/lib/utils";
  * share the exact same backdrop hue.
  * ────────────────────────────────────────────────────────────────────────── */
 export default function ProfileClient() {
+  const { t } = useTranslation();
   const pathname = usePathname();
   const username = useMemo(() => {
     const m = pathname?.match(/^\/u\/([^/]+)/);
@@ -36,20 +38,19 @@ export default function ProfileClient() {
     setError(null);
     api.users.profile(username)
       .then(setProfile)
-      .catch((e) => setError(e instanceof Error ? e.message : "Profile not found"));
-  }, [username]);
+      .catch((e) => setError(e instanceof Error ? e.message : t("profile.notFoundTitle")));
+  }, [username, t]);
 
   if (error) {
     return (
       <div className="flex flex-col items-center gap-3 py-24 text-center">
-        <div className="text-5xl font-bold tracking-tight">No such profile</div>
+        <div className="text-5xl font-bold tracking-tight">{t("profile.notFoundTitle")}</div>
         <p className="max-w-md text-ink-soft">
-          Either this uploader doesn&apos;t exist or they haven&apos;t published any
-          public app yet.
+          {t("profile.notFoundBody")}
         </p>
         <Button asChild variant="filled" className="mt-4">
           <Link href="/apps">
-            <ArrowLeft className="h-4 w-4" /> Back to catalogue
+            <ArrowLeft className="h-4 w-4" /> {t("profile.backToCatalogue")}
           </Link>
         </Button>
       </div>
@@ -82,7 +83,7 @@ export default function ProfileClient() {
         href="/apps"
         className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-ink-soft hover:text-ink"
       >
-        <ArrowLeft className="h-4 w-4" /> Back to apps
+        <ArrowLeft className="h-4 w-4" /> {t("profile.backToApps")}
       </Link>
 
       {/* ───────────────── Editorial masthead ───────────────── */}
@@ -97,7 +98,7 @@ export default function ProfileClient() {
         {/* faint editorial eyebrow */}
         <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.28em] text-ink-mute">
           <span className="inline-block h-px w-6 bg-ink-mute/40" />
-          Profile
+          {t("profile.eyebrow")}
           <span className="font-mono normal-case tracking-normal text-ink-mute/80">
             n°{(Math.abs(h) % 9999).toString().padStart(4, "0")}
           </span>
@@ -138,19 +139,19 @@ export default function ProfileClient() {
         {/* Bottom rule + credits row */}
         <div className="mt-5 border-t border-outline-soft pt-4">
           <dl className="grid grid-cols-3 gap-x-6 gap-y-3 text-[10px] uppercase tracking-[0.22em] text-ink-mute">
-            <Credit label="Handle">
+            <Credit label={t("profile.credits.handle")}>
               <span className="font-mono normal-case tracking-tight text-ink">
                 @{profile.username}
               </span>
             </Credit>
-            <Credit label="Member since">
+            <Credit label={t("profile.credits.memberSince")}>
               <span className="font-mono normal-case tracking-tight text-ink">
                 {formatDate(profile.member_since)}
               </span>
             </Credit>
-            <Credit label="Published">
+            <Credit label={t("profile.credits.published")}>
               <span className="font-mono normal-case tracking-tight text-ink">
-                {profile.apps.length} {profile.apps.length === 1 ? "app" : "apps"}
+                {t("profile.credits.appsCount", { count: profile.apps.length })}
               </span>
             </Credit>
           </dl>
@@ -161,10 +162,10 @@ export default function ProfileClient() {
       <section className="mt-12">
         <header className="mb-5 flex items-baseline justify-between gap-4">
           <h2 className="text-2xl font-bold tracking-tight text-ink md:text-3xl">
-            Published apps
+            {t("profile.publishedApps")}
           </h2>
           <span className="font-mono text-xs text-ink-mute">
-            {profile.apps.length.toString().padStart(2, "0")} total
+            {t("profile.totalCount", { count: profile.apps.length.toString().padStart(2, "0") })}
           </span>
         </header>
 
@@ -172,8 +173,11 @@ export default function ProfileClient() {
           <div className="surface flex flex-col items-center gap-2 px-6 py-16 text-center">
             <Sparkles className="h-6 w-6 text-ink-mute" />
             <p className="text-ink-soft">
-              No public apps yet from{" "}
-              <span className="font-mono">@{profile.username}</span>.
+              <Trans
+                i18nKey="profile.noApps"
+                values={{ username: profile.username }}
+                components={{ code: <span className="font-mono" /> }}
+              />
             </p>
           </div>
         ) : (

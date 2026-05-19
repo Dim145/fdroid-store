@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import pkg from "@/package.json";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -38,6 +39,7 @@ function safeNext(raw: string | null): string {
 }
 
 function LoginForm() {
+  const { t } = useTranslation();
   const router = useRouter();
   const search = useSearchParams();
   const next = safeNext(search.get("next"));
@@ -110,23 +112,23 @@ function LoginForm() {
   })();
 
   return (
-    <AuthShell title="Welcome back" lede="Sign in to manage your apps and API keys.">
+    <AuthShell title={t("auth.login.title")} lede={t("auth.login.subtitle")}>
       {error && !methods?.local && (
         <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
       )}
       {methods?.local && (
         <form onSubmit={onSubmit} className="space-y-4">
-          <Field label="Email" htmlFor="email">
+          <Field label={t("auth.login.emailLabel")} htmlFor="email">
             <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
-          <Field label="Password" htmlFor="password">
+          <Field label={t("auth.login.passwordLabel")} htmlFor="password">
             <Input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </Field>
           {error && (
             <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
           )}
           <Button type="submit" variant="filled" size="xl" className="w-full" disabled={submitting}>
-            {submitting ? "Signing in…" : "Sign in"}
+            {submitting ? t("auth.login.submitting") : t("auth.login.submit")}
           </Button>
         </form>
       )}
@@ -135,10 +137,10 @@ function LoginForm() {
         <>
           <Divider />
           {methods.registration_policy === "invite" && (
-            <Field label="Invite code (only if you don't have an account yet)" htmlFor="oidc-invite">
+            <Field label={t("auth.login.inviteLabel")} htmlFor="oidc-invite">
               <Input
                 id="oidc-invite"
-                placeholder="optional for existing accounts"
+                placeholder={t("auth.login.invitePlaceholder")}
                 value={oidcInvite}
                 onChange={(e) => setOidcInvite(e.target.value)}
                 autoComplete="off"
@@ -146,22 +148,22 @@ function LoginForm() {
             </Field>
           )}
           <Button asChild variant="outlined" size="lg" className="w-full">
-            <a href={oidcHref}>Continue with SSO</a>
+            <a href={oidcHref}>{t("auth.login.oidcButton")}</a>
           </Button>
         </>
       )}
 
       {methods?.allow_signup && methods.local && (
         <p className="text-center text-sm text-ink-soft">
-          New here?{" "}
+          {t("auth.login.newHere")}{" "}
           <Link href="/signup" className="font-medium text-primary hover:underline">
-            Create an account
+            {t("auth.login.createAccount")}
           </Link>
         </p>
       )}
       {methods && !methods.allow_signup && methods.registration_policy === "closed" && (
         <p className="text-center text-xs text-ink-mute">
-          Signups are closed. Ask an administrator for an account.
+          {t("auth.signupsClosed")}
         </p>
       )}
     </AuthShell>
@@ -177,6 +179,7 @@ function AuthShell({
   lede: string;
   children: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <main className="grid min-h-screen md:grid-cols-[1fr_1.1fr]">
       <aside className="relative hidden flex-col justify-between overflow-hidden bg-primary-container p-10 md:flex">
@@ -191,17 +194,17 @@ function AuthShell({
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-fg shadow-e1">
             <span className="text-sm font-bold tracking-tight">fS</span>
           </span>
-          <span className="text-base font-bold tracking-tight">fdroid-store</span>
+          <span className="text-base font-bold tracking-tight">{t("header.brand")}</span>
         </Link>
         <div className="relative">
           <p className="font-mono text-xs uppercase tracking-widest text-primary-on-container/70">
-            self-hosted · open source · yours
+            {t("auth.heroEyebrow")}
           </p>
-          <h1 className="mt-3 text-5xl font-bold tracking-tight text-primary-on-container md:text-6xl">
-            Your private app shelf,<br /> on your own server.
+          <h1 className="mt-3 whitespace-pre-line text-5xl font-bold tracking-tight text-primary-on-container md:text-6xl">
+            {t("auth.heroTitle")}
           </h1>
           <p className="mt-4 max-w-md text-primary-on-container/80">
-            A modern F-Droid repo with the polish of a real app store.
+            {t("auth.heroSubtitle")}
           </p>
         </div>
         <div className="relative font-mono text-xs text-primary-on-container/60">v{pkg.version}</div>
@@ -210,7 +213,7 @@ function AuthShell({
       <section className="flex items-center justify-center p-6 md:p-12">
         <div className="w-full max-w-sm">
           <div className="mb-6 flex items-center justify-between md:hidden">
-            <Link href="/" className="text-sm font-semibold text-ink-soft hover:text-ink">← Back</Link>
+            <Link href="/" className="text-sm font-semibold text-ink-soft hover:text-ink">{t("auth.back")}</Link>
             <ThemeToggle />
           </div>
           <div className="mb-6 hidden md:flex md:justify-end">
@@ -235,10 +238,11 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor?: string; 
 }
 
 function Divider() {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3 text-[11px] uppercase tracking-widest text-ink-mute">
       <span className="h-px flex-1 bg-outline-soft" />
-      <span>or</span>
+      <span>{t("auth.or")}</span>
       <span className="h-px flex-1 bg-outline-soft" />
     </div>
   );

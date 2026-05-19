@@ -5,6 +5,7 @@ import { History as HistoryIcon, LayoutGrid, LogOut, Menu, Search, ShieldCheck, 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -12,14 +13,15 @@ import { useAuth } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
 const PRIMARY_NAV = [
-  { href: "/apps", label: "Apps", icon: Sparkles, authOnly: false },
-  { href: "/my-apps", label: "My apps", icon: LayoutGrid, authOnly: true },
-];
+  { href: "/apps", labelKey: "header.nav.apps", icon: Sparkles, authOnly: false },
+  { href: "/my-apps", labelKey: "header.nav.myApps", icon: LayoutGrid, authOnly: true },
+] as const;
 
 /* M3 top app bar — sticky, surface-tinted, hosts brand + nav + search +
  * theme toggle + auth. Mobile collapses the secondary actions into a
  * slide-down sheet. */
 export function SiteHeader() {
+  const { t } = useTranslation();
   const router = useRouter();
   const pathname = usePathname() || "/";
   const { user, logout } = useAuth();
@@ -44,13 +46,13 @@ export function SiteHeader() {
         <Link
           href="/"
           className="flex shrink-0 items-center gap-2.5"
-          aria-label="fdroid-store home"
+          aria-label={t("header.homeAriaLabel")}
         >
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-fg shadow-e1">
             <span className="text-sm font-bold tracking-tight">fS</span>
           </span>
           <span className="hidden text-base font-bold tracking-tight text-ink sm:inline">
-            fdroid-store
+            {t("header.brand")}
           </span>
         </Link>
 
@@ -71,7 +73,7 @@ export function SiteHeader() {
                 )}
               >
                 <Icon className="h-4 w-4" strokeWidth={2.2} />
-                {item.label}
+                {t(item.labelKey)}
               </Link>
             );
           })}
@@ -83,7 +85,7 @@ export function SiteHeader() {
             <Search className="h-4 w-4 text-ink-mute" strokeWidth={2.2} />
             <input
               type="search"
-              placeholder="Search apps, packages…"
+              placeholder={t("header.search")}
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
               className="w-full bg-transparent text-sm outline-none placeholder:text-ink-mute"
@@ -103,7 +105,7 @@ export function SiteHeader() {
               )}
             >
               <ShieldCheck className="h-3.5 w-3.5" strokeWidth={2.4} />
-              Admin
+              {t("header.admin")}
             </Link>
           )}
           {user ? (
@@ -113,7 +115,7 @@ export function SiteHeader() {
                   <button
                     type="button"
                     className="flex h-10 w-10 items-center justify-center rounded-pill bg-surface-2 text-ink-soft transition-colors hover:bg-surface-3 hover:text-ink data-[state=open]:bg-surface-3 data-[state=open]:text-ink"
-                    aria-label="User menu"
+                    aria-label={t("header.userMenu")}
                   >
                     <UserIcon className="h-4 w-4" strokeWidth={2.2} />
                   </button>
@@ -126,7 +128,7 @@ export function SiteHeader() {
                   >
                     <div className="px-3 py-2">
                       <div className="truncate text-xs uppercase tracking-wider text-ink-mute">
-                        Signed in as
+                        {t("header.signedInAs")}
                       </div>
                       <div className="truncate font-semibold text-ink">
                         {user.full_name || user.email}
@@ -139,7 +141,7 @@ export function SiteHeader() {
                         className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-ink-soft outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-ink"
                       >
                         <UserIcon className="h-4 w-4" strokeWidth={2.2} />
-                        Account
+                        {t("header.account")}
                       </Link>
                     </DropdownMenu.Item>
                     <DropdownMenu.Item asChild>
@@ -148,7 +150,7 @@ export function SiteHeader() {
                         className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-ink-soft outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-ink"
                       >
                         <HistoryIcon className="h-4 w-4" strokeWidth={2.2} />
-                        Download history
+                        {t("header.downloadHistory")}
                       </Link>
                     </DropdownMenu.Item>
                     {user.role === "admin" && (
@@ -158,7 +160,7 @@ export function SiteHeader() {
                           className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-ink-soft outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-ink"
                         >
                           <ShieldCheck className="h-4 w-4" strokeWidth={2.2} />
-                          Admin
+                          {t("header.admin")}
                         </Link>
                       </DropdownMenu.Item>
                     )}
@@ -168,7 +170,7 @@ export function SiteHeader() {
                       className="flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2 text-danger outline-none data-[highlighted]:bg-danger-container data-[highlighted]:text-danger-on-container"
                     >
                       <LogOut className="h-4 w-4" strokeWidth={2.2} />
-                      Sign out
+                      {t("header.signOut")}
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -176,14 +178,14 @@ export function SiteHeader() {
             </div>
           ) : (
             <Button asChild size="md" variant="filled" className="hidden md:inline-flex">
-              <Link href="/login">Sign in</Link>
+              <Link href="/login">{t("header.signIn")}</Link>
             </Button>
           )}
 
           <button
             type="button"
             onClick={() => setDrawer((s) => !s)}
-            aria-label="Menu"
+            aria-label={t("header.menu")}
             aria-expanded={drawer}
             className="inline-flex h-10 w-10 items-center justify-center rounded-pill hover:bg-surface-2 md:hidden"
           >
@@ -201,7 +203,7 @@ export function SiteHeader() {
                 <Search className="h-4 w-4 text-ink-mute" />
                 <input
                   type="search"
-                  placeholder="Search…"
+                  placeholder={t("common.search")}
                   value={searchValue}
                   onChange={(e) => setSearchValue(e.target.value)}
                   className="w-full bg-transparent text-sm outline-none placeholder:text-ink-mute"
@@ -225,7 +227,7 @@ export function SiteHeader() {
                     )}
                   >
                     <Icon className="h-4 w-4" />
-                    {item.label}
+                    {t(item.labelKey)}
                   </Link>
                 );
               })}
@@ -236,14 +238,14 @@ export function SiteHeader() {
                     onClick={() => setDrawer(false)}
                     className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
                   >
-                    <UserIcon className="h-4 w-4" /> Account
+                    <UserIcon className="h-4 w-4" /> {t("header.account")}
                   </Link>
                   <Link
                     href="/history"
                     onClick={() => setDrawer(false)}
                     className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
                   >
-                    <HistoryIcon className="h-4 w-4" /> Download history
+                    <HistoryIcon className="h-4 w-4" /> {t("header.downloadHistory")}
                   </Link>
                   {user.role === "admin" && (
                     <Link
@@ -251,20 +253,20 @@ export function SiteHeader() {
                       onClick={() => setDrawer(false)}
                       className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
                     >
-                      <ShieldCheck className="h-4 w-4" /> Admin
+                      <ShieldCheck className="h-4 w-4" /> {t("header.admin")}
                     </Link>
                   )}
                   <button
                     onClick={() => { setDrawer(false); logout(); router.replace("/"); }}
                     className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-ink-soft hover:bg-surface-2"
                   >
-                    <LogOut className="h-4 w-4" /> Sign out
+                    <LogOut className="h-4 w-4" /> {t("header.signOut")}
                   </button>
                 </>
               )}
               {!user && (
                 <Button asChild size="md" variant="filled" className="mt-2 w-full">
-                  <Link href="/login" onClick={() => setDrawer(false)}>Sign in</Link>
+                  <Link href="/login" onClick={() => setDrawer(false)}>{t("header.signIn")}</Link>
                 </Button>
               )}
             </nav>

@@ -3,6 +3,7 @@
 import { Search, LayoutGrid, List } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ type SortMode = "fresh" | "alpha";
 type View = "list" | "grid";
 
 function Browse() {
+  const { t } = useTranslation();
   const search = useSearchParams();
   const categoryParam = search.get("category");
   const queryParam = search.get("q") || "";
@@ -50,18 +52,18 @@ function Browse() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       Promise.all([api.apps.list(q || undefined), api.categories.list()])
         .then(([a, c]) => {
           if (cancelled) return;
           setApps(a);
           setCategories(c);
         })
-        .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Failed"))
+        .catch((e) => !cancelled && setError(e instanceof Error ? e.message : t("apps.loadFailed")))
         .finally(() => !cancelled && setLoading(false));
     }, q ? 220 : 0);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [q]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [q, t]);
 
   useEffect(() => setActiveCategory(categoryParam), [categoryParam]);
 
@@ -98,12 +100,12 @@ function Browse() {
     <div>
       {/* ──── Title ──── */}
       <header className="mb-6">
-        <div className="eyebrow">Catalogue</div>
+        <div className="eyebrow">{t("apps.eyebrow")}</div>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">
-          Browse apps
+          {t("apps.title")}
         </h1>
         <p className="mt-1 text-ink-mute">
-          {apps.length} {apps.length === 1 ? "title" : "titles"} on the shelf
+          {t("apps.titleCount", { count: apps.length })}
         </p>
       </header>
 
@@ -113,7 +115,7 @@ function Browse() {
           <Search className="h-4 w-4 text-ink-mute" strokeWidth={2.2} />
           <input
             type="search"
-            placeholder="Search by name or package…"
+            placeholder={t("apps.searchPlaceholder")}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-mute"
@@ -122,17 +124,17 @@ function Browse() {
         <div className="flex items-center gap-2">
           <div className="flex items-center rounded-pill border border-outline-soft bg-surface p-0.5">
             <Pill active={sort === "fresh"} onClick={() => setSort("fresh")}>
-              Fresh
+              {t("apps.sort.fresh")}
             </Pill>
             <Pill active={sort === "alpha"} onClick={() => setSort("alpha")}>
-              A → Z
+              {t("apps.sort.alpha")}
             </Pill>
           </div>
           <div className="flex items-center rounded-pill border border-outline-soft bg-surface p-0.5">
-            <ViewPill active={view === "list"} onClick={() => setView("list")} label="List">
+            <ViewPill active={view === "list"} onClick={() => setView("list")} label={t("apps.view.list")}>
               <List className="h-3.5 w-3.5" strokeWidth={2.4} />
             </ViewPill>
-            <ViewPill active={view === "grid"} onClick={() => setView("grid")} label="Grid">
+            <ViewPill active={view === "grid"} onClick={() => setView("grid")} label={t("apps.view.grid")}>
               <LayoutGrid className="h-3.5 w-3.5" strokeWidth={2.4} />
             </ViewPill>
           </div>
@@ -149,7 +151,7 @@ function Browse() {
               className="chip"
               data-active={activeCategory === null}
             >
-              All
+              {t("apps.all")}
               <span className="ml-1 font-mono text-[10px] text-ink-mute">{apps.length}</span>
             </button>
             {liveCategories.map((c) => (
@@ -186,9 +188,9 @@ function Browse() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="surface flex flex-col items-center gap-3 py-16 text-center">
-            <div className="text-xl font-semibold tracking-tight text-ink">No matches</div>
+            <div className="text-xl font-semibold tracking-tight text-ink">{t("apps.noMatches")}</div>
             <p className="text-sm text-ink-soft">
-              {q ? <>Try a different query.</> : <>Adjust the category or sort.</>}
+              {q ? t("apps.tryDifferentQuery") : t("apps.adjustFilters")}
             </p>
             {(q || activeCategory) && (
               <Button
@@ -196,7 +198,7 @@ function Browse() {
                 size="md"
                 onClick={() => { setQ(""); setActiveCategory(null); }}
               >
-                Reset filters
+                {t("apps.resetFilters")}
               </Button>
             )}
           </div>
