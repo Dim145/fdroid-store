@@ -25,10 +25,13 @@ next-env.d.ts
 .env.*.local
 *.local
 
-# Repo data (managed at runtime)
-data/
-storage/
-keystores/
+# Repo data (managed at runtime). Anchored so they only match the
+# top-level runtime dirs — an unanchored ``storage/`` here used to
+# silently swallow ``backend/app/storage/`` (the actual source package),
+# producing a container that crashed on import.
+/data/
+/storage/
+/keystores/
 
 # Editor
 .idea/
