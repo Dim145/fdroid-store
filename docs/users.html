@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>User guide — fdroid-store</title>
+  <meta name="description" content="End-user guide: sign in, TOTP, create apps, upload APKs, manage collaborators, retention overrides, download history." />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="./" aria-label="fdroid-store home">
+          <span class="logo">F·</span>
+          <span>fdroid-<b>store</b></span>
+        </a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="menu">menu</button>
+        <div class="links" id="menu" role="menu">
+          <a href="./" role="menuitem">Overview</a>
+          <a href="install.html" role="menuitem">Install</a>
+          <a href="admin.html" role="menuitem">Admin</a>
+          <a href="users.html" role="menuitem">Users</a>
+          <a href="integrations.html" role="menuitem">Integrations</a>
+          <a class="gh" href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.05-.49.05-.49.81.06 1.24.83 1.24.83.72 1.23 1.88.88 2.34.67.07-.52.28-.88.51-1.08-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82A7.5 7.5 0 0 1 8 4.07c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span>GitHub</span>
+          </a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap doc-layout">
+
+      <aside class="toc" aria-label="Table of contents">
+        <h5>Users · TOC</h5>
+        <ol>
+          <li><a href="#signup" data-num="01">Signing up</a></li>
+          <li><a href="#account" data-num="02">Your account</a></li>
+          <li><a href="#totp" data-num="03">Two-factor (TOTP)</a></li>
+          <li><a href="#api-keys" data-num="04">API keys</a></li>
+          <li><a href="#sessions" data-num="05">Sessions</a></li>
+          <li><a href="#browse" data-num="06">Browsing &amp; downloads</a></li>
+          <li><a href="#create-app" data-num="07">Creating an app</a></li>
+          <li><a href="#upload" data-num="08">Uploading an APK</a></li>
+          <li><a href="#collab" data-num="09">Collaborators</a></li>
+          <li><a href="#retention-user" data-num="10">Retention &amp; suggested</a></li>
+        </ol>
+      </aside>
+
+      <article class="doc-body">
+        <div class="eyebrow">Doc · 03 · End-user guide</div>
+        <h1>Using the site.</h1>
+        <p class="lead">
+          You can use fdroid-store as a <strong>consumer</strong> (browse and
+          download apps), or as a <strong>maintainer</strong> (publish your own
+          apps). Both paths share the same account.
+        </p>
+
+        <!-- 01 -->
+        <section class="doc-section" id="signup">
+          <h2><span class="num">01</span>Signing up</h2>
+          <p>Three flavours, depending on how the instance is configured:</p>
+
+          <ul>
+            <li><strong>Open signup.</strong> Click <em>Sign up</em>, pick an email + password. You're in.</li>
+            <li><strong>Invite-only.</strong> Paste the invite code an admin sent you. Bound invites only work for the email the admin entered.</li>
+            <li><strong>SSO / OIDC.</strong> One button — your identity provider does the rest. If the instance allows auto-create, you land on a fresh account immediately; otherwise an admin has to approve.</li>
+          </ul>
+
+          <h3>What's a "username"?</h3>
+          <p>The display name shown on your public profile at <code>/u/&lt;username&gt;</code>. Set it on the first visit to <code>/account</code> — until you do, the profile page shows your email's local part.</p>
+        </section>
+
+        <!-- 02 account -->
+        <section class="doc-section" id="account">
+          <h2><span class="num">02</span>Your account</h2>
+          <p><code>/account</code> is the central control panel for everything attached to your user. The page is split into four cards:</p>
+          <ul>
+            <li><strong>Profile</strong> — display name, avatar, language, dark/light theme.</li>
+            <li><strong>Security</strong> — change password, enrol TOTP, see &amp; revoke sessions.</li>
+            <li><strong>API keys</strong> — manage personal F-Droid API keys.</li>
+            <li><strong>Quotas</strong> — how much storage you're using vs. your allowance.</li>
+          </ul>
+        </section>
+
+        <!-- 03 totp -->
+        <section class="doc-section" id="totp">
+          <h2><span class="num">03</span>Two-factor (TOTP)</h2>
+          <p>Optional unless an admin made it mandatory. Enrolment takes a minute:</p>
+
+          <ol class="steps">
+            <li>
+              <strong>Open the enrolment panel</strong>
+              <p><code>Account → Security → Enable TOTP</code>. The page shows a QR code, plus the secret in text form for entry by hand.</p>
+            </li>
+            <li>
+              <strong>Scan with an authenticator app</strong>
+              <p>Aegis, Bitwarden, 1Password, Google Authenticator — anything that speaks RFC 6238.</p>
+            </li>
+            <li>
+              <strong>Confirm with a code</strong>
+              <p>Type the current 6-digit code. We won't enable the second factor until we've seen one work — that's the only way to know your app captured the secret correctly.</p>
+            </li>
+            <li>
+              <strong>Save your recovery code</strong>
+              <p>Shown once. Store it in your password manager. If you lose the authenticator, this is the only way back in short of an admin reset.</p>
+            </li>
+          </ol>
+
+          <div class="callout warn">
+            <div class="badge">WARN</div>
+            <p>If you lose the authenticator and the recovery code, your only path is an admin reset of your account (with all sessions revoked). Don't skip step 4.</p>
+          </div>
+        </section>
+
+        <!-- 04 api keys -->
+        <section class="doc-section" id="api-keys">
+          <h2><span class="num">04</span>API keys</h2>
+          <p>Personal API keys do two things:</p>
+          <ul>
+            <li>Authenticate the F-Droid Android client for <strong>private apps</strong> (HTTP Basic auth, see <a href="integrations.html#client">integrations</a>).</li>
+            <li>Authenticate scripts that hit the REST API as you.</li>
+          </ul>
+
+          <h3>Minting one</h3>
+          <p><code>Account → API keys → New key</code>. Name it ("phone", "ci-laptop"). On creation, you see the secret <strong>exactly once</strong> in a modal — copy it now or lose it.</p>
+
+          <div class="shot real">
+            <div class="titlebar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">https://apks.example.com/account</span>
+            </div>
+            <div class="body">
+              <img src="assets/shots/account.png" alt="Account page — Profile / Security / API keys / Quotas tabs in the left rail" loading="lazy" />
+            </div>
+          </div>
+
+          <h3>Format</h3>
+          <p>Keys look like <code>fdr_&lt;prefix&gt;_&lt;secret&gt;</code>. The prefix is searchable in the DB (admins can spot rogue keys); the secret is hashed (SHA-256) and never recoverable. If you lost it, mint a new one and revoke the old.</p>
+
+          <h3>Use as Basic-auth</h3>
+          <p>The Android F-Droid client supports the <code>username:password</code> form in the repo URL. Use any username (the system ignores it) and put the full key as the password:</p>
+          <div class="code">
+            <div class="strip"><span class="what">repo url</span><span>basic auth</span><button class="copy" type="button">copy</button></div>
+<pre>https://anyuser:fdr_9a4b...3c12_8K3p...vQ9L@apks.example.com/fdroid/repo</pre>
+          </div>
+        </section>
+
+        <!-- 05 sessions -->
+        <section class="doc-section" id="sessions">
+          <h2><span class="num">05</span>Sessions</h2>
+          <p>Every browser login + every refresh-token rotation lives as a row under <code>Account → Sessions</code>. You see:</p>
+          <ul>
+            <li>Device and user-agent hint (Chrome on macOS, etc.).</li>
+            <li>IP address &amp; rough location.</li>
+            <li>Last activity timestamp.</li>
+            <li><strong>Revoke</strong> button — kills that one session immediately.</li>
+            <li><strong>Revoke all</strong> — kills every session except the current one. Used after a stolen-laptop scare.</li>
+          </ul>
+          <p>Refresh tokens rotate on use: every time the SPA exchanges a refresh token for a new pair, the old <code>jti</code> is marked consumed. A leaked refresh token used a second time fails — and we know about it.</p>
+        </section>
+
+        <!-- 06 browse -->
+        <section class="doc-section" id="browse">
+          <h2><span class="num">06</span>Browsing &amp; downloads</h2>
+          <p>The public landing for everyone — logged in or out — is <code>/apps</code>. Each card shows the icon, title, suggested-version label, category chips, and an at-a-glance "open in F-Droid" link.</p>
+
+          <h3>Search &amp; filter</h3>
+          <p>The rail on the left filters by category and visibility (everyone-visible vs. apps you have access to). The search box matches package name and display name.</p>
+
+          <h3>App detail</h3>
+          <p>Click an app and you'll see:</p>
+          <ul>
+            <li>Hero with icon, feature graphic, description, and category chips.</li>
+            <li>Per-version history with versionCode, versionName, size, target SDK, signing-cert SHA-256, and the source link (when known).</li>
+            <li>A <em>Download</em> button per version. For private apps you'll be asked to authenticate.</li>
+          </ul>
+
+          <h3>Download history</h3>
+          <p><code>/history</code> shows the last few hundred downloads you triggered while logged in. Useful when you forgot which version you grabbed yesterday.</p>
+        </section>
+
+        <!-- 07 create app -->
+        <section class="doc-section" id="create-app">
+          <h2><span class="num">07</span>Creating an app</h2>
+          <p>Three entry points, all reachable from <code>My apps → New app</code>:</p>
+
+          <h3>A · Manual</h3>
+          <p>Type the package name + title, pick a category, set visibility (public / private), drag a screenshot if you have one. You'll attach the first APK on the next screen.</p>
+
+          <h3>B · From a forge release</h3>
+          <p>Paste a GitHub / GitLab / Gitea repo URL. The wizard fetches the latest release, picks the first <code>.apk</code> asset (or one matching your glob), parses the manifest, and pre-fills the app fields. Once accepted, the worker subscribes to the source and re-fetches on a cron.</p>
+
+          <div class="shot real">
+            <div class="titlebar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">https://apks.example.com/my-apps/new</span>
+            </div>
+            <div class="body">
+              <img src="assets/shots/my-apps-new.png" alt="New-app wizard at /my-apps/new — step 1: choose between APK upload, GitHub source, or metadata paste" loading="lazy" />
+            </div>
+          </div>
+
+          <h3>C · Paste fdroiddata metadata</h3>
+          <p>If you're migrating an app that already lives in the upstream <code>fdroiddata</code> repo, paste its YAML. The parser fills out fields (description, links, categories, anti-features). You still need to attach an APK afterwards.</p>
+        </section>
+
+        <!-- 08 upload -->
+        <section class="doc-section" id="upload">
+          <h2><span class="num">08</span>Uploading an APK</h2>
+          <p>From an app's detail page, <strong>maintainers</strong> see an <em>Upload APK</em> drop-zone. Drag a file or click to pick one.</p>
+
+          <p>What happens behind the scenes:</p>
+          <ol>
+            <li>The browser checks the file size against the configured cap before posting — you get an inline error instead of a 30s upload then 413.</li>
+            <li>The backend parses the manifest with androguard (package name, versionCode, signing certificate).</li>
+            <li>If the cert doesn't match the app's previous one, the upload is refused — that's the F-Droid signing-key continuity guarantee.</li>
+            <li>If ClamAV is on, the file is streamed to clamd. A positive verdict refuses the upload.</li>
+            <li>The retention cap is enforced: if the cap is N, anything older than the N most-recent versions (by versionCode) is evicted — except the suggested version.</li>
+            <li>An admin (or an auto-publish rule on your account) publishes the file. A reindex is queued.</li>
+          </ol>
+
+          <h3>Uploading from a script</h3>
+          <p>The same endpoint accepts a personal API key or a per-app deploy token. See <a href="integrations.html#ci">integrations &rarr; CI publishing</a>.</p>
+
+          <div class="callout">
+            <div class="badge">SIZE</div>
+            <p>The default size cap is 200&nbsp;MB. Operators can raise it (proxy + backend env), but the F-Droid client downloads everything in one shot — be reasonable.</p>
+          </div>
+        </section>
+
+        <!-- 09 collaborators -->
+        <section class="doc-section" id="collab">
+          <h2><span class="num">09</span>Collaborators</h2>
+          <p>The owner of an app can invite <strong>co-maintainers</strong>. They get most of the same powers:</p>
+          <dl class="spec">
+            <dt>Upload APKs</dt>
+            <dd>Yes — co-maintainers can push new versions through the UI or via the deploy token.</dd>
+            <dt>Edit app metadata</dt>
+            <dd>Yes — description, links, screenshots, categories.</dd>
+            <dt>Mint deploy tokens</dt>
+            <dd>Yes — useful for handing CI access to whomever set up the pipeline.</dd>
+            <dt>Edit the forge source</dt>
+            <dd><strong>No</strong> — only the owner can. A co-maintainer with a forge PAT shouldn't be able to repoint the source at their own org.</dd>
+            <dt>Transfer / delete the app</dt>
+            <dd><strong>No</strong> — owner only.</dd>
+            <dt>Set retention override</dt>
+            <dd><strong>No</strong> — admin only.</dd>
+          </dl>
+        </section>
+
+        <!-- 10 retention -->
+        <section class="doc-section" id="retention-user">
+          <h2><span class="num">10</span>Retention &amp; suggested version</h2>
+
+          <h3>Suggested version</h3>
+          <p>The F-Droid client downloads the <strong>suggested</strong> version, not necessarily the latest one. By default that's "latest", but you can pin a specific version (useful when v2.0 has a regression and you want v1.9 served).</p>
+
+          <h3>The retention cap, from your seat</h3>
+          <p>If the admin set a repo-wide default of, say, 5 versions per app, any upload past version 6 evicts the oldest one — silently, FIFO. You'll see a small banner on the app page reminding you of the cap.</p>
+          <p>You <strong>can't</strong> override the cap upwards. The override field is admin-only and can only ever tighten the default, never widen it. If you need an exception, ask an admin.</p>
+
+          <div class="callout">
+            <div class="badge">PINNED</div>
+            <p>The currently-suggested version is <strong>never</strong> evicted. If you pin v1.9 and the cap is 3, the system keeps v1.9 plus the two newest — even if v1.9 is older than the cutoff.</p>
+          </div>
+        </section>
+
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-foot">
+    <div class="wrap">
+      <div class="row">
+        <div>
+          <a class="brand" href="./" style="display:inline-flex; gap:10px; align-items:center; font-family: var(--f-display); font-weight: 800; text-transform: uppercase; font-size: 1.3rem; color: var(--ink);">
+            <span style="width:24px;height:24px;display:grid;place-items:center;background:var(--phos);color:var(--bg);border-radius:6px;font-family:var(--f-mono);font-size:11px;font-weight:700;">F·</span>
+            fdroid-<b style="color:var(--phos);">store</b>
+          </a>
+          <p>Self-hosted F-Droid repository. Built for operators who want their own app delivery without giving up F-Droid compatibility.</p>
+        </div>
+        <div>
+          <h6>Docs</h6>
+          <ul>
+            <li><a href="install.html">Install &amp; infra</a></li>
+            <li><a href="admin.html">Administration</a></li>
+            <li><a href="users.html">User guide</a></li>
+            <li><a href="integrations.html">Integrations</a></li>
+          </ul>
+        </div>
+        <div>
+          <h6>Project</h6>
+          <ul>
+            <li><a href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">GitHub repository</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/issues" target="_blank" rel="noopener">Issues</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/releases" target="_blank" rel="noopener">Releases</a></li>
+            <li><a href="https://f-droid.org" target="_blank" rel="noopener">F-Droid project</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="meta">
+        <span class="sig">[ fd-store ]</span>
+        <span>v1.0.0</span>
+        <span>·</span>
+        <span>MIT licensed</span>
+        <span style="margin-left:auto;">Built for self-hosting.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Install &amp; infrastructure — fdroid-store</title>
+  <meta name="description" content="Install and run fdroid-store: docker-compose, environment variables, storage backends, OIDC, optional ClamAV, reverse-proxy notes." />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="./" aria-label="fdroid-store home">
+          <span class="logo">F·</span>
+          <span>fdroid-<b>store</b></span>
+        </a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="menu">menu</button>
+        <div class="links" id="menu" role="menu">
+          <a href="./" role="menuitem">Overview</a>
+          <a href="install.html" role="menuitem">Install</a>
+          <a href="admin.html" role="menuitem">Admin</a>
+          <a href="users.html" role="menuitem">Users</a>
+          <a href="integrations.html" role="menuitem">Integrations</a>
+          <a class="gh" href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.05-.49.05-.49.81.06 1.24.83 1.24.83.72 1.23 1.88.88 2.34.67.07-.52.28-.88.51-1.08-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82A7.5 7.5 0 0 1 8 4.07c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span>GitHub</span>
+          </a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap doc-layout">
+
+      <!-- =========== TOC =========== -->
+      <aside class="toc" aria-label="Table of contents">
+        <h5>Install · TOC</h5>
+        <ol>
+          <li><a href="#prerequisites" data-num="01">Prerequisites</a></li>
+          <li><a href="#first-boot" data-num="02">First boot</a></li>
+          <li><a href="#env-reference" data-num="03">Env reference</a></li>
+          <li><a href="#storage" data-num="04">Storage backends</a></li>
+          <li><a href="#auth" data-num="05">Auth &amp; OIDC</a></li>
+          <li><a href="#clamav" data-num="06">ClamAV (opt-in)</a></li>
+          <li><a href="#forges" data-num="07">Forge tokens</a></li>
+          <li><a href="#proxy" data-num="08">Reverse proxy &amp; TLS</a></li>
+          <li><a href="#hardening" data-num="09">Hardening notes</a></li>
+          <li><a href="#upgrade" data-num="10">Upgrading</a></li>
+        </ol>
+      </aside>
+
+      <!-- =========== BODY =========== -->
+      <article class="doc-body">
+
+        <div class="eyebrow">Doc · 01 · Infrastructure</div>
+        <h1>Install &amp; Infrastructure.</h1>
+        <p class="lead">
+          Everything required to bring a fdroid-store instance up: prerequisites,
+          environment variables, storage, OIDC, ClamAV, and reverse-proxy
+          recipes. If you only want to publish APKs from CI once the host is up,
+          jump to <a href="integrations.html">integrations</a>.
+        </p>
+
+        <!-- 01 -->
+        <section class="doc-section" id="prerequisites">
+          <h2><span class="num">01</span>Prerequisites</h2>
+          <p>fdroid-store ships as a docker-compose stack. You need:</p>
+          <ul>
+            <li><strong>Docker Engine</strong> 24+ and <strong>Compose v2</strong> (<code>docker compose</code> command).</li>
+            <li>~<strong>2 GB RAM</strong> for the baseline (postgres + redis + backend + worker + nginx). Add ~1 GB if you enable ClamAV.</li>
+            <li>Disk: enough for your APKs &times; retention &times; (public + private) indexes. Plan generously.</li>
+            <li>A public hostname pointing at the host (recommended for the F-Droid client to fetch over HTTPS).</li>
+            <li>Outbound HTTPS if you want forge auto-ingest (GitHub / GitLab / Gitea) or OIDC.</li>
+          </ul>
+          <div class="callout">
+            <div class="badge">NOTE</div>
+            <p>The published images at <code>ghcr.io/dim145/fdroid-store-backend</code> and <code>fdroid-store-frontend</code> are pulled automatically by the stock <code>docker-compose.yml</code>. Set them to <code>build:</code> stanzas if you fork.</p>
+          </div>
+        </section>
+
+        <!-- 02 -->
+        <section class="doc-section" id="first-boot">
+          <h2><span class="num">02</span>First boot</h2>
+
+          <ol class="steps">
+            <li>
+              <strong>Clone &amp; configure</strong>
+              <p>Generate a strong <code>SECRET_KEY</code> and pick a starter admin password. Everything else has defaults you can tune later.</p>
+              <div class="code">
+                <div class="strip">
+                  <span class="what">bash</span>
+                  <span>setup</span>
+                  <button class="copy" type="button">copy</button>
+                </div>
+<pre>git clone https://github.com/Dim145/fdroid-store
+<span class="c-fn">cd</span> fdroid-store
+<span class="c-fn">cp</span> .env.example .env
+python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))'</span></pre>
+              </div>
+              <p>Paste the printed value as <code>SECRET_KEY=…</code>. Then set <code>INITIAL_ADMIN_PASSWORD</code> to something only you know — it's used once on first boot and ignored thereafter.</p>
+            </li>
+
+            <li>
+              <strong>Boot</strong>
+              <p>Pulls the published images, brings up <code>postgres</code>, <code>redis</code>, <code>backend</code>, <code>worker</code> and <code>frontend</code>.</p>
+              <div class="code">
+                <div class="strip">
+                  <span class="what">bash</span>
+                  <span>up</span>
+                  <button class="copy" type="button">copy</button>
+                </div>
+<pre><span class="c-fn">docker</span> compose <span class="c-fl">up</span> <span class="c-fl">-d</span></pre>
+              </div>
+            </li>
+
+            <li>
+              <strong>Open the UI</strong>
+              <p>Frontend is on port <code>8080</code> by default. Log in with <code>INITIAL_ADMIN_EMAIL</code> + <code>INITIAL_ADMIN_PASSWORD</code>.</p>
+              <ul>
+                <li><code>http://localhost:8080</code> — admin &amp; client UI</li>
+                <li><code>http://localhost:8000/api/docs</code> — Swagger (when <code>ENVIRONMENT=development</code>)</li>
+                <li><code>http://localhost:8080/fdroid/repo</code> — F-Droid repo path</li>
+              </ul>
+            </li>
+
+            <li>
+              <strong>Run the setup wizard</strong>
+              <p>Visit <code>/admin/setup</code>. Choose <em>Generate</em> to mint a fresh signing keystore, or <em>Import</em> if you already have a <code>.p12</code> / <code>.jks</code>. The keystore lives in a Docker volume from this point on.</p>
+            </li>
+
+            <li>
+              <strong>First reindex</strong>
+              <p>Go to <code>/admin/repo</code> and trigger a reindex. After ~30s the F-Droid path serves a valid (empty) index. You can now upload APKs.</p>
+            </li>
+          </ol>
+        </section>
+
+        <!-- 03 -->
+        <section class="doc-section" id="env-reference">
+          <h2><span class="num">03</span>Environment reference</h2>
+          <p>All knobs live in <code>.env</code>. The full annotated file is at <a href="https://github.com/Dim145/fdroid-store/blob/main/.env.example" target="_blank" rel="noopener">.env.example</a>; the table below covers the ones most people touch.</p>
+
+          <h3>Identity &amp; URLs</h3>
+          <dl class="spec">
+            <dt>SECRET_KEY</dt>
+            <dd>Random &ge; 64 chars. Signs JWTs, derives the Fernet key for PATs, signs session cookies. Rotating invalidates everything. <span class="req">required</span></dd>
+            <dt>PUBLIC_REPO_URL</dt>
+            <dd>The URL the F-Droid Android client will hit. <em>Must be reachable from end-user devices.</em> e.g. <code>https://apks.example.com/fdroid/repo</code>. <span class="req">required</span></dd>
+            <dt>PUBLIC_APP_URL</dt>
+            <dd>Frontend public URL — used in OIDC redirect URIs and audit-log links.</dd>
+            <dt>PUBLIC_API_URL</dt>
+            <dd>Backend public URL — what the browser SPA calls. Defaults to <code>PUBLIC_APP_URL</code>.</dd>
+            <dt>ENVIRONMENT</dt>
+            <dd><code>development</code> or <code>production</code>. <code>production</code> disables Swagger and hardens cookie flags.</dd>
+            <dt>LOG_LEVEL</dt>
+            <dd><code>DEBUG</code> · <code>INFO</code> · <code>WARNING</code>. <code>INFO</code> is the default and what we recommend.</dd>
+          </dl>
+
+          <h3>Database &amp; queue</h3>
+          <dl class="spec">
+            <dt>POSTGRES_USER</dt>
+            <dd>Postgres role. <span class="opt">default fdroid</span></dd>
+            <dt>POSTGRES_PASSWORD</dt>
+            <dd>Postgres password. Change it. <span class="req">required</span></dd>
+            <dt>POSTGRES_DB</dt>
+            <dd>Database name. <span class="opt">default fdroid</span></dd>
+            <dt>DATABASE_URL</dt>
+            <dd>Must use the async driver: <code>postgresql+asyncpg://…</code>.</dd>
+            <dt>REDIS_URL</dt>
+            <dd>e.g. <code>redis://redis:6379/0</code>.</dd>
+          </dl>
+
+          <h3>Initial admin</h3>
+          <dl class="spec">
+            <dt>INITIAL_ADMIN_EMAIL</dt>
+            <dd>Email seeded on first boot — also the username for login. <span class="req">required</span></dd>
+            <dt>INITIAL_ADMIN_PASSWORD</dt>
+            <dd>Hashed with argon2 on first boot, then the env var is ignored. Rotate via the UI. <span class="req">required</span></dd>
+            <dt>ACCESS_TOKEN_EXPIRE_MINUTES</dt>
+            <dd>Short-lived bearer token TTL. <span class="opt">default 60</span></dd>
+            <dt>REFRESH_TOKEN_EXPIRE_DAYS</dt>
+            <dd>Refresh-token TTL. Rotated on each use. <span class="opt">default 30</span></dd>
+          </dl>
+
+          <h3>F-Droid repo</h3>
+          <dl class="spec">
+            <dt>REPO_NAME</dt>
+            <dd>Shown in the F-Droid client header. Free text.</dd>
+            <dt>REPO_DESCRIPTION</dt>
+            <dd>Subtitle in the F-Droid client.</dd>
+            <dt>KEYSTORE_PATH</dt>
+            <dd>Path inside the container — keep the default unless you mount your own. Auto-created on first wizard run.</dd>
+            <dt>KEYSTORE_PASSWORD · KEY_PASSWORD</dt>
+            <dd>Both must be set before the wizard runs. <span class="req">required</span></dd>
+            <dt>KEY_ALIAS · KEY_DNAME</dt>
+            <dd>Used when the wizard generates a fresh key.</dd>
+          </dl>
+
+          <h3>CORS</h3>
+          <dl class="spec">
+            <dt>CORS_ORIGINS</dt>
+            <dd>Comma-separated list of origins allowed to call the API. e.g. <code>https://apks.example.com</code>. The browser SPA on the same host doesn't need to be listed.</dd>
+          </dl>
+        </section>
+
+        <!-- 04 -->
+        <section class="doc-section" id="storage">
+          <h2><span class="num">04</span>Storage backends</h2>
+          <p>One env var picks where APKs and indexes live. The active backend is held by all the backend + worker containers.</p>
+
+          <h3>Local filesystem</h3>
+          <p>Cheap, fast, and the default. APKs land under <code>/data/storage</code> inside the container, which the stock compose mounts as a named volume. nginx serves public APKs directly and private APKs via <code>X-Accel-Redirect</code>.</p>
+          <div class="code">
+            <div class="strip">
+              <span class="what">.env</span>
+              <span>local fs</span>
+              <button class="copy" type="button">copy</button>
+            </div>
+<pre><span class="c-kw">STORAGE_BACKEND</span>=local
+<span class="c-kw">LOCAL_STORAGE_PATH</span>=/data/storage</pre>
+          </div>
+
+          <h3>S3 (or any S3-compatible)</h3>
+          <p>Works with AWS S3, MinIO, Wasabi, Backblaze B2, Cloudflare R2, etc. Set <code>S3_ENDPOINT_URL</code> for anything that's not AWS.</p>
+          <div class="code">
+            <div class="strip">
+              <span class="what">.env</span>
+              <span>s3-compatible</span>
+              <button class="copy" type="button">copy</button>
+            </div>
+<pre><span class="c-kw">STORAGE_BACKEND</span>=s3
+<span class="c-kw">S3_ENDPOINT_URL</span>=https://s3.eu-west-3.amazonaws.com   <span class="c-cmt"># or your MinIO</span>
+<span class="c-kw">S3_REGION</span>=eu-west-3
+<span class="c-kw">S3_BUCKET</span>=fdroid-store
+<span class="c-kw">S3_ACCESS_KEY</span>=AKIA...
+<span class="c-kw">S3_SECRET_KEY</span>=...
+<span class="c-kw">S3_USE_PATH_STYLE</span>=true                            <span class="c-cmt"># MinIO/B2 wants true; AWS wants false</span>
+<span class="c-kw">S3_PUBLIC_BASE_URL</span>=https://cdn.example.com         <span class="c-cmt"># optional CDN in front</span></pre>
+          </div>
+
+          <div class="callout warn">
+            <div class="badge">WARN</div>
+            <p>Switching backends mid-life is <strong>not</strong> a hot-swap. Copy the bucket contents before flipping the env var, and trigger a full reindex from <code>/admin/repo</code> afterwards.</p>
+          </div>
+        </section>
+
+        <!-- 05 -->
+        <section class="doc-section" id="auth">
+          <h2><span class="num">05</span>Authentication &amp; OIDC</h2>
+          <p>Two modes can run together: local password (argon2) and OIDC (Authlib). Each user account binds to one or both.</p>
+
+          <h3>Local only</h3>
+          <div class="code">
+            <div class="strip"><span class="what">.env</span><span>local</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">AUTH_METHODS</span>=local
+<span class="c-kw">ALLOW_SIGNUP</span>=true   <span class="c-cmt"># or false if you want invite-only</span></pre>
+          </div>
+
+          <h3>OIDC (Keycloak, Authentik, Google, …)</h3>
+          <p>Add <code>oidc</code> to <code>AUTH_METHODS</code> and provide the issuer + client credentials. The OIDC <em>Sign in</em> button appears on the login page.</p>
+          <div class="code">
+            <div class="strip"><span class="what">.env</span><span>oidc</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">AUTH_METHODS</span>=local,oidc
+<span class="c-kw">OIDC_ISSUER</span>=https://auth.example.com/realms/myrealm
+<span class="c-kw">OIDC_CLIENT_ID</span>=fdroid-store
+<span class="c-kw">OIDC_CLIENT_SECRET</span>=...
+<span class="c-kw">OIDC_SCOPES</span>=openid profile email
+<span class="c-cmt"># optional: auto-promote on group membership</span>
+<span class="c-kw">OIDC_ADMIN_CLAIM</span>=groups=fdroid-admins</pre>
+          </div>
+          <p>The redirect URI to register with your IdP is <code>$PUBLIC_API_URL/api/v1/auth/oidc/callback</code>.</p>
+
+          <h3>TOTP (second factor)</h3>
+          <p>TOTP enrolment is per-user — no env var required. Each user goes to <code>/account → Two-factor</code>, scans the QR with any RFC&nbsp;6238 app (Aegis, Bitwarden, Google Authenticator, 1Password…) and confirms with a 6-digit code. Subsequent logins prompt for the code <em>after</em> the password.</p>
+
+          <div class="callout">
+            <div class="badge">TIP</div>
+            <p>Admins can <em>require</em> TOTP by disabling password-only sessions in <code>/admin/access</code> once the team has all enrolled.</p>
+          </div>
+        </section>
+
+        <!-- 06 -->
+        <section class="doc-section" id="clamav">
+          <h2><span class="num">06</span>ClamAV — opt-in malware scan</h2>
+          <p>fdroid-store ships a <em>ClamAV-ready</em> compose profile. Without it, the <code>clamav</code> service stays down and uploads aren't scanned. Enable it in two steps:</p>
+
+          <ol class="steps">
+            <li>
+              <strong>Set the env vars</strong>
+              <p>In your <code>.env</code>:</p>
+              <div class="code">
+                <div class="strip"><span class="what">.env</span><span>clamav</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">CLAMAV_HOST</span>=clamav            <span class="c-cmt"># the compose service name</span>
+<span class="c-kw">CLAMAV_PORT</span>=3310
+<span class="c-kw">CLAMAV_MAX_STREAM_MB</span>=100     <span class="c-cmt"># matches clamd's StreamMaxLength</span></pre>
+              </div>
+            </li>
+            <li>
+              <strong>Start the stack with the profile</strong>
+              <p>The profile flag adds the <code>clamav</code> container to <code>up</code> / <code>down</code> calls.</p>
+              <div class="code">
+                <div class="strip"><span class="what">bash</span><span>up</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-fn">docker</span> compose <span class="c-fl">--profile</span> clamav <span class="c-fl">up</span> <span class="c-fl">-d</span></pre>
+              </div>
+            </li>
+            <li>
+              <strong>Turn it on in admin</strong>
+              <p>Open <code>/admin/repo</code> → toggle <em>Scan on upload</em>. The freshmclamd container takes ~5 min on first boot to download its signature database — until it's ready, <code>/admin/scans</code> shows a red banner.</p>
+            </li>
+          </ol>
+
+          <div class="callout warn">
+            <div class="badge">NOTE</div>
+            <p>If <code>CLAMAV_HOST</code> is set but the container isn't running, uploads with scan-on-upload enabled return <code>503 scanner unavailable</code>. Either start the profile or clear the env var.</p>
+          </div>
+        </section>
+
+        <!-- 07 -->
+        <section class="doc-section" id="forges">
+          <h2><span class="num">07</span>Forge tokens (optional)</h2>
+          <p>fdroid-store can auto-fetch new APK releases from GitHub, GitLab, and Gitea / Forgejo (including self-hosted instances). Tokens unlock private repos and raise the API rate budget.</p>
+
+          <p>Two ways to provide a token — they coexist; per-source wins:</p>
+          <ul>
+            <li><strong>Per-source (UI):</strong> users paste a PAT in the app's source panel. It's encrypted at rest with Fernet (key derived from <code>SECRET_KEY</code>) and only the <code>has_access_token</code> boolean is ever returned by the API.</li>
+            <li><strong>Server-wide (env):</strong> a fallback for the operator, used when a source has no per-source PAT.</li>
+          </ul>
+          <div class="code">
+            <div class="strip"><span class="what">.env</span><span>forge fallback tokens</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">GITHUB_TOKEN</span>=ghp_...
+<span class="c-kw">GITLAB_TOKEN</span>=glpat-...
+<span class="c-kw">GITEA_TOKEN</span>=...</pre>
+          </div>
+          <p>For self-hosted GitLab / Gitea, the user provides the <code>base_url</code> on the source itself (e.g. <code>https://forge.internal</code>). It goes through the SSRF guard before any request is made.</p>
+        </section>
+
+        <!-- 08 -->
+        <section class="doc-section" id="proxy">
+          <h2><span class="num">08</span>Reverse proxy &amp; TLS</h2>
+          <p>The bundled <code>frontend</code> container is itself nginx. For production you'll want a second layer that terminates TLS and forwards to it. Two recipes:</p>
+
+          <h3>Caddy</h3>
+          <div class="code">
+            <div class="strip"><span class="what">Caddyfile</span><span>tls + reverse_proxy</span><button class="copy" type="button">copy</button></div>
+<pre>apks.example.com {
+  encode zstd gzip
+  reverse_proxy localhost:8080
+}</pre>
+          </div>
+
+          <h3>nginx (host-level, in front of the compose stack)</h3>
+          <div class="code">
+            <div class="strip"><span class="what">nginx.conf</span><span>tls front</span><button class="copy" type="button">copy</button></div>
+<pre>server {
+  listen 443 ssl http2;
+  server_name apks.example.com;
+
+  ssl_certificate     /etc/letsencrypt/live/apks.example.com/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/apks.example.com/privkey.pem;
+
+  client_max_body_size 200m;     <span class="c-cmt"># raise above your max APK size</span>
+
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}</pre>
+          </div>
+
+          <div class="callout">
+            <div class="badge">HSTS</div>
+            <p>Set <code>ENABLE_HSTS=1</code> on the <code>frontend</code> container env to make the bundled nginx emit a <code>Strict-Transport-Security</code> header. Only do this once TLS is confirmed working — HSTS is sticky in browsers.</p>
+          </div>
+        </section>
+
+        <!-- 09 -->
+        <section class="doc-section" id="hardening">
+          <h2><span class="num">09</span>Hardening notes</h2>
+          <ul>
+            <li><strong>SECRET_KEY rotation</strong>: invalidates all JWTs, refresh tokens, OIDC state cookies, and decrypts any stored Fernet PATs. Plan for users to re-login and re-enter forge PATs.</li>
+            <li><strong>Containers</strong> run <code>read_only</code> with <code>no-new-privileges</code> and all caps dropped. Don't relax this unless you have a specific reason.</li>
+            <li><strong>Rate limits</strong> (slowapi): login/signup/MFA 5/min, refresh 10/min, OIDC 20/min, app list 10/min, forge upsert 10/min, APK inspect 10/min. Tune by editing the <code>@limiter.limit()</code> decorators if needed.</li>
+            <li><strong>SSRF</strong>: forge fetches resolve DNS, reject metadata IP ranges (link-local, AWS/GCP/Azure metadata, RFC1918 if you don't host your forge there), walk redirects manually with the same checks, strip userinfo from URLs.</li>
+            <li><strong>CSP / X-Frame-Options / X-Content-Type-Options</strong> are emitted by the <code>frontend</code> nginx layer. Inspect <code>frontend/nginx.conf.template</code> if you need to add a CDN domain to <code>img-src</code>.</li>
+            <li><strong>Backups</strong>: snapshot the <code>postgres</code> volume and the <code>storage</code> volume together. Without the database the index can be rebuilt, but app metadata, audit log, and user accounts live in pg.</li>
+          </ul>
+        </section>
+
+        <!-- 10 -->
+        <section class="doc-section" id="upgrade">
+          <h2><span class="num">10</span>Upgrading</h2>
+          <p>Migrations run automatically on backend boot — there's nothing to invoke by hand.</p>
+          <div class="code">
+            <div class="strip"><span class="what">bash</span><span>upgrade</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-fn">docker</span> compose pull
+<span class="c-fn">docker</span> compose <span class="c-fl">up</span> <span class="c-fl">-d</span>             <span class="c-cmt"># or add --profile clamav</span>
+<span class="c-fn">docker</span> compose logs <span class="c-fl">-f</span> backend  <span class="c-cmt"># watch the Alembic output</span></pre>
+          </div>
+          <p>Rolling back a release means rolling back the image tag <em>and</em> the database. Take a <code>pg_dump</code> before any upgrade you're not sure about.</p>
+        </section>
+
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-foot">
+    <div class="wrap">
+      <div class="row">
+        <div>
+          <a class="brand" href="./" style="display:inline-flex; gap:10px; align-items:center; font-family: var(--f-display); font-weight: 800; text-transform: uppercase; font-size: 1.3rem; color: var(--ink);">
+            <span style="width:24px;height:24px;display:grid;place-items:center;background:var(--phos);color:var(--bg);border-radius:6px;font-family:var(--f-mono);font-size:11px;font-weight:700;">F·</span>
+            fdroid-<b style="color:var(--phos);">store</b>
+          </a>
+          <p>Self-hosted F-Droid repository. Built for operators who want their own app delivery without giving up F-Droid compatibility.</p>
+        </div>
+        <div>
+          <h6>Docs</h6>
+          <ul>
+            <li><a href="install.html">Install &amp; infra</a></li>
+            <li><a href="admin.html">Administration</a></li>
+            <li><a href="users.html">User guide</a></li>
+            <li><a href="integrations.html">Integrations</a></li>
+          </ul>
+        </div>
+        <div>
+          <h6>Project</h6>
+          <ul>
+            <li><a href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">GitHub repository</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/issues" target="_blank" rel="noopener">Issues</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/releases" target="_blank" rel="noopener">Releases</a></li>
+            <li><a href="https://f-droid.org" target="_blank" rel="noopener">F-Droid project</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="meta">
+        <span class="sig">[ fd-store ]</span>
+        <span>v1.0.0</span>
+        <span>·</span>
+        <span>MIT licensed</span>
+        <span style="margin-left:auto;">Built for self-hosting.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

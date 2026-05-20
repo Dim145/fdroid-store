@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Integrations — fdroid-store</title>
+  <meta name="description" content="Point F-Droid clients at your repo, publish APKs from CI, and wire up forge auto-ingest (GitHub, GitLab, Gitea/Forgejo)." />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="./" aria-label="fdroid-store home">
+          <span class="logo">F·</span>
+          <span>fdroid-<b>store</b></span>
+        </a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="menu">menu</button>
+        <div class="links" id="menu" role="menu">
+          <a href="./" role="menuitem">Overview</a>
+          <a href="install.html" role="menuitem">Install</a>
+          <a href="admin.html" role="menuitem">Admin</a>
+          <a href="users.html" role="menuitem">Users</a>
+          <a href="integrations.html" role="menuitem">Integrations</a>
+          <a class="gh" href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.05-.49.05-.49.81.06 1.24.83 1.24.83.72 1.23 1.88.88 2.34.67.07-.52.28-.88.51-1.08-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82A7.5 7.5 0 0 1 8 4.07c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span>GitHub</span>
+          </a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap doc-layout">
+
+      <aside class="toc" aria-label="Table of contents">
+        <h5>Integration · TOC</h5>
+        <ol>
+          <li><a href="#client" data-num="01">F-Droid client</a></li>
+          <li><a href="#client-private" data-num="02">Private apps in the client</a></li>
+          <li><a href="#ci" data-num="03">CI publishing</a></li>
+          <li><a href="#ci-curl" data-num="04">curl</a></li>
+          <li><a href="#ci-gh-actions" data-num="05">GitHub Actions</a></li>
+          <li><a href="#ci-gitlab" data-num="06">GitLab CI</a></li>
+          <li><a href="#ci-jenkins" data-num="07">Jenkins / generic</a></li>
+          <li><a href="#forges" data-num="08">Forge auto-ingest</a></li>
+          <li><a href="#api" data-num="09">REST API basics</a></li>
+          <li><a href="#feeds" data-num="10">Atom / RSS feeds</a></li>
+        </ol>
+      </aside>
+
+      <article class="doc-body">
+        <div class="eyebrow">Doc · 04 · Integrations</div>
+        <h1>Integrations.</h1>
+        <p class="lead">
+          Three flavours of integration: pointing an <strong>F-Droid client</strong>
+          at your repo, publishing APKs from <strong>CI</strong>, and wiring up
+          <strong>forge auto-ingest</strong> so releases on GitHub / GitLab /
+          Gitea show up here automatically.
+        </p>
+
+        <!-- 01 client -->
+        <section class="doc-section" id="client">
+          <h2><span class="num">01</span>F-Droid client setup</h2>
+          <p>Any F-Droid Android client speaks the standard index protocol — there's nothing custom to install. Add the repo URL the same way you'd add f-droid.org.</p>
+
+          <h3>The URL</h3>
+          <p>The repo path is always:</p>
+          <div class="code">
+            <div class="strip"><span class="what">url</span><span>public repo</span><button class="copy" type="button">copy</button></div>
+<pre>https://apks.example.com/fdroid/repo</pre>
+          </div>
+
+          <h3>QR code</h3>
+          <p>Under <code>/admin/repo</code>, the address card shows a QR code. Scan it from the F-Droid app's <em>Add repository</em> screen and you're subscribed.</p>
+
+          <div class="shot real">
+            <div class="titlebar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">https://apks.example.com/admin/repo</span>
+            </div>
+            <div class="body">
+              <img src="assets/shots/admin-repo.png" alt="Admin → Repo: public name, description, address, icon. The address is what the F-Droid client subscribes to." loading="lazy" />
+            </div>
+          </div>
+
+          <h3>Fingerprint pinning</h3>
+          <p>For extra safety, paste the repo's <strong>signing-cert SHA-256 fingerprint</strong> next to the URL when adding the repo. F-Droid refuses to switch certs silently — pinning protects against a hostile DNS swap.</p>
+          <p>The fingerprint is visible in <code>/admin/repo</code>, and is also baked into the URL F-Droid hands back when you scan the QR code (the <code>?fingerprint=</code> query param).</p>
+        </section>
+
+        <!-- 02 private apps in client -->
+        <section class="doc-section" id="client-private">
+          <h2><span class="num">02</span>Private apps in the F-Droid client</h2>
+          <p>Apps marked <em>private</em> aren't in the public index — you can't see them from <code>fdroid.example.com/fdroid/repo</code>. To pull them, the client authenticates with HTTP Basic auth, using your API key as the password.</p>
+
+          <h3>The trick</h3>
+          <p>The Android F-Droid client supports a <code>username:password@</code> prefix in the repo URL. The username is ignored — only the password matters. Use the full API key as the password:</p>
+
+          <div class="code">
+            <div class="strip"><span class="what">url</span><span>private — basic auth</span><button class="copy" type="button">copy</button></div>
+<pre>https://anyuser:<span class="c-var">fdr_9a4b...3c12_8K3p...vQ9L</span>@apks.example.com/fdroid/repo</pre>
+          </div>
+
+          <h3>Step-by-step</h3>
+          <ol class="steps">
+            <li><strong>Mint an API key</strong><p>From <code>/account → API keys → New key</code>. Copy it — it's shown once.</p></li>
+            <li><strong>Form the URL</strong><p>Stick the key in front of the host as the Basic-auth password. Any username works.</p></li>
+            <li><strong>Add to F-Droid</strong><p>F-Droid → <em>Settings → Repositories → Add repo</em>. Paste the URL. F-Droid stores the credential server-side; in transit, the <code>Authorization: Basic</code> header carries it.</p></li>
+            <li><strong>Sync</strong><p>F-Droid now sees both public and private apps. Updates fetch with the same credential.</p></li>
+          </ol>
+
+          <div class="callout warn">
+            <div class="badge">SCOPE</div>
+            <p>The Basic-auth key is your <strong>account-wide</strong> credential. If the device is stolen, revoke it from <code>/account → API keys</code>. Don't share one device's key across devices.</p>
+          </div>
+        </section>
+
+        <!-- 03 CI overview -->
+        <section class="doc-section" id="ci">
+          <h2><span class="num">03</span>CI publishing</h2>
+          <p>To publish an APK from a pipeline, you need:</p>
+          <ul>
+            <li>An <strong>app</strong> already created in fdroid-store (manually or via the wizard).</li>
+            <li>A <strong>deploy token</strong> — minted on that app's page. <code>fdci_&lt;prefix&gt;_&lt;secret&gt;</code>.</li>
+            <li>The <strong>upload URL</strong> — shown on the same page.</li>
+          </ul>
+
+          <h3>Why a deploy token and not an API key?</h3>
+          <p>API keys have your full account power (read all your apps, manage account settings, …). Deploy tokens are scoped to <em>one app, upload-only</em> — leak blast radius bounded. If you ship the same key to ten apps' CI runners, one compromised runner only touches one app.</p>
+
+          <div class="shot">
+            <div class="titlebar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">https://apks.example.com/my-apps/9a4b…/ci</span>
+            </div>
+            <div class="body">
+              <div class="eyebrow" style="margin-bottom: 14px;">CI publication · deploy tokens</div>
+              <div class="ui-card">
+                <div class="ui-row" style="justify-content: space-between;">
+                  <div>
+                    <div class="ui-label">Token name</div>
+                    <strong style="color: var(--ink);">github-actions</strong>
+                  </div>
+                  <div>
+                    <div class="ui-label">Prefix</div>
+                    <code style="color: var(--phos-2);">fdci_a2c8…</code>
+                  </div>
+                  <div>
+                    <div class="ui-label">Last used</div>
+                    <span style="color: var(--ink-soft);">2 minutes ago</span>
+                  </div>
+                  <span class="ui-pill phos">active</span>
+                </div>
+              </div>
+              <div class="ui-card">
+                <div class="ui-row" style="justify-content: space-between;">
+                  <div>
+                    <div class="ui-label">Token name</div>
+                    <strong style="color: var(--ink);">gitlab-ci</strong>
+                  </div>
+                  <div>
+                    <div class="ui-label">Prefix</div>
+                    <code style="color: var(--phos-2);">fdci_71fb…</code>
+                  </div>
+                  <div>
+                    <div class="ui-label">Last used</div>
+                    <span style="color: var(--ink-soft);">3 days ago</span>
+                  </div>
+                  <span class="ui-pill phos">active</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <h3>Minting the token</h3>
+          <p>From the app page, <em>CI Publication</em> panel:</p>
+          <ol class="steps">
+            <li><strong>Name the token</strong><p>Use the CI runner's name — "github-actions", "gitlab-shared", "k8s-runner-prod". Future-you will thank you.</p></li>
+            <li><strong>Click <em>Generate</em></strong><p>The modal shows the full <code>fdci_…</code> string <strong>once</strong> with copy buttons and ready-to-paste snippets for curl, GitHub Actions, GitLab CI.</p></li>
+            <li><strong>Paste into the CI's secret store</strong><p>Don't commit the token. Use GitHub Secrets, GitLab Variables (masked), Jenkins Credentials, etc.</p></li>
+          </ol>
+
+          <h3>The upload contract</h3>
+          <p>Click the <em>How to publish</em> button on the CI panel any time — it shows the spec without minting a new token:</p>
+          <dl class="spec">
+            <dt>Method</dt>
+            <dd><code>POST</code></dd>
+            <dt>URL</dt>
+            <dd><code>$PUBLIC_API_URL/api/v1/apks/upload/&lt;APP_ID&gt;</code></dd>
+            <dt>Auth</dt>
+            <dd><code>Authorization: Bearer &lt;YOUR_TOKEN&gt;</code></dd>
+            <dt>Body</dt>
+            <dd><code>multipart/form-data</code> &mdash; one field named <code>file</code> with the APK.</dd>
+            <dt>Response</dt>
+            <dd><code>201 Created</code> with the parsed manifest. <code>409</code> on duplicate versionCode. <code>422</code> on signing-cert mismatch or ClamAV positive.</dd>
+          </dl>
+        </section>
+
+        <!-- 04 curl -->
+        <section class="doc-section" id="ci-curl">
+          <h2><span class="num">04</span>curl</h2>
+          <p>The minimum viable client. Useful for ad-hoc tests and shell scripts.</p>
+          <div class="code">
+            <div class="strip"><span class="what">bash</span><span>upload one apk</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-fn">curl</span> <span class="c-fl">-fSL</span> <span class="c-fl">-X</span> POST <span class="c-str">"$REPO_URL/api/v1/apks/upload/$APP_ID"</span> \
+  <span class="c-fl">-H</span> <span class="c-str">"Authorization: Bearer $FDROID_DEPLOY_TOKEN"</span> \
+  <span class="c-fl">-F</span> <span class="c-str">"file=@build/outputs/apk/release/app-release.apk"</span></pre>
+          </div>
+          <p>The <code>-f</code> flag makes curl fail loudly on a non-2xx response — important in CI.</p>
+        </section>
+
+        <!-- 05 GH Actions -->
+        <section class="doc-section" id="ci-gh-actions">
+          <h2><span class="num">05</span>GitHub Actions</h2>
+          <p>Add the deploy token to <em>Repo → Settings → Secrets and variables → Actions</em> as <code>FDROID_DEPLOY_TOKEN</code>. The workflow below assumes you already build the APK earlier in the run.</p>
+
+          <div class="code">
+            <div class="strip"><span class="what">.github/workflows/publish.yml</span><span>github actions</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">name</span>: <span class="c-str">Publish APK</span>
+
+<span class="c-kw">on</span>:
+  <span class="c-kw">release</span>:
+    <span class="c-kw">types</span>: [<span class="c-str">published</span>]
+
+<span class="c-kw">jobs</span>:
+  <span class="c-kw">publish</span>:
+    <span class="c-kw">runs-on</span>: ubuntu-latest
+    <span class="c-kw">steps</span>:
+      - <span class="c-kw">uses</span>: actions/checkout@v4
+
+      - <span class="c-kw">name</span>: <span class="c-str">Build APK</span>
+        <span class="c-kw">run</span>: ./gradlew assembleRelease
+
+      - <span class="c-kw">name</span>: <span class="c-str">Push to fdroid-store</span>
+        <span class="c-kw">env</span>:
+          <span class="c-kw">FDROID_DEPLOY_TOKEN</span>: ${{ secrets.FDROID_DEPLOY_TOKEN }}
+          <span class="c-kw">REPO_URL</span>: <span class="c-str">https://apks.example.com</span>
+          <span class="c-kw">APP_ID</span>: <span class="c-str">9a4b1f8c-3e12-4d8c-a9e0-...</span>
+        <span class="c-kw">run</span>: |
+          curl -fSL -X POST <span class="c-str">"$REPO_URL/api/v1/apks/upload/$APP_ID"</span> \
+            -H <span class="c-str">"Authorization: Bearer $FDROID_DEPLOY_TOKEN"</span> \
+            -F <span class="c-str">"file=@app/build/outputs/apk/release/app-release.apk"</span></pre>
+          </div>
+
+          <p>If you publish multiple build flavours, loop over them:</p>
+          <div class="code">
+            <div class="strip"><span class="what">yaml</span><span>multi-variant</span><button class="copy" type="button">copy</button></div>
+<pre>      - <span class="c-kw">name</span>: <span class="c-str">Push variants</span>
+        <span class="c-kw">env</span>:
+          <span class="c-kw">FDROID_DEPLOY_TOKEN</span>: ${{ secrets.FDROID_DEPLOY_TOKEN }}
+        <span class="c-kw">run</span>: |
+          <span class="c-kw">for</span> apk <span class="c-kw">in</span> app/build/outputs/apk/release/*.apk; <span class="c-kw">do</span>
+            curl -fSL -X POST <span class="c-str">"https://apks.example.com/api/v1/apks/upload/$APP_ID"</span> \
+              -H <span class="c-str">"Authorization: Bearer $FDROID_DEPLOY_TOKEN"</span> \
+              -F <span class="c-str">"file=@$apk"</span>
+          <span class="c-kw">done</span></pre>
+          </div>
+        </section>
+
+        <!-- 06 GitLab CI -->
+        <section class="doc-section" id="ci-gitlab">
+          <h2><span class="num">06</span>GitLab CI</h2>
+          <p>In <em>Project → Settings → CI/CD → Variables</em>, add <code>FDROID_DEPLOY_TOKEN</code> as a masked, protected variable.</p>
+
+          <div class="code">
+            <div class="strip"><span class="what">.gitlab-ci.yml</span><span>gitlab ci</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">stages</span>:
+  - build
+  - deploy
+
+<span class="c-kw">build_apk</span>:
+  <span class="c-kw">stage</span>: build
+  <span class="c-kw">script</span>:
+    - ./gradlew assembleRelease
+  <span class="c-kw">artifacts</span>:
+    <span class="c-kw">paths</span>:
+      - app/build/outputs/apk/release/
+
+<span class="c-kw">publish_apk</span>:
+  <span class="c-kw">stage</span>: deploy
+  <span class="c-kw">needs</span>: [<span class="c-str">build_apk</span>]
+  <span class="c-kw">script</span>:
+    - |
+      curl -fSL -X POST <span class="c-str">"https://apks.example.com/api/v1/apks/upload/$APP_ID"</span> \
+        -H <span class="c-str">"Authorization: Bearer $FDROID_DEPLOY_TOKEN"</span> \
+        -F <span class="c-str">"file=@app/build/outputs/apk/release/app-release.apk"</span>
+  <span class="c-kw">only</span>:
+    - tags</pre>
+          </div>
+        </section>
+
+        <!-- 07 Jenkins / generic -->
+        <section class="doc-section" id="ci-jenkins">
+          <h2><span class="num">07</span>Jenkins / generic</h2>
+          <p>Any tool that can run curl will do. Below is a Jenkins declarative example:</p>
+
+          <div class="code">
+            <div class="strip"><span class="what">Jenkinsfile</span><span>jenkins</span><button class="copy" type="button">copy</button></div>
+<pre>pipeline {
+  agent any
+  environment {
+    APP_ID = <span class="c-str">'9a4b1f8c-…'</span>
+    REPO   = <span class="c-str">'https://apks.example.com'</span>
+  }
+  stages {
+    stage(<span class="c-str">'Publish'</span>) {
+      steps {
+        withCredentials([string(credentialsId: <span class="c-str">'fdroid-deploy'</span>, variable: <span class="c-str">'FDROID_DEPLOY_TOKEN'</span>)]) {
+          sh <span class="c-str">'''
+            curl -fSL -X POST "$REPO/api/v1/apks/upload/$APP_ID" \\
+              -H "Authorization: Bearer $FDROID_DEPLOY_TOKEN" \\
+              -F "file=@app/build/outputs/apk/release/app-release.apk"
+          '''</span>
+        }
+      }
+    }
+  }
+}</pre>
+          </div>
+        </section>
+
+        <!-- 08 forges -->
+        <section class="doc-section" id="forges">
+          <h2><span class="num">08</span>Forge auto-ingest</h2>
+          <p>Instead of pushing from CI, you can have the worker <strong>pull</strong> from your release pipeline. fdroid-store supports three forges:</p>
+
+          <div class="features" style="grid-template-columns: repeat(3, 1fr);">
+            <article class="feature">
+              <span class="ix">A</span>
+              <h3>GitHub</h3>
+              <p>Public &amp; private repos. PAT optional for public; required for private. Uses the standard <code>api.github.com</code>.</p>
+              <span class="tag">/repos/&lt;owner&gt;/&lt;repo&gt;/releases</span>
+            </article>
+            <article class="feature">
+              <span class="ix">B</span>
+              <h3>GitLab</h3>
+              <p>gitlab.com or self-hosted. Set the base URL on the source if it's not gitlab.com. <code>read_api</code> scope is enough.</p>
+              <span class="tag">/api/v4/projects/&lt;id&gt;/releases</span>
+            </article>
+            <article class="feature">
+              <span class="ix">C</span>
+              <h3>Gitea / Forgejo</h3>
+              <p>Self-hosted by definition. The source carries the base URL; SSRF guard runs first.</p>
+              <span class="tag">/api/v1/repos/&lt;owner&gt;/&lt;repo&gt;/releases</span>
+            </article>
+          </div>
+
+          <h3>Setup</h3>
+          <ol class="steps">
+            <li>
+              <strong>Open the app source panel</strong>
+              <p>From <code>/my-apps/&lt;id&gt;</code>, scroll to <em>Release source</em>. Pick a provider.</p>
+            </li>
+            <li>
+              <strong>Fill the fields</strong>
+              <ul>
+                <li><strong>Repository</strong>: <code>owner/name</code> (e.g. <code>Dim145/fdroid-store</code>) or a full <code>https://</code> URL.</li>
+                <li><strong>Base URL</strong>: only for self-hosted GitLab / Gitea. <code>https://</code> only — the SSRF guard rejects everything else.</li>
+                <li><strong>Asset pattern</strong>: glob applied to the release asset name. Default = first <code>.apk</code>. Examples: <code>*-universal.apk</code>, <code>app-release-*.apk</code>.</li>
+                <li><strong>Access token (optional)</strong>: required for private repos. Stored Fernet-encrypted at rest — only <code>has_access_token: true</code> is ever returned by the API.</li>
+              </ul>
+            </li>
+            <li>
+              <strong>Save &amp; scan</strong>
+              <p>Click <em>Scan now</em> to do an immediate fetch. From then on the worker re-checks every source on a daily cron (see <a href="admin.html#jobs">jobs dashboard</a>).</p>
+            </li>
+          </ol>
+
+          <h3>What happens on a new release</h3>
+          <ol>
+            <li>Worker lists releases since the last poll's timestamp.</li>
+            <li>Filters to assets matching the glob.</li>
+            <li>Downloads each asset to a tmpfile — under the proxy/redirect SSRF guard.</li>
+            <li>Runs the same pipeline as a manual upload: parse manifest → cert check → ClamAV (if on) → retention eviction.</li>
+            <li>Records every transition in the audit log.</li>
+            <li>Triggers a reindex.</li>
+          </ol>
+
+          <div class="callout warn">
+            <div class="badge">PAT</div>
+            <p>Per-source PATs override the server-wide <code>GITHUB_TOKEN</code> / <code>GITLAB_TOKEN</code> / <code>GITEA_TOKEN</code> env fallbacks. Rotate them by editing the source — the UI shows a <em>token configured</em> chip but never reveals the secret.</p>
+          </div>
+        </section>
+
+        <!-- 09 REST API basics -->
+        <section class="doc-section" id="api">
+          <h2><span class="num">09</span>REST API basics</h2>
+          <p>If you outgrow the deploy-token-plus-curl approach, the whole platform exposes a JSON API at <code>/api/v1/*</code>.</p>
+
+          <h3>Auth</h3>
+          <p>Three credential shapes are accepted on every authenticated endpoint:</p>
+          <dl class="spec">
+            <dt>JWT bearer</dt>
+            <dd><code>Authorization: Bearer &lt;access_token&gt;</code>. Obtain from <code>POST /api/v1/auth/login</code>. TTL 60min by default; rotate via <code>POST /api/v1/auth/refresh</code>.</dd>
+            <dt>API key</dt>
+            <dd><code>Authorization: Bearer fdr_&lt;prefix&gt;_&lt;secret&gt;</code>. Same full account scope as a JWT.</dd>
+            <dt>Deploy token</dt>
+            <dd><code>Authorization: Bearer fdci_&lt;prefix&gt;_&lt;secret&gt;</code>. Scoped to one app, upload-only path.</dd>
+          </dl>
+
+          <h3>Discovery</h3>
+          <p>In <code>ENVIRONMENT=development</code>, full Swagger lives at <code>/api/docs</code> and ReDoc at <code>/api/redoc</code>. In <code>production</code> both are disabled — pull the OpenAPI spec from <code>/api/v1/openapi.json</code> instead.</p>
+
+          <h3>Useful endpoints</h3>
+          <div class="code">
+            <div class="strip"><span class="what">api</span><span>cheat sheet</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-cmt"># tell me which auth methods are on</span>
+GET  /api/v1/auth/methods
+
+<span class="c-cmt"># list apps you can see</span>
+GET  /api/v1/apps
+
+<span class="c-cmt"># inspect an APK without uploading it (returns parsed manifest)</span>
+POST /api/v1/apks/inspect
+
+<span class="c-cmt"># mint a download URL for a private APK (admin / owner / co-maintainer)</span>
+POST /api/v1/apks/&lt;apk_id&gt;/download-url
+
+<span class="c-cmt"># your active sessions; DELETE to revoke one</span>
+GET  /api/v1/me/sessions
+DEL  /api/v1/me/sessions/&lt;id&gt;</pre>
+          </div>
+        </section>
+
+        <!-- 10 feeds -->
+        <section class="doc-section" id="feeds">
+          <h2><span class="num">10</span>Atom / RSS feeds</h2>
+          <p>Two feeds for tooling that wants a fire-hose:</p>
+
+          <dl class="spec">
+            <dt>/api/v1/feed/new</dt>
+            <dd>Atom — every new app added to the public repo. Useful for posting to an internal Slack channel.</dd>
+            <dt>/api/v1/feed/updates</dt>
+            <dd>Atom — every <strong>new APK version</strong> published. One entry per (app, version).</dd>
+          </dl>
+
+          <p>Both endpoints also accept <code>?format=rss</code>. Both respect the public/private boundary — anonymous callers see public-only.</p>
+
+          <div class="callout">
+            <div class="badge">SAY HI</div>
+            <p>If you wire something interesting on top of the API, open an issue on <a href="https://github.com/Dim145/fdroid-store/issues" target="_blank" rel="noopener">GitHub</a> and we'll happily link it from here.</p>
+          </div>
+        </section>
+
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-foot">
+    <div class="wrap">
+      <div class="row">
+        <div>
+          <a class="brand" href="./" style="display:inline-flex; gap:10px; align-items:center; font-family: var(--f-display); font-weight: 800; text-transform: uppercase; font-size: 1.3rem; color: var(--ink);">
+            <span style="width:24px;height:24px;display:grid;place-items:center;background:var(--phos);color:var(--bg);border-radius:6px;font-family:var(--f-mono);font-size:11px;font-weight:700;">F·</span>
+            fdroid-<b style="color:var(--phos);">store</b>
+          </a>
+          <p>Self-hosted F-Droid repository. Built for operators who want their own app delivery without giving up F-Droid compatibility.</p>
+        </div>
+        <div>
+          <h6>Docs</h6>
+          <ul>
+            <li><a href="install.html">Install &amp; infra</a></li>
+            <li><a href="admin.html">Administration</a></li>
+            <li><a href="users.html">User guide</a></li>
+            <li><a href="integrations.html">Integrations</a></li>
+          </ul>
+        </div>
+        <div>
+          <h6>Project</h6>
+          <ul>
+            <li><a href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">GitHub repository</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/issues" target="_blank" rel="noopener">Issues</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/releases" target="_blank" rel="noopener">Releases</a></li>
+            <li><a href="https://f-droid.org" target="_blank" rel="noopener">F-Droid project</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="meta">
+        <span class="sig">[ fd-store ]</span>
+        <span>v1.0.0</span>
+        <span>·</span>
+        <span>MIT licensed</span>
+        <span style="margin-left:auto;">Built for self-hosting.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+# ============================================================================
+# static-web-server config for the fdroid-store docs container.
+#
+# Sets sane defaults + a hardened CSP that allows Google Fonts (the only
+# remote dep the site has) and nothing else. Cache policy splits between
+# always-revalidate HTML and lightly-cached CSS/JS/SVG so updates can
+# propagate without a service worker.
+# ============================================================================
+
+[general]
+host             = "::"
+port             = 8080
+root             = "/site"
+log-level        = "info"
+page404          = "/404.html"
+compression      = true
+directory-listing = false
+
+[advanced]
+
+  # ------------------------------------------------------------------------
+  # Security headers — applied to every request.
+  # ------------------------------------------------------------------------
+  [[advanced.headers]]
+  source  = "**/*"
+  headers = { "X-Content-Type-Options" = "nosniff", "X-Frame-Options" = "DENY", "Referrer-Policy" = "strict-origin-when-cross-origin", "Permissions-Policy" = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()", "Strict-Transport-Security" = "max-age=31536000; includeSubDomains", "Content-Security-Policy" = "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests" }
+
+  # ------------------------------------------------------------------------
+  # Cache policy.
+  #   HTML  → no-cache so doc updates show up immediately
+  #   CSS/JS → 5 min  (the asset has no content hash, so keep it short)
+  #   SVG   → 1 day  (almost never changes)
+  # ------------------------------------------------------------------------
+  [[advanced.headers]]
+  source  = "**/*.html"
+  headers = { "Cache-Control" = "no-cache, must-revalidate" }
+
+  [[advanced.headers]]
+  source  = "**/*.{css,js}"
+  headers = { "Cache-Control" = "public, max-age=300" }
+
+  [[advanced.headers]]
+  source  = "**/*.svg"
+  headers = { "Cache-Control" = "public, max-age=86400" }

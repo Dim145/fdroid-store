@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>fdroid-store — self-hosted F-Droid repository</title>
+  <meta name="description" content="A self-hosted F-Droid repository with a modern admin panel, multi-forge auto-ingest, per-app deploy tokens, optional ClamAV, and a client area. Compatible with the standard F-Droid Android client." />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="assets/style.css" />
+  <meta property="og:title" content="fdroid-store" />
+  <meta property="og:description" content="Self-hosted F-Droid repository with admin panel, CI publishing, and multi-forge ingest." />
+  <meta property="og:type" content="website" />
+</head>
+<body>
+
+  <!-- ============ HEADER ============ -->
+  <header class="site-header">
+    <div class="wrap">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="./" aria-label="fdroid-store home">
+          <span class="logo">F·</span>
+          <span>fdroid-<b>store</b></span>
+        </a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="menu">menu</button>
+        <div class="links" id="menu" role="menu">
+          <a href="./" role="menuitem">Overview</a>
+          <a href="install.html" role="menuitem">Install</a>
+          <a href="admin.html" role="menuitem">Admin</a>
+          <a href="users.html" role="menuitem">Users</a>
+          <a href="integrations.html" role="menuitem">Integrations</a>
+          <a class="gh" href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.05-.49.05-.49.81.06 1.24.83 1.24.83.72 1.23 1.88.88 2.34.67.07-.52.28-.88.51-1.08-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82A7.5 7.5 0 0 1 8 4.07c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span>GitHub</span>
+          </a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="grid">
+        <div>
+          <div class="stamp reveal in">
+            <span class="dot" aria-hidden="true"></span>
+            <span>v1.0.0 · self-hosted · Apache-licensed APKs welcome</span>
+          </div>
+          <h1 class="reveal in">
+            Run your own<br />
+            <span class="pop">F-Droid repo.</span>
+          </h1>
+          <p class="lead reveal in" style="margin-top: 18px;">
+            A drop-in <b style="color: var(--ink);">F-Droid index server</b> with a modern admin panel,
+            a client area, per-app deploy tokens for CI, and multi-forge auto-ingest.
+            Speaks the standard <code>index-v1.jar</code> + <code>index-v2.json</code> protocol &mdash;
+            so any F-Droid client just works.
+          </p>
+
+          <div class="cta reveal in">
+            <a class="btn btn-primary" href="install.html">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a1 1 0 0 1 1 1v8.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.42L7 9.59V1a1 1 0 0 1 1-1zM2 14a1 1 0 0 1 1-1h10a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1z"/></svg>
+              <span>Install</span>
+            </a>
+            <a class="btn btn-ghost" href="users.html">User guide</a>
+            <a class="btn btn-ghost" href="integrations.html">CI &amp; client setup</a>
+          </div>
+
+          <div class="snippet reveal in">
+            <div class="bar">
+              <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+              <span>~/fdroid-store</span>
+              <span class="label">bash</span>
+              <button class="copy" type="button" aria-label="Copy command">copy</button>
+            </div>
+<pre><span class="c-cmt"># 1. clone, configure secrets, boot</span>
+<span class="c-fn">git</span> clone https://github.com/Dim145/fdroid-store
+<span class="c-fn">cd</span> fdroid-store
+<span class="c-fn">cp</span> .env.example .env  <span class="c-cmt"># set SECRET_KEY + INITIAL_ADMIN_PASSWORD</span>
+<span class="c-fn">docker</span> compose <span class="c-fl">up -d</span></pre>
+          </div>
+        </div>
+
+        <!-- Architecture schematic — pure SVG, no images -->
+        <div class="schematic reveal in" aria-hidden="true">
+          <span class="corner tl"></span>
+          <span class="corner tr"></span>
+          <span class="corner bl"></span>
+          <span class="corner br"></span>
+          <svg viewBox="0 0 360 380" xmlns="http://www.w3.org/2000/svg" style="width: 100%; height: 100%;">
+            <defs>
+              <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(164,236,95,0.08)" stroke-width="0.5"/>
+              </pattern>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#a4ec5f"/>
+              </marker>
+              <marker id="arrow-amb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#f5b85f"/>
+              </marker>
+            </defs>
+            <rect width="360" height="380" fill="url(#grid)"/>
+
+            <!-- F-Droid client (top) -->
+            <g transform="translate(110 10)">
+              <rect width="140" height="46" rx="6" fill="#11161513" stroke="#a4ec5f" stroke-width="1.2"/>
+              <text x="70" y="22" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="11" font-weight="600">F-Droid client</text>
+              <text x="70" y="36" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9" letter-spacing="1">android.app</text>
+            </g>
+
+            <!-- nginx -->
+            <g transform="translate(110 86)">
+              <rect width="140" height="40" rx="6" fill="#0d1110" stroke="#1d2624"/>
+              <text x="70" y="18" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="11" font-weight="600">nginx</text>
+              <text x="70" y="32" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9" letter-spacing="1">tls · X-Accel · CSP</text>
+            </g>
+
+            <!-- backend (FastAPI) -->
+            <g transform="translate(36 156)">
+              <rect width="130" height="56" rx="6" fill="#0d1110" stroke="#1d2624"/>
+              <text x="65" y="20" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="11" font-weight="600">FastAPI</text>
+              <text x="65" y="34" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9" letter-spacing="1">api · auth · oidc</text>
+              <text x="65" y="46" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9" letter-spacing="1">jwt · slowapi</text>
+            </g>
+
+            <!-- worker -->
+            <g transform="translate(194 156)">
+              <rect width="130" height="56" rx="6" fill="#0d1110" stroke="#1d2624"/>
+              <text x="65" y="20" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="11" font-weight="600">arq worker</text>
+              <text x="65" y="34" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9" letter-spacing="1">reindex · forge</text>
+              <text x="65" y="46" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9" letter-spacing="1">cron · scan</text>
+            </g>
+
+            <!-- Postgres -->
+            <g transform="translate(8 248)">
+              <rect width="100" height="40" rx="6" fill="#11161513" stroke="#1d2624"/>
+              <text x="50" y="18" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="10.5" font-weight="600">Postgres 16</text>
+              <text x="50" y="32" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9">db · audit</text>
+            </g>
+
+            <!-- Redis -->
+            <g transform="translate(130 248)">
+              <rect width="100" height="40" rx="6" fill="#11161513" stroke="#1d2624"/>
+              <text x="50" y="18" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="10.5" font-weight="600">Redis 7</text>
+              <text x="50" y="32" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9">queue · cache</text>
+            </g>
+
+            <!-- Storage (S3 or local) -->
+            <g transform="translate(252 248)">
+              <rect width="100" height="40" rx="6" fill="#11161513" stroke="#1d2624"/>
+              <text x="50" y="18" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="10.5" font-weight="600">FS / S3</text>
+              <text x="50" y="32" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9">APKs · index</text>
+            </g>
+
+            <!-- ClamAV + Forges (bottom strip) -->
+            <g transform="translate(36 314)">
+              <rect width="130" height="36" rx="6" fill="#11161513" stroke="#1d2624" stroke-dasharray="3 3"/>
+              <text x="65" y="16" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="10.5" font-weight="600">ClamAV</text>
+              <text x="65" y="28" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9">opt-in profile</text>
+            </g>
+            <g transform="translate(194 314)">
+              <rect width="130" height="36" rx="6" fill="#11161513" stroke="#1d2624" stroke-dasharray="3 3"/>
+              <text x="65" y="16" text-anchor="middle" fill="#e8e9e3" font-family="Manrope" font-size="10.5" font-weight="600">GH / GL / Gitea</text>
+              <text x="65" y="28" text-anchor="middle" fill="#7d8378" font-family="JetBrains Mono" font-size="9">release fetch</text>
+            </g>
+
+            <!-- arrows -->
+            <!-- F-Droid client → nginx -->
+            <line x1="180" y1="56" x2="180" y2="84" stroke="#a4ec5f" stroke-width="1.4" marker-end="url(#arrow)"/>
+            <!-- nginx → backend ONLY (the worker has no HTTP surface; it's queue-driven) -->
+            <line x1="160" y1="126" x2="101" y2="156" stroke="#a4ec5f" stroke-width="1.4" marker-end="url(#arrow)"/>
+            <!-- backend → data tier (pg / redis / storage) -->
+            <line x1="70"  y1="212" x2="58"  y2="248" stroke="#a4ec5f" stroke-width="1.2" marker-end="url(#arrow)"/>
+            <line x1="120" y1="212" x2="170" y2="248" stroke="#a4ec5f" stroke-width="1.2" marker-end="url(#arrow)"/>
+            <line x1="160" y1="212" x2="282" y2="248" stroke="#a4ec5f" stroke-width="1.2" marker-end="url(#arrow)"/>
+            <!-- redis → worker (the queue wakes the worker) -->
+            <line x1="200" y1="248" x2="232" y2="212" stroke="#a4ec5f" stroke-width="1.2" marker-end="url(#arrow)"/>
+            <!-- worker → storage (read/write APKs + index) -->
+            <line x1="290" y1="212" x2="302" y2="248" stroke="#a4ec5f" stroke-width="1.2" marker-end="url(#arrow)"/>
+            <!-- worker → external (dashed amber) -->
+            <line x1="260" y1="212" x2="259" y2="314" stroke="#f5b85f" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#arrow-amb)"/>
+            <line x1="220" y1="212" x2="101" y2="314" stroke="#f5b85f" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#arrow-amb)"/>
+
+            <!-- side annotations -->
+            <text x="186" y="74" fill="#7d8378" font-family="JetBrains Mono" font-size="8" letter-spacing="1">HTTPS</text>
+            <text x="38"  y="146" fill="#7d8378" font-family="JetBrains Mono" font-size="8" letter-spacing="1">/api · /fdroid</text>
+            <text x="172" y="232" fill="#7d8378" font-family="JetBrains Mono" font-size="8" letter-spacing="1">queue</text>
+          </svg>
+          <div class="legend">
+            <div class="key"><span class="swatch"></span> data path</div>
+            <div class="key"><span class="swatch dash"></span> optional</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FEATURES ============ -->
+  <section class="section">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="num">01 / what's in the box</span>
+        <h2>Built for self-hosting.</h2>
+        <span class="kicker">12 features · zero plugins</span>
+      </div>
+
+      <div class="features reveal">
+
+        <article class="feature">
+          <span class="ix">01</span>
+          <h3>F-Droid native</h3>
+          <p>Speaks the standard <code>index-v1.jar</code> and <code>index-v2.json</code> protocol. Any F-Droid client just adds your URL and works.</p>
+          <span class="tag">protocol · v1 + v2</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">02</span>
+          <h3>Public &amp; private repo</h3>
+          <p>Apps marked <code>private</code> ship in a separate index, gated by Basic-auth API key — supported natively by the Android F-Droid app.</p>
+          <span class="tag">hybrid access</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">03</span>
+          <h3>CI deploy tokens</h3>
+          <p>Mint per-app <code>fdci_…</code> tokens that can only push APKs. Hand one to GitHub Actions, GitLab CI, Jenkins — leak blast radius bounded.</p>
+          <span class="tag">upload-only</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">04</span>
+          <h3>Multi-forge auto-ingest</h3>
+          <p>Attach a <b style="color: var(--ink);">GitHub</b>, <b style="color: var(--ink);">GitLab</b>, or <b style="color: var(--ink);">Gitea/Forgejo</b> repository (self-hosted included) — the worker fetches new releases on a cron.</p>
+          <span class="tag">github · gitlab · gitea</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">05</span>
+          <h3>TOTP 2FA + OIDC</h3>
+          <p>Local password (argon2), OIDC via Authlib (Keycloak, Authentik, Google…), and optional TOTP second factor with QR enrolment.</p>
+          <span class="tag">argon2 · oidc · rfc 6238</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">06</span>
+          <h3>FS or S3 storage</h3>
+          <p>Switch backend with one env var. APKs land in any S3-compatible store: MinIO, Wasabi, Backblaze, AWS. Or stay on local disk.</p>
+          <span class="tag">storage backend</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">07</span>
+          <h3>Optional ClamAV</h3>
+          <p>Opt-in compose profile streams every upload through clamd. Manual + scheduled rescans. Quarantines refused APKs.</p>
+          <span class="tag">--profile clamav</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">08</span>
+          <h3>Retention cap</h3>
+          <p>Repo-wide default + admin per-app override (tighten-only). FIFO eviction by <code>versionCode</code>, never touches the suggested version.</p>
+          <span class="tag">fifo eviction</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">09</span>
+          <h3>Setup wizard</h3>
+          <p>Generate or import your repo signing keystore from the UI on first run. No <code>keytool</code> incantations.</p>
+          <span class="tag">first-boot · p12 · jks</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">10</span>
+          <h3>Audit + jobs UI</h3>
+          <p>Every privileged action lands in an audit log. arq job history surfaces failures. ClamAV results, sessions, invites — all at one URL.</p>
+          <span class="tag">/admin</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">11</span>
+          <h3>Hardened by default</h3>
+          <p>SSRF guards on forge fetches, slowapi rate limits, CSP/HSTS at nginx, read-only containers, all caps dropped, advisory-lock bootstrap.</p>
+          <span class="tag">defense in depth</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">12</span>
+          <h3>en + fr i18n</h3>
+          <p>The whole UI ships English &amp; French out of the box, with per-user locale persistence and a clean i18next surface for more.</p>
+          <span class="tag">i18next</span>
+        </article>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DOCS HUB ============ -->
+  <section class="section">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="num">02 / documentation</span>
+        <h2>Four guides. One repo.</h2>
+        <span class="kicker">pick where you start</span>
+      </div>
+
+      <div class="features reveal">
+        <a class="feature" href="install.html" style="cursor: pointer;">
+          <span class="ix">DOC · 01</span>
+          <h3>Install &amp; infra</h3>
+          <p>Environment variables, storage backends, OIDC, ClamAV opt-in, reverse-proxy notes, first boot.</p>
+          <span class="tag">for operators →</span>
+        </a>
+        <a class="feature" href="admin.html" style="cursor: pointer;">
+          <span class="ix">DOC · 02</span>
+          <h3>Administration</h3>
+          <p>Setup wizard, moderating uploads, users + invites, repo settings, retention cap, audit log, jobs.</p>
+          <span class="tag">for admins →</span>
+        </a>
+        <a class="feature" href="users.html" style="cursor: pointer;">
+          <span class="ix">DOC · 03</span>
+          <h3>User guide</h3>
+          <p>Sign up, enable TOTP, create apps, upload APKs, manage collaborators, retention overrides.</p>
+          <span class="tag">for maintainers →</span>
+        </a>
+        <a class="feature" href="integrations.html" style="cursor: pointer;">
+          <span class="ix">DOC · 04</span>
+          <h3>Integrations</h3>
+          <p>Point F-Droid clients at your repo, publish from CI, wire up forge auto-ingest.</p>
+          <span class="tag">for ci &amp; clients →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STACK SHEET ============ -->
+  <section class="section">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="num">03 / stack</span>
+        <h2>What runs underneath.</h2>
+        <span class="kicker">docker compose</span>
+      </div>
+      <dl class="spec reveal">
+        <dt>backend</dt>
+        <dd>Python <code>3.13</code>, FastAPI, SQLAlchemy 2 async, Alembic, asyncpg, PyJWT, pwdlib (argon2 + bcrypt-legacy), Authlib, slowapi, pyotp, Fernet.</dd>
+        <dt>worker</dt>
+        <dd><code>arq</code> on Redis 7. Reindex, daily ClamAV rescan, forge polling, per-app source scans.</dd>
+        <dt>f-droid tooling</dt>
+        <dd>androguard (manifest), apksigner (signing certificate), jarsigner / keytool (repo signing).</dd>
+        <dt>frontend</dt>
+        <dd>Next.js 16 App Router (static export), React 19, TypeScript, Tailwind 4, Radix UI, Zustand, i18next.</dd>
+        <dt>data</dt>
+        <dd>Postgres 16 · Redis 7 · object storage (local FS or any S3-compatible: MinIO, Wasabi, Backblaze, AWS).</dd>
+        <dt>edge</dt>
+        <dd>nginx — static SPA + reverse proxy + <code>X-Accel-Redirect</code> for private APK delivery + CSP/HSTS headers.</dd>
+        <dt>license</dt>
+        <dd>The platform is MIT. Apps you host keep their own licences.</dd>
+      </dl>
+
+      <div class="callout reveal">
+        <div class="badge">RUN</div>
+        <div>
+          <p style="margin: 0 0 8px;">One command brings the whole stack up. Add <code>--profile clamav</code> to enable on-upload scanning.</p>
+          <p style="margin: 0; color: var(--ink-mute); font-family: var(--f-mono); font-size: 12px;">
+            $ docker compose up -d &nbsp;·&nbsp; $ docker compose --profile clamav up -d
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="site-foot">
+    <div class="wrap">
+      <div class="row">
+        <div>
+          <a class="brand" href="./" style="display:inline-flex; gap:10px; align-items:center; font-family: var(--f-display); font-weight: 800; text-transform: uppercase; font-size: 1.3rem; color: var(--ink);">
+            <span style="width:24px;height:24px;display:grid;place-items:center;background:var(--phos);color:var(--bg);border-radius:6px;font-family:var(--f-mono);font-size:11px;font-weight:700;">F·</span>
+            fdroid-<b style="color:var(--phos);">store</b>
+          </a>
+          <p>Self-hosted F-Droid repository. Built for operators who want their own app delivery without giving up F-Droid compatibility.</p>
+        </div>
+        <div>
+          <h6>Docs</h6>
+          <ul>
+            <li><a href="install.html">Install &amp; infra</a></li>
+            <li><a href="admin.html">Administration</a></li>
+            <li><a href="users.html">User guide</a></li>
+            <li><a href="integrations.html">Integrations</a></li>
+          </ul>
+        </div>
+        <div>
+          <h6>Project</h6>
+          <ul>
+            <li><a href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">GitHub repository</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/issues" target="_blank" rel="noopener">Issues</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/releases" target="_blank" rel="noopener">Releases</a></li>
+            <li><a href="https://f-droid.org" target="_blank" rel="noopener">F-Droid project</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="meta">
+        <span class="sig">[ fd-store ]</span>
+        <span>v1.0.0</span>
+        <span>·</span>
+        <span>MIT licensed</span>
+        <span style="margin-left:auto;">Built for self-hosting.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

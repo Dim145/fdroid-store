@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Administration — fdroid-store</title>
+  <meta name="description" content="Administrator guide: setup wizard, moderating uploads, users + invites, repo settings, retention cap, audit log, jobs, ClamAV." />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="./" aria-label="fdroid-store home">
+          <span class="logo">F·</span>
+          <span>fdroid-<b>store</b></span>
+        </a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="menu">menu</button>
+        <div class="links" id="menu" role="menu">
+          <a href="./" role="menuitem">Overview</a>
+          <a href="install.html" role="menuitem">Install</a>
+          <a href="admin.html" role="menuitem">Admin</a>
+          <a href="users.html" role="menuitem">Users</a>
+          <a href="integrations.html" role="menuitem">Integrations</a>
+          <a class="gh" href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.05-.49.05-.49.81.06 1.24.83 1.24.83.72 1.23 1.88.88 2.34.67.07-.52.28-.88.51-1.08-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82A7.5 7.5 0 0 1 8 4.07c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span>GitHub</span>
+          </a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap doc-layout">
+
+      <aside class="toc" aria-label="Table of contents">
+        <h5>Admin · TOC</h5>
+        <ol>
+          <li><a href="#setup" data-num="01">Setup wizard</a></li>
+          <li><a href="#repo" data-num="02">Repo settings</a></li>
+          <li><a href="#users" data-num="03">Users &amp; invites</a></li>
+          <li><a href="#access" data-num="04">Access &amp; auth policy</a></li>
+          <li><a href="#categories" data-num="05">Categories</a></li>
+          <li><a href="#apps" data-num="06">Moderating apps</a></li>
+          <li><a href="#retention" data-num="07">Retention cap</a></li>
+          <li><a href="#scans" data-num="08">ClamAV scans</a></li>
+          <li><a href="#jobs" data-num="09">Jobs dashboard</a></li>
+          <li><a href="#audit" data-num="10">Audit log</a></li>
+        </ol>
+      </aside>
+
+      <article class="doc-body">
+        <div class="eyebrow">Doc · 02 · Administration</div>
+        <h1>Administration.</h1>
+        <p class="lead">
+          What you do as an admin: bootstrap the repo, gate signups, moderate
+          uploads, pick a retention policy, and watch the jobs &amp; audit log.
+          Everything below lives under <code>/admin/*</code>.
+        </p>
+
+        <!-- 01 setup wizard -->
+        <section class="doc-section" id="setup">
+          <h2><span class="num">01</span>Setup wizard</h2>
+          <p>First-boot ritual at <code>/admin/setup</code>. Required before the F-Droid client can pull a signed index.</p>
+
+          <div class="shot real">
+            <div class="titlebar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">https://apks.example.com/admin/setup</span>
+            </div>
+            <div class="body">
+              <img src="assets/shots/admin-setup.png" alt="Setup wizard at /admin/setup — pick Generate or Import to create the repo signing keystore" loading="lazy" />
+            </div>
+          </div>
+
+          <h3>Generating a fresh key</h3>
+          <ol class="steps">
+            <li>
+              <strong>Pick the metadata</strong>
+              <p>The wizard reads <code>KEY_DNAME</code> from your env as the default <em>Distinguished Name</em>. Override if needed — this string ends up baked into the cert, so use real-looking values (CN, O, C).</p>
+            </li>
+            <li>
+              <strong>Generate</strong>
+              <p>The backend shells out to <code>keytool</code> against your container's JVM. Output is written to <code>KEYSTORE_PATH</code> inside the keystore volume — survives container restarts.</p>
+            </li>
+            <li>
+              <strong>Back up the keystore</strong>
+              <p>This is the most important secret in the system. If you lose it, every F-Droid client that pinned your repo certificate will refuse the next index — they can't recover. Treat it like a TLS key.</p>
+            </li>
+          </ol>
+
+          <h3>Importing an existing keystore</h3>
+          <p>The wizard accepts <code>.p12</code> (PKCS#12) and <code>.jks</code>. It needs the file plus the store password, the key alias, and the key password. After verifying the key responds to a test sign, it copies the file into the keystore volume.</p>
+
+          <div class="callout warn">
+            <div class="badge">WARN</div>
+            <p>Switching key mid-life will <strong>break</strong> all F-Droid clients that already pinned your repo. Plan for a complete client re-add when you do this.</p>
+          </div>
+        </section>
+
+        <!-- 02 repo settings -->
+        <section class="doc-section" id="repo">
+          <h2><span class="num">02</span>Repo settings</h2>
+          <p>Under <code>/admin/repo</code> you control how the F-Droid index represents itself.</p>
+
+          <dl class="spec">
+            <dt>Name &amp; description</dt>
+            <dd>Shown by the F-Droid client when subscribing to the repo. Free text in any language.</dd>
+            <dt>Repo icon</dt>
+            <dd>PNG, recommended 512×512. Surfaces in the F-Droid client header.</dd>
+            <dt>Address</dt>
+            <dd>The <code>PUBLIC_REPO_URL</code> baked into the signed index. Changing it forces every F-Droid client to re-add the repo.</dd>
+            <dt>Default retention</dt>
+            <dd>Maximum versions kept per app, repo-wide. <code>0</code> = unlimited. See <a href="#retention">§07</a>.</dd>
+            <dt>Scan on upload</dt>
+            <dd>If ClamAV is wired up, every incoming APK is scanned before it lands. Refused uploads return <code>422</code>.</dd>
+            <dt>Daily rescan</dt>
+            <dd>Re-scan every stored APK overnight. Findings show up in <code>/admin/scans</code>.</dd>
+          </dl>
+
+          <h3>Reindex</h3>
+          <p>The <em>Trigger reindex</em> button enqueues an arq job that rebuilds both the public and private indexes (<code>index-v1.jar</code> + <code>index-v2.json</code> + <code>entry.jar</code>). Watch the result in <a href="#jobs">/admin/jobs</a>.</p>
+        </section>
+
+        <!-- 03 users + invites -->
+        <section class="doc-section" id="users">
+          <h2><span class="num">03</span>Users &amp; invites</h2>
+
+          <p><code>/admin/users</code> lists everyone with an account, with quick filters for <em>admin</em>, <em>disabled</em>, and <em>OIDC-only</em>. From there you can:</p>
+          <ul>
+            <li>Promote a user to admin (or demote one — orphan-admin protection prevents you from removing the last admin).</li>
+            <li>Disable an account. They keep ownership of their apps; their sessions are revoked.</li>
+            <li>Force-rotate the password (sends them a reset; if local-only).</li>
+            <li>Delete the account. Their apps stay under the new owner you pick at deletion time.</li>
+          </ul>
+
+          <h3>Invites</h3>
+          <p>With <code>ALLOW_SIGNUP=false</code> in <code>.env</code>, the public <em>Sign up</em> form is hidden — but you can still onboard users by minting an <strong>invite code</strong>.</p>
+
+          <div class="shot real">
+            <div class="titlebar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">https://apks.example.com/admin/users</span>
+            </div>
+            <div class="body">
+              <img src="assets/shots/admin-users.png" alt="User management at /admin/users — counts, filters, per-row controls" loading="lazy" />
+            </div>
+          </div>
+
+          <p>An invite can be open or bound to a specific email. Bound invites can only be redeemed by their email — useful when you don't fully trust the channel you're sharing the code through.</p>
+        </section>
+
+        <!-- 04 access policy -->
+        <section class="doc-section" id="access">
+          <h2><span class="num">04</span>Access &amp; auth policy</h2>
+          <p><code>/admin/access</code> holds toggles that apply repo-wide:</p>
+          <dl class="spec">
+            <dt>Public signup</dt>
+            <dd>Mirrors <code>ALLOW_SIGNUP</code>. Off &rArr; only invites can create accounts.</dd>
+            <dt>Require TOTP for admins</dt>
+            <dd>Forces every admin to enrol a second factor. Existing admins are given a grace period before lockout.</dd>
+            <dt>OIDC auto-create</dt>
+            <dd>When on, first-time OIDC users auto-provision an account. Off &rArr; they need an invite or a pre-existing account.</dd>
+            <dt>Session lifetime</dt>
+            <dd>Override <code>ACCESS_TOKEN_EXPIRE_MINUTES</code> and <code>REFRESH_TOKEN_EXPIRE_DAYS</code> at runtime without restarting the backend.</dd>
+          </dl>
+        </section>
+
+        <!-- 05 categories -->
+        <section class="doc-section" id="categories">
+          <h2><span class="num">05</span>Categories</h2>
+          <p><code>/admin/categories</code> is a small CRUD page. Categories are surfaced both in the F-Droid client (as the section list) and in the web UI's filter rail.</p>
+          <ul>
+            <li>Drag to reorder &mdash; that order is the one the F-Droid client renders.</li>
+            <li>Translations are stored alongside the slug; the UI uses the active locale.</li>
+            <li>Deleting a category un-assigns it from any apps that used it &mdash; the apps survive.</li>
+          </ul>
+        </section>
+
+        <!-- 06 moderating apps -->
+        <section class="doc-section" id="apps">
+          <h2><span class="num">06</span>Moderating apps</h2>
+          <p><code>/admin/apps</code> lists every app on the instance. Filters: <em>pending review</em>, <em>private</em>, <em>has unscanned APK</em>, <em>orphaned</em>.</p>
+
+          <h3>APK lifecycle</h3>
+          <p>When a maintainer uploads, the APK lands in <code>pending</code>. The admin queue at <code>/admin/apps?status=pending</code> shows it with:</p>
+          <ul>
+            <li>Parsed manifest (package, version, min/target SDK, permissions list).</li>
+            <li>The signing certificate's SHA-256 — and a flag if it doesn't match the app's previously-accepted cert.</li>
+            <li>Latest ClamAV verdict, if scanning is on.</li>
+            <li>The maintainer's account and a quick link to their other apps.</li>
+          </ul>
+          <p>Two actions:</p>
+          <ul>
+            <li><strong>Publish</strong> &rArr; the APK is included in the next reindex (which is auto-triggered).</li>
+            <li><strong>Reject</strong> &rArr; the file is kept for audit but excluded from the index. Maintainer is notified.</li>
+          </ul>
+
+          <h3>App-level moderation</h3>
+          <p>From an app detail page (admin view), you can:</p>
+          <ul>
+            <li>Force the visibility (<em>public</em> ⇆ <em>private</em>) regardless of what the maintainer set.</li>
+            <li>Override the suggested version &mdash; useful if the latest upload has a known regression.</li>
+            <li>Transfer ownership to another user.</li>
+            <li>Hard-delete the app and all its APKs (cannot be undone — confirmed twice).</li>
+          </ul>
+        </section>
+
+        <!-- 07 retention -->
+        <section class="doc-section" id="retention">
+          <h2><span class="num">07</span>Retention cap</h2>
+          <p>fdroid-store doesn't keep an unbounded version history by default. Two layers of policy:</p>
+
+          <dl class="spec">
+            <dt>Repo default</dt>
+            <dd>Set in <code>/admin/repo</code> — applies to every app unless overridden. <code>0</code> = unlimited.</dd>
+            <dt>Per-app override</dt>
+            <dd>Set in <code>/my-apps/{id}</code> by an <strong>admin</strong> only. Can only <em>tighten</em> the repo default — never widen it. If the repo default is 5 and the override is 10, the effective cap is 5.</dd>
+          </dl>
+
+          <p>Eviction is <strong>FIFO by versionCode</strong>: when an upload would push the count above the cap, the oldest version is removed. The currently-suggested version is <em>never</em> evicted, even if it's the oldest.</p>
+
+          <div class="callout">
+            <div class="badge">RULE</div>
+            <p>A non-admin maintainer cannot bypass the repo default. The override field on the app page is admin-only — the UI hides it for everyone else.</p>
+          </div>
+        </section>
+
+        <!-- 08 scans -->
+        <section class="doc-section" id="scans">
+          <h2><span class="num">08</span>ClamAV scans</h2>
+          <p>When the <code>clamav</code> compose profile is active, <code>/admin/scans</code> surfaces three things:</p>
+          <ul>
+            <li><strong>Daemon health</strong> — green when the latest clamd ping returned within the threshold, red when it didn't. Click to ping now.</li>
+            <li><strong>Last full scan</strong> — when the daily rescan last ran, how many APKs it checked, how long it took, how many findings.</li>
+            <li><strong>Findings table</strong> — every APK ClamAV ever flagged. Filter by <em>quarantined</em>, <em>still served</em>, <em>cleared</em>.</li>
+          </ul>
+
+          <h3>Manual rescans</h3>
+          <p>From the same page:</p>
+          <ul>
+            <li><em>Rescan now</em> &mdash; queues a full sweep. Same job as the cron, just on demand.</li>
+            <li><em>Rescan app</em> on an app detail page &mdash; only that app's APKs.</li>
+          </ul>
+
+          <h3>What happens on a positive</h3>
+          <p>On upload with scan-on-upload enabled, a positive finding refuses the upload with <code>422</code> and a <code>clamav.positive</code> audit-log entry. The file is kept under <code>quarantine/</code> rather than discarded, so you can re-examine it.</p>
+        </section>
+
+        <!-- 09 jobs -->
+        <section class="doc-section" id="jobs">
+          <h2><span class="num">09</span>Jobs dashboard</h2>
+          <p><code>/admin/jobs</code> is the operator's pane of glass over arq.</p>
+
+          <div class="shot real">
+            <div class="titlebar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">https://apks.example.com/admin/jobs</span>
+            </div>
+            <div class="body">
+              <img src="assets/shots/admin-jobs.png" alt="Jobs dashboard — Redis link, queued/running/last-5-min counters, recent fetch_github_source runs" loading="lazy" />
+            </div>
+          </div>
+
+          <p>Listed jobs:</p>
+          <ul>
+            <li><strong>rebuild_index</strong> &mdash; the F-Droid index builder. Fires after every accepted upload + on manual trigger.</li>
+            <li><strong>scan_apks_periodic</strong> &mdash; daily ClamAV sweep (default 03:00 UTC).</li>
+            <li><strong>scan_github_sources_periodic</strong> &mdash; coordinator that fans out per-source fetches.</li>
+            <li><strong>fetch_github_source</strong> &mdash; per-app forge polling + import + eviction + reindex.</li>
+          </ul>
+
+          <p>Each row has a <em>re-run</em> link that requeues the same job with the same args. Failures show their traceback in a side drawer.</p>
+        </section>
+
+        <!-- 10 audit -->
+        <section class="doc-section" id="audit">
+          <h2><span class="num">10</span>Audit log</h2>
+          <p>Every privileged action lands here at <code>/admin/audit</code>. Examples:</p>
+          <ul>
+            <li><code>auth.login</code>, <code>auth.login.mfa</code>, <code>auth.logout</code>, <code>auth.refresh</code></li>
+            <li><code>user.created</code>, <code>user.disabled</code>, <code>user.role_changed</code></li>
+            <li><code>app.created</code>, <code>app.visibility_changed</code>, <code>app.transferred</code>, <code>app.deleted</code></li>
+            <li><code>apk.uploaded</code>, <code>apk.published</code>, <code>apk.rejected</code>, <code>apk.evicted</code></li>
+            <li><code>api_key.created</code>, <code>api_key.revoked</code></li>
+            <li><code>deploy_token.created</code>, <code>deploy_token.revoked</code>, <code>deploy_token.used</code></li>
+            <li><code>github_source.upserted</code>, <code>github_source.scanned</code></li>
+            <li><code>clamav.positive</code>, <code>clamav.cleared</code></li>
+          </ul>
+          <p>Filter by actor, target, action prefix, IP, time range. Each row carries a structured <code>payload</code> field — token prefixes, state transitions, file hashes — but <strong>never</strong> plaintext credentials.</p>
+
+          <div class="callout">
+            <div class="badge">EXPORT</div>
+            <p>The audit page offers a CSV export of the current filter. The same data is available via <code>GET /api/v1/admin/audit</code> for piping into your own SIEM.</p>
+          </div>
+        </section>
+
+      </article>
+    </div>
+  </main>
+
+  <footer class="site-foot">
+    <div class="wrap">
+      <div class="row">
+        <div>
+          <a class="brand" href="./" style="display:inline-flex; gap:10px; align-items:center; font-family: var(--f-display); font-weight: 800; text-transform: uppercase; font-size: 1.3rem; color: var(--ink);">
+            <span style="width:24px;height:24px;display:grid;place-items:center;background:var(--phos);color:var(--bg);border-radius:6px;font-family:var(--f-mono);font-size:11px;font-weight:700;">F·</span>
+            fdroid-<b style="color:var(--phos);">store</b>
+          </a>
+          <p>Self-hosted F-Droid repository. Built for operators who want their own app delivery without giving up F-Droid compatibility.</p>
+        </div>
+        <div>
+          <h6>Docs</h6>
+          <ul>
+            <li><a href="install.html">Install &amp; infra</a></li>
+            <li><a href="admin.html">Administration</a></li>
+            <li><a href="users.html">User guide</a></li>
+            <li><a href="integrations.html">Integrations</a></li>
+          </ul>
+        </div>
+        <div>
+          <h6>Project</h6>
+          <ul>
+            <li><a href="https://github.com/Dim145/fdroid-store" target="_blank" rel="noopener">GitHub repository</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/issues" target="_blank" rel="noopener">Issues</a></li>
+            <li><a href="https://github.com/Dim145/fdroid-store/releases" target="_blank" rel="noopener">Releases</a></li>
+            <li><a href="https://f-droid.org" target="_blank" rel="noopener">F-Droid project</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="meta">
+        <span class="sig">[ fd-store ]</span>
+        <span>v1.0.0</span>
+        <span>·</span>
+        <span>MIT licensed</span>
+        <span style="margin-left:auto;">Built for self-hosting.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/site.js" defer></script>
+</body>
+</html>
