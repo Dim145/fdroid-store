@@ -68,6 +68,13 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
     default_quota_max_storage_bytes: Mapped[int | None] = mapped_column(BigInteger)
     default_quota_max_apks_per_month: Mapped[int | None] = mapped_column(Integer)
 
+    # Repo-wide cap on retained APK versions per app. When the cap is
+    # exceeded after a new upload (manual or worker-driven), the oldest
+    # APK by ``version_code`` ASC is evicted FIFO-style until the count
+    # drops below the cap. NULL = no cap. Each App row may override
+    # the default via ``App.max_versions_override`` (admin-only).
+    default_max_versions_per_app: Mapped[int | None] = mapped_column(Integer)
+
     # Optional malware scanner. The feature is only enabled when
     # ``FDROID_CLAMAV_HOST`` is set in the env (the backend reads that at
     # import time). The three columns below let an admin toggle the modes

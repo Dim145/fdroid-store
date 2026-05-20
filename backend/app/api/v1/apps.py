@@ -259,6 +259,10 @@ async def create_app_with_apk(
         apk = await attach_apk_to_app(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
         )
+        # Retention enforcement — no-op on a fresh app with one APK,
+        # but kept here so all attach paths share the same hook.
+        from app.services.apk_eviction import evict_oldest_if_needed
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
         if apk.status == ApkStatus.PUBLISHED:
             await enqueue_reindex()
 
@@ -433,6 +437,9 @@ async def create_app_with_github_source(
         apk = await attach_apk_to_app(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
         )
+        # Retention enforcement (no-op on a fresh app with one APK).
+        from app.services.apk_eviction import evict_oldest_if_needed
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
 
         # 4. Wire the persistent GithubSource so the cron can keep
         # importing future releases. Snapshot the just-imported tag so
@@ -602,6 +609,15 @@ async def get_app(
     payload = AppDetail.model_validate(app)
     payload.owner_username = app.owner.username if app.owner else None
     payload.download_count = download_count
+    # Resolved retention cap — computed server-side so the manage
+    # page banner doesn't need to fetch admin-only RepoConfig. We
+    # also surface the raw repo default so the admin override input
+    # can render "Repo default: N" as guidance.
+    from app.models.repo_config import RepoConfig
+    from app.services.apk_eviction import effective_max_versions
+    _cfg = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+    payload.effective_max_versions = effective_max_versions(app, _cfg)
+    payload.repo_default_max_versions = _cfg.default_max_versions_per_app if _cfg else None
     if not raw:
         _apply_locale(payload, app, user.preferred_locale if user else None)
     return payload

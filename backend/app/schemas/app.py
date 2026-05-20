@@ -224,6 +224,12 @@ class AppUpdate(BaseModel):
 class AppAdminUpdate(AppUpdate):
     status: AppStatus | None = None
     rejection_reason: str | None = Field(default=None, max_length=512)
+    # Retention override. Admin-only because raising it bypasses the
+    # global retention policy. ``model_fields_set`` semantics — omit
+    # to leave the current value alone, send an explicit integer to
+    # set, send ``null`` (via the corresponding reset field) to clear.
+    max_versions_override: int | None = Field(default=None, ge=0)
+    reset_max_versions_override: bool = False
 
 
 class AppRead(BaseModel):
@@ -256,6 +262,12 @@ class AppRead(BaseModel):
     suggested_version_name: str | None
     suggested_version_is_manual: bool = False
     locked_signer_sha256: str | None = None
+    # Per-app override on the global APK-retention cap. ``None`` means
+    # "use the repo-wide default" (``RepoConfig.default_max_versions_per_app``).
+    # ``0`` means "no cap on this app" even when the global default
+    # would otherwise kick in. Read-only for owners + co-maintainers;
+    # only admins can write via ``AppUpdate.max_versions_override``.
+    max_versions_override: int | None = None
     last_published_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -290,6 +302,15 @@ class AppDetail(AppRead):
     localizations: list[LocalizationRead] = Field(default_factory=list)
     owner_id: uuid.UUID | None = None
     owner_username: str | None = None
+    # Resolved retention cap (override → repo default → unlimited).
+    # ``None`` means no cap. Computed server-side so the frontend
+    # doesn't need to fetch RepoConfig (which is admin-only) to
+    # render the banner.
+    effective_max_versions: int | None = None
+    # The repo-wide default in force, exposed for reference so the
+    # admin override input can show what value the per-app override
+    # will be clamped against. ``None`` means "no global cap".
+    repo_default_max_versions: int | None = None
     # Total successful APK downloads across every version of this app,
     # counting both authenticated and anonymous traffic.
     download_count: int = 0

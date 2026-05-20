@@ -258,6 +258,11 @@ function QuotaDefaults({
       ? String(repo.default_quota_max_apks_per_month)
       : "",
   );
+  const [maxVersions, setMaxVersions] = useState<string>(
+    repo.default_max_versions_per_app != null
+      ? String(repo.default_max_versions_per_app)
+      : "",
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -284,6 +289,10 @@ function QuotaDefaults({
     if (m == null) payload.quota_reset_apks_per_month = true;
     else payload.default_quota_max_apks_per_month = m;
 
+    const v = parseOrNull(maxVersions);
+    if (v == null) payload.quota_reset_max_versions_per_app = true;
+    else payload.default_max_versions_per_app = v;
+
     try {
       const updated = await api.admin.updateRepo(payload);
       onSaved(updated);
@@ -295,7 +304,7 @@ function QuotaDefaults({
   }
 
   return (
-    <form onSubmit={save} className="grid gap-3 md:grid-cols-3">
+    <form onSubmit={save} className="grid gap-3 md:grid-cols-4">
       <Field label={t("admin.repo.quotaApps")} htmlFor="q-d-apps">
         <Input
           id="q-d-apps"
@@ -326,12 +335,25 @@ function QuotaDefaults({
           onChange={(e) => setMonthly(e.target.value)}
         />
       </Field>
+      <Field label={t("admin.repo.maxVersions")} htmlFor="q-d-maxv">
+        <Input
+          id="q-d-maxv"
+          type="number"
+          min={0}
+          placeholder={t("admin.repo.quotaUnlimited")}
+          value={maxVersions}
+          onChange={(e) => setMaxVersions(e.target.value)}
+        />
+      </Field>
       {err && (
-        <p className="md:col-span-3 rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">
+        <p className="md:col-span-4 rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">
           {err}
         </p>
       )}
-      <div className="md:col-span-3 flex justify-end">
+      <p className="md:col-span-4 text-[11px] text-ink-mute">
+        {t("admin.repo.maxVersionsHint")}
+      </p>
+      <div className="md:col-span-4 flex justify-end">
         <Button type="submit" variant="filled" disabled={busy}>
           {busy ? t("common.saving") : t("admin.repo.saveQuotas")}
         </Button>

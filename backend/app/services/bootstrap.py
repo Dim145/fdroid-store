@@ -99,6 +99,10 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE github_sources ADD COLUMN IF NOT EXISTS base_url VARCHAR(255)",
             # Per-source PAT, Fernet-encrypted. See services/crypto.py.
             "ALTER TABLE github_sources ADD COLUMN IF NOT EXISTS access_token_encrypted BYTEA",
+            # v1.x — max retained APK versions per app. Repo-wide default
+            # on RepoConfig, optional per-app override on App.
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS default_max_versions_per_app INTEGER",
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS max_versions_override INTEGER",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

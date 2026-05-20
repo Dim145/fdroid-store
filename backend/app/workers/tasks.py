@@ -341,6 +341,12 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
             source.last_release_published_at = asset.release_published_at
             source.last_error = None
 
+            # Retention enforcement — same hook as the manual upload
+            # path so the worker can't grow an app unbounded by
+            # cron-driven imports.
+            from app.services.apk_eviction import evict_oldest_if_needed
+            await evict_oldest_if_needed(db, app=app, actor_id=owner.id)
+
             await write_event(
                 db,
                 action="github_source.imported",

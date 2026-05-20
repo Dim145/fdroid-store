@@ -483,6 +483,12 @@ async def upload_apk(
         apk = await attach_apk_to_app(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
         )
+        # Retention policy: trim down to the cap, if any. Runs AFTER
+        # the new APK lands so the just-uploaded version stays even
+        # when it ends up being the oldest in the new set (e.g. a
+        # backfill of an older versionCode).
+        from app.services.apk_eviction import evict_oldest_if_needed
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
         # Audit trail. Includes the credential descriptor stashed by
         # ``get_uploader_for_app`` so a leaked deploy token's activity
         # is traceable to the token prefix even after the resulting

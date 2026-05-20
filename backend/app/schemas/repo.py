@@ -34,6 +34,9 @@ class RepoConfigRead(BaseModel):
     default_quota_max_apps: int | None = None
     default_quota_max_storage_bytes: int | None = None
     default_quota_max_apks_per_month: int | None = None
+    # Repo-wide retention cap. NULL = unlimited (keep every APK).
+    # Per-app override on ``App.max_versions_override`` wins.
+    default_max_versions_per_app: int | None = None
     # ClamAV scanner toggles. ``clamav_available`` is read off the env on
     # the backend and only true when ``FDROID_CLAMAV_HOST`` is set — the
     # frontend uses it to gate the admin toggles.
@@ -60,9 +63,13 @@ class RepoConfigUpdate(BaseModel):
     default_quota_max_apps: int | None = Field(default=None, ge=0)
     default_quota_max_storage_bytes: int | None = Field(default=None, ge=0)
     default_quota_max_apks_per_month: int | None = Field(default=None, ge=0)
+    # Repo-wide retention. ``None`` = leave alone, ``0`` = unlimited,
+    # any positive integer caps the per-app version count.
+    default_max_versions_per_app: int | None = Field(default=None, ge=0)
     quota_reset_apps: bool = False
     quota_reset_storage_bytes: bool = False
     quota_reset_apks_per_month: bool = False
+    quota_reset_max_versions_per_app: bool = False
     # ClamAV runtime toggles. Ignored when the env knob isn't set; the
     # admin endpoint rejects them with a 400.
     clamav_scan_on_upload: bool | None = None

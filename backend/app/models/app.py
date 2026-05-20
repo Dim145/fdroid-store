@@ -108,6 +108,12 @@ class App(Base, IdMixin, TimestampMixin):
     suggested_version_is_manual: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    # Per-app cap on retained APK versions. NULL = use the repo-wide
+    # default on ``RepoConfig.default_max_versions_per_app``. Admin-only
+    # to set, since it lets a single app skip the global retention
+    # policy. ``0`` is treated as ``no cap`` (sentinel for "explicit
+    # override = unlimited even when the global default kicks in").
+    max_versions_override: Mapped[int | None] = mapped_column()
     last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     owner_id: Mapped[uuid.UUID | None] = mapped_column(

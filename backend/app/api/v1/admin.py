@@ -290,6 +290,13 @@ async def admin_update_app(
         app.status = payload.status
         if payload.status == AppStatus.PUBLISHED:
             app.last_published_at = datetime.now(UTC)
+    # Retention override — admin-only. Reset flag wins over the value.
+    # ``0`` means "no cap for this app" (sentinel pulled by
+    # effective_max_versions) so we accept it as a real write target.
+    if payload.reset_max_versions_override:
+        app.max_versions_override = None
+    elif payload.max_versions_override is not None:
+        app.max_versions_override = payload.max_versions_override
     if payload.category_ids is not None:
         cats = list(
             (
@@ -478,6 +485,13 @@ async def update_repo_config(
         config.default_quota_max_apks_per_month = None
     elif payload.default_quota_max_apks_per_month is not None:
         config.default_quota_max_apks_per_month = payload.default_quota_max_apks_per_month
+    # Retention cap — same set/leave/reset semantics. ``0`` is a
+    # legitimate "unlimited" sentinel from the eviction service, so
+    # ``ge=0`` accepts it; the reset flag still wins.
+    if payload.quota_reset_max_versions_per_app:
+        config.default_max_versions_per_app = None
+    elif payload.default_max_versions_per_app is not None:
+        config.default_max_versions_per_app = payload.default_max_versions_per_app
     # ClamAV toggles — reject when the env knob isn't set, so admins don't
     # accidentally enable a scanner with nowhere to dial.
     if payload.clamav_scan_on_upload is not None or payload.clamav_scan_periodic is not None:

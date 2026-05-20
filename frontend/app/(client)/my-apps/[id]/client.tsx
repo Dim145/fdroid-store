@@ -21,7 +21,7 @@ import { ArrowLeft, Eye, GripVertical, ImagePlus, Plus, RotateCcw, ShieldAlert, 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
@@ -697,6 +697,10 @@ function ManageAppInner() {
             : t("myApps.edit.sections.versionsSubtitleAuto")
         }
       >
+        <RetentionBanner app={app} />
+        {currentUser?.role === "admin" && (
+          <RetentionAdminOverride app={app} onSaved={() => void load()} />
+        )}
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <label className="inline-flex">
             <span className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-pill bg-primary px-4 text-sm font-semibold text-primary-fg shadow-e1 hover:brightness-[1.04]">
@@ -1023,6 +1027,152 @@ function Rail({
         </ul>
       </div>
     </nav>
+  );
+}
+
+
+/** Surface the repo's retention policy on the Versions section. Visible
+ *  to anyone with manage rights — knowing "the oldest version will be
+ *  deleted on the next upload" is information owners + collaborators
+ *  benefit from before pressing Upload. */
+function RetentionBanner({ app }: { app: AppDetail }) {
+  const { t } = useTranslation();
+  const cap = app.effective_max_versions;
+  if (cap == null || cap <= 0) return null;
+  const apks = app.apks ?? [];
+  const sortedAsc = [...apks].sort((a, b) => a.version_code - b.version_code);
+  // What WOULD be evicted on the next upload? Skip the suggested
+  // version (server-side eviction does the same) and return the
+  // oldest non-suggested APK. Returns null when adding one more APK
+  // wouldn't exceed the cap.
+  const suggested = app.suggested_version_code;
+  let nextEvicted: Apk | null = null;
+  if (apks.length + 1 > cap) {
+    for (const a of sortedAsc) {
+      if (suggested != null && a.version_code === suggested) continue;
+      nextEvicted = a;
+      break;
+    }
+  }
+  const tone = apks.length >= cap ? "warn" : "info";
+  return (
+    <div
+      className={cn(
+        "mb-4 flex flex-wrap items-start gap-3 rounded-2xl border px-4 py-3 text-xs leading-relaxed",
+        tone === "warn"
+          ? "border-accent/40 bg-accent-container/30 text-ink"
+          : "border-outline-soft bg-surface-2 text-ink-soft",
+      )}
+    >
+      <ShieldAlert className={cn("mt-0.5 h-4 w-4 shrink-0", tone === "warn" ? "text-accent" : "text-ink-mute")} />
+      <div className="min-w-0">
+        <div className="font-semibold text-ink">
+          {t("myApps.edit.versions.retentionTitle", { kept: apks.length, cap })}
+        </div>
+        {nextEvicted ? (
+          <p className="mt-0.5">
+            <Trans
+              i18nKey="myApps.edit.versions.retentionNextEvict"
+              values={{
+                name: nextEvicted.version_name,
+                code: nextEvicted.version_code,
+              }}
+              components={{ b: <span className="font-mono text-ink" /> }}
+            />
+          </p>
+        ) : (
+          <p className="mt-0.5">{t("myApps.edit.versions.retentionBody")}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+/** Admin-only knob to set or clear the per-app retention override.
+ *  Lives under the RetentionBanner so admins see the current state
+ *  before reaching for the override. ``""`` means "follow repo
+ *  default", ``"0"`` means "no cap for this app", any positive int
+ *  pins the cap. */
+function RetentionAdminOverride({
+  app,
+  onSaved,
+}: {
+  app: AppDetail;
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation();
+  const [value, setValue] = useState<string>(
+    app.max_versions_override == null ? "" : String(app.max_versions_override),
+  );
+  const [busy, setBusy] = useState(false);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload: Record<string, unknown> = {};
+      const trimmed = value.trim();
+      if (trimmed === "") {
+        payload.reset_max_versions_override = true;
+      } else {
+        const n = parseInt(trimmed, 10);
+        if (!Number.isFinite(n) || n < 0) {
+          toast.error(t("myApps.edit.versions.retentionOverrideInvalid"));
+          return;
+        }
+        payload.max_versions_override = n;
+      }
+      await api.admin.updateApp(app.id, payload);
+      toast.success(t("myApps.edit.versions.retentionOverrideSaved"));
+      onSaved();
+    } catch (e) {
+      toast.error(t("myApps.edit.versions.retentionOverrideFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={save}
+      className="mb-4 flex flex-wrap items-end gap-3 rounded-2xl border border-dashed border-outline px-4 py-3"
+    >
+      <div className="flex basis-full flex-wrap items-center gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-mute">
+          {t("myApps.edit.versions.retentionOverrideEyebrow")}
+        </span>
+        {/* Show the current repo default as a chip so the admin
+            knows what value the override will be clamped against.
+            ``null`` means no global cap — render an infinity glyph. */}
+        <span className="inline-flex items-center gap-1.5 rounded-pill border border-outline-soft bg-surface px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink-soft">
+          <span className="text-ink-mute">{t("myApps.edit.versions.retentionRepoDefaultLabel")}</span>
+          <span className="tabular-nums text-ink">
+            {app.repo_default_max_versions == null ? "∞" : String(app.repo_default_max_versions)}
+          </span>
+        </span>
+      </div>
+      <div className="min-w-[10rem] flex-1 space-y-1">
+        <Label htmlFor="ret-override" className="text-xs font-medium text-ink-soft">
+          {t("myApps.edit.versions.retentionOverrideLabel")}
+        </Label>
+        <Input
+          id="ret-override"
+          type="number"
+          min={0}
+          inputMode="numeric"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={t("myApps.edit.versions.retentionOverridePlaceholder")}
+        />
+      </div>
+      <Button type="submit" variant="outlined" size="sm" disabled={busy}>
+        {busy ? t("common.saving") : t("common.save")}
+      </Button>
+      <p className="basis-full text-[11px] text-ink-mute">
+        {t("myApps.edit.versions.retentionOverrideHint")}
+      </p>
+    </form>
   );
 }
 

@@ -726,6 +726,9 @@ export type AppSummary = {
   suggested_version_name: string | null;
   suggested_version_is_manual: boolean;
   locked_signer_sha256: string | null;
+  /** Per-app override on the global APK-retention cap. ``null`` means
+   *  "follow the repo default"; ``0`` means "no cap for this app". */
+  max_versions_override: number | null;
   last_published_at: string | null;
   created_at: string;
   updated_at: string;
@@ -780,7 +783,11 @@ export type LocalizationUpsert = {
   video?: string | null;
 };
 
+/** Server-computed retention info, exposed on AppDetail so the
+ *  manage-page banner can render without needing admin access. */
 export type AppDetail = AppSummary & {
+  effective_max_versions?: number | null;
+  repo_default_max_versions?: number | null;
   apks: Apk[];
   screenshots: Screenshot[];
   localizations: Localization[];
@@ -993,10 +1000,13 @@ export type RepoConfigInfo = {
   default_quota_max_apps?: number | null;
   default_quota_max_storage_bytes?: number | null;
   default_quota_max_apks_per_month?: number | null;
+  // Repo-wide APK retention cap (NULL = keep every APK).
+  default_max_versions_per_app?: number | null;
   // Reset flags for the PATCH payload (not present on reads).
   quota_reset_apps?: boolean;
   quota_reset_storage_bytes?: boolean;
   quota_reset_apks_per_month?: boolean;
+  quota_reset_max_versions_per_app?: boolean;
   // ClamAV admin toggles. ``clamav_available`` mirrors the env knob and
   // is read-only.
   clamav_available?: boolean;
