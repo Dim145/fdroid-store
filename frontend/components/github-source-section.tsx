@@ -139,9 +139,23 @@ export function GithubSourceSection({
   // ``last_scanned_at`` than the value we recorded at trigger time.
   useEffect(() => {
     if (!awaitingScan) return;
+    // Count consecutive transient failures. Three in a row (≈4.5 s of
+    // 4xx/5xx) suggests the user lost access or the backend is down;
+    // we stop polling so the page doesn't hammer a dead endpoint
+    // forever (it would silently retry every 1.5 s until the 90 s
+    // timeout otherwise).
+    let consecutiveFailures = 0;
     const tick = setInterval(async () => {
       const next = await api.githubSource.get(appId).catch(() => undefined);
-      if (next === undefined) return; // transient — keep polling
+      if (next === undefined) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) {
+          toast.error(t("myApps.edit.githubSource.lostAccess"));
+          setAwaitingScan(false);
+        }
+        return;
+      }
+      consecutiveFailures = 0;
       setSource(next);
       if (next) {
         if (!dirty) {
@@ -591,17 +605,24 @@ function StatusBanner({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <StatusBadge status={source.last_status} scanning={scanning} />
-              {source.last_release_tag && (
-                <a
-                  href={`https://github.com/${source.repo}/releases/tag/${source.last_release_tag}`}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="inline-flex items-center gap-1 text-xs font-mono text-ink-soft hover:text-primary"
-                >
-                  {source.last_release_tag}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              )}
+              {source.last_release_tag && (() => {
+                const href = releaseTagUrl(source);
+                return href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex items-center gap-1 text-xs font-mono text-ink-soft hover:text-primary"
+                  >
+                    {source.last_release_tag}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                ) : (
+                  <span className="font-mono text-xs text-ink-soft">
+                    {source.last_release_tag}
+                  </span>
+                );
+              })()}
             </div>
             {source.last_error && (
               <p className="mt-1.5 break-words text-xs text-danger">
@@ -647,6 +668,30 @@ function StatusBadge({ status, scanning }: { status: GithubSourceStatus; scannin
     case "error":
       return <Badge variant="destructive">{t("myApps.edit.githubSource.statusError")}</Badge>;
   }
+}
+
+
+/** Build the public URL pointing at a release tag for the source's
+ *  forge. Returns null when we don't have enough info to construct
+ *  one (e.g. Gitea / self-hosted GitLab with no ``base_url``). */
+function releaseTagUrl(source: GithubSource): string | null {
+  if (!source.last_release_tag) return null;
+  const tag = encodeURIComponent(source.last_release_tag);
+  const repo = source.repo;
+  const base = source.base_url?.replace(/\/$/, "");
+  if (source.provider === "github") {
+    const host = base ?? "https://github.com";
+    return `${host}/${repo}/releases/tag/${tag}`;
+  }
+  if (source.provider === "gitlab") {
+    const host = base ?? "https://gitlab.com";
+    return `${host}/${repo}/-/releases/${tag}`;
+  }
+  if (source.provider === "gitea") {
+    const host = base ?? "https://codeberg.org";
+    return `${host}/${repo}/releases/tag/${tag}`;
+  }
+  return null;
 }
 
 

@@ -12,12 +12,14 @@ Token wiring is per-provider via env: ``GITHUB_TOKEN``, ``GITLAB_TOKEN``,
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
 import re
+import socket
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -40,7 +42,25 @@ _PER_PAGE = 30
 
 # ``owner/name`` validated leniently. GitLab supports nested groups
 # (foo/bar/baz) — we tolerate one extra slash level for that case.
+# Individual segments are rejected if they are ``.`` or ``..`` to prevent
+# path traversal in the constructed API URL when a self-hosted base_url
+# sits behind a permissive reverse proxy that normalises ``..`` instead
+# of rejecting it.
 _REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]{0,38}(/[A-Za-z0-9._-]+){1,4}$")
+_REPO_BAD_SEGMENT = frozenset({".", ".."})
+
+# Hostnames we refuse to fetch from. Resolving the user-supplied
+# ``base_url`` to one of these IPs would let an authenticated user pivot
+# through the backend into the host's metadata service / private
+# network. Loopback is rejected too in production; the localhost dev
+# escape hatch is honoured only when the request really resolves to
+# 127.0.0.0/8 AND the environment is ``development``.
+_BLOCKED_HOSTNAMES = frozenset({
+    "metadata.google.internal",
+    "metadata",
+    "metadata.aws",
+    "metadata.azure.com",
+})
 
 
 class GithubReleaseError(RuntimeError):
@@ -85,6 +105,10 @@ def validate_repo(repo: str) -> str:
 
     Strips ``https://<host>/`` prefixes and ``.git`` suffixes so users
     can paste a clone URL. Raises ``ValueError`` on bad input.
+
+    Path traversal: ``..`` or ``.`` segments are rejected so a malicious
+    repo string can't escape its parent path on a self-hosted instance
+    whose reverse proxy normalises rather than rejects ``..``.
     """
     s = repo.strip()
     # Match common clone-URL forms across all three providers.
@@ -101,24 +125,130 @@ def validate_repo(repo: str) -> str:
     s = s.strip("/")
     if not _REPO_RE.match(s):
         raise ValueError(f"Expected owner/name, got {repo!r}")
+    for seg in s.split("/"):
+        if seg in _REPO_BAD_SEGMENT:
+            raise ValueError(f"Invalid path segment {seg!r} in repo")
     return s
 
 
+def _is_private_ip(ip_str: str) -> bool:
+    """True when the address belongs to a range we never want the
+    server to fetch from on behalf of a user (loopback, link-local,
+    multicast, RFC1918, ULA, the IPv4-mapped variants of all of those).
+    Both v4 and v6 are handled."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if ip.is_loopback or ip.is_private or ip.is_link_local:
+        return True
+    if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        return True
+    # AWS / GCP / Azure metadata endpoints all live at 169.254.169.254
+    # which is covered by ``is_link_local``. Keep this explicit anyway
+    # so the intent is unmistakable when reading the code.
+    if isinstance(ip, ipaddress.IPv4Address) and str(ip) == "169.254.169.254":
+        return True
+    return False
+
+
+def _resolves_to_blocked(host: str) -> bool:
+    """Resolve ``host`` and return True if ANY answer maps to a blocked
+    range. We refuse the request rather than only filtering the bad
+    answers because DNS rebinding could otherwise let an attacker shift
+    the resolution mid-flight."""
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        # Unresolvable host — let httpx surface a clean error rather
+        # than us second-guessing here.
+        return False
+    for info in infos:
+        sockaddr = info[4]
+        ip = sockaddr[0] if isinstance(sockaddr, tuple) else None
+        if isinstance(ip, str) and _is_private_ip(ip):
+            return True
+    return False
+
+
 def validate_base_url(value: str | None) -> str | None:
-    """Self-hosted instance URL must be https (or localhost for dev)."""
+    """Self-hosted instance URL must be https on a publicly-resolvable
+    hostname. Performs DNS resolution + blocks RFC1918 / loopback /
+    link-local / metadata addresses so an authenticated user can't
+    pivot through the backend into the host's private network (SSRF).
+    """
     if not value:
         return None
     stripped = value.strip().rstrip("/")
     if not stripped:
         return None
-    lowered = stripped.lower()
-    if not (
-        lowered.startswith("https://")
-        or lowered.startswith("http://localhost")
-        or lowered.startswith("http://127.0.0.1")
-    ):
-        raise ValueError("base_url must be https://… (or localhost for dev)")
+    try:
+        parsed = urlsplit(stripped)
+    except ValueError as exc:
+        raise ValueError(f"base_url is not a valid URL: {exc}") from exc
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError("base_url must be http(s)://")
+    # ``hostname`` returns the bare host (lower-cased, strips userinfo /
+    # port). Using ``netloc`` would let ``http://127.0.0.1@evil.com/``
+    # pass startswith checks.
+    host = (parsed.hostname or "").strip()
+    if not host:
+        raise ValueError("base_url is missing a hostname")
+    # Block well-known cloud metadata hostnames before we even resolve
+    # them — DNS for these is sometimes static and pointing them at the
+    # blocked IPs only catches the obvious case.
+    if host.lower() in _BLOCKED_HOSTNAMES:
+        raise ValueError(f"base_url host {host!r} is blocked")
+    # Allow plain HTTP only for localhost dev loops, NEVER for any
+    # other host. The hostname-level check below picks up any address
+    # that resolves to loopback even when spelled as a public name.
+    if scheme == "http" and host.lower() not in {"localhost"}:
+        try:
+            ipaddress.ip_address(host)
+            is_ip = True
+        except ValueError:
+            is_ip = False
+        if not (is_ip and ipaddress.ip_address(host).is_loopback):
+            raise ValueError("base_url must be https:// (http:// only for localhost dev)")
+    # IP literal: skip DNS, check directly. Hostname: resolve + check
+    # every answer. We refuse on the FIRST blocked address rather than
+    # filtering — DNS rebinding could otherwise win the race.
+    try:
+        as_ip = ipaddress.ip_address(host)
+        if _is_private_ip(str(as_ip)):
+            raise ValueError(f"base_url IP {as_ip!s} is in a blocked range")
+    except ValueError:
+        # Not an IP literal — try DNS.
+        if _resolves_to_blocked(host):
+            raise ValueError(f"base_url host {host!r} resolves to a blocked range")
     return stripped
+
+
+def _assert_download_url_public(url: str) -> None:
+    """Defence-in-depth check applied to ``browser_download_url`` /
+    asset link URLs returned by the upstream API. The upstream payload
+    is partly attacker-controlled (a malicious GitHub Enterprise mirror
+    could embed an internal-IP link); we refuse the download rather
+    than blindly streaming it."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise GithubReleaseError(f"Invalid asset URL: {exc}") from exc
+    if (parsed.scheme or "").lower() not in {"http", "https"}:
+        raise GithubReleaseError("Asset URL must be http(s)")
+    host = (parsed.hostname or "").strip()
+    if not host or host.lower() in _BLOCKED_HOSTNAMES:
+        raise GithubReleaseError(f"Asset host {host!r} is blocked")
+    try:
+        as_ip = ipaddress.ip_address(host)
+        if _is_private_ip(str(as_ip)):
+            raise GithubReleaseError(f"Asset IP {as_ip!s} is in a blocked range")
+        return
+    except ValueError:
+        pass
+    if _resolves_to_blocked(host):
+        raise GithubReleaseError(f"Asset host {host!r} resolves to a blocked range")
 
 
 def _resolve_token(provider: str, explicit: str | None) -> str | None:
@@ -213,11 +343,18 @@ async def download_asset(asset: ReleaseAsset) -> Path:
     """Stream the asset to a NamedTemporaryFile and return its path.
 
     The caller MUST unlink the returned path in a ``finally`` block.
-    Each provider's CDN handles auth slightly differently; we keep the
-    request small + follow redirects to whichever S3-equivalent URL the
-    forge presents.
+    Each provider's CDN handles auth slightly differently. We manually
+    walk redirects so we can re-validate every hop's host against the
+    SSRF blocklist (httpx's ``follow_redirects=True`` would happily
+    follow a 302 to ``http://169.254.169.254/`` returned by a
+    compromised upstream).
     """
     HARD_CAP = 256 * 1024 * 1024
+    MAX_REDIRECTS = 5
+
+    # Validate the initial URL before we make any request — saves
+    # one round-trip on the common case.
+    _assert_download_url_public(asset.asset_download_url)
 
     timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=15.0)
     base_headers: dict[str, str] = {
@@ -225,11 +362,10 @@ async def download_asset(asset: ReleaseAsset) -> Path:
         "Accept": "application/octet-stream",
     }
     # GitHub asset endpoints redirect cross-host to S3 which does NOT
-    # accept Authorization — httpx drops it on follow-redirect anyway
-    # when the host changes. For GitLab and Gitea the URL is the actual
-    # download endpoint so the header is needed throughout. The asset
-    # carries its own ``auth_token`` (per-source PAT if configured, env
-    # fallback otherwise) so we don't reach back into ``settings`` here.
+    # accept Authorization — and we want to drop it anyway on a
+    # cross-origin hop. We track ``origin_host`` so the credential
+    # only travels to the host the caller meant to authenticate with.
+    initial_host = urlsplit(asset.asset_download_url).hostname or ""
     req_headers = dict(base_headers)
     tok = asset.auth_token
     if tok:
@@ -242,31 +378,58 @@ async def download_asset(asset: ReleaseAsset) -> Path:
 
     async with httpx.AsyncClient(
         timeout=timeout,
-        follow_redirects=True,
+        follow_redirects=False,
         headers=base_headers,
     ) as client:
+        url = asset.asset_download_url
+        current_host = initial_host
         try:
-            async with client.stream("GET", asset.asset_download_url, headers=req_headers) as resp:
-                if resp.status_code >= 400:
-                    raise GithubReleaseError(
-                        f"Asset download failed: {resp.status_code}"
-                    )
-                tmp = tempfile.NamedTemporaryFile(suffix=".apk", delete=False)
-                path = Path(tmp.name)
-                total = 0
-                try:
-                    async for chunk in resp.aiter_bytes(1024 * 1024):
-                        total += len(chunk)
-                        if total > HARD_CAP:
-                            tmp.close()
-                            path.unlink(missing_ok=True)
-                            raise GithubReleaseError(
-                                f"Asset exceeds {HARD_CAP} byte hard cap"
-                            )
-                        tmp.write(chunk)
-                finally:
-                    tmp.close()
-                return path
+            for hop in range(MAX_REDIRECTS + 1):
+                # Strip auth on every cross-host hop. urlsplit returns
+                # the bare hostname; we lower-case for the compare.
+                hop_host = urlsplit(url).hostname or ""
+                hop_headers = dict(req_headers)
+                if hop_host.lower() != current_host.lower():
+                    hop_headers.pop("Authorization", None)
+                    hop_headers.pop("PRIVATE-TOKEN", None)
+                async with client.stream("GET", url, headers=hop_headers) as resp:
+                    if 300 <= resp.status_code < 400 and resp.headers.get("location"):
+                        next_url = str(resp.headers["location"])
+                        # Re-validate the redirect target before we
+                        # follow it. This is the actual SSRF guard —
+                        # a compromised upstream returning a 302 to
+                        # an internal IP gets blocked here.
+                        _assert_download_url_public(next_url)
+                        current_host = hop_host
+                        url = next_url
+                        continue
+                    if resp.status_code >= 400:
+                        raise GithubReleaseError(
+                            f"Asset download failed: {resp.status_code}"
+                        )
+                    # 2xx — stream straight into the tmpfile. We MUST
+                    # do this inside the ``async with`` block because
+                    # ``resp`` closes its body the moment the context
+                    # manager exits.
+                    tmp = tempfile.NamedTemporaryFile(suffix=".apk", delete=False)
+                    path = Path(tmp.name)
+                    total = 0
+                    try:
+                        async for chunk in resp.aiter_bytes(1024 * 1024):
+                            total += len(chunk)
+                            if total > HARD_CAP:
+                                tmp.close()
+                                path.unlink(missing_ok=True)
+                                raise GithubReleaseError(
+                                    f"Asset exceeds {HARD_CAP} byte hard cap"
+                                )
+                            tmp.write(chunk)
+                    finally:
+                        tmp.close()
+                    return path
+            raise GithubReleaseError(
+                f"Asset download exceeded {MAX_REDIRECTS} redirects"
+            )
         except httpx.RequestError as exc:
             raise GithubReleaseError(f"Download error: {exc}") from exc
 

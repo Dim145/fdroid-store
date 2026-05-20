@@ -967,6 +967,7 @@
         "scanQueued": "Scan queued — refreshing status…",
         "scanFailed": "Could not start scan",
         "loadFailed": "Could not load source",
+        "lostAccess": "Lost contact with the backend — refresh to try again.",
         "lastScanned": "Last scanned {{date}}",
         "neverScanned": "Never scanned yet.",
         "statusIdle": "Pending first scan",

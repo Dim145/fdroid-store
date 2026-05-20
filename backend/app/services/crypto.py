@@ -42,10 +42,23 @@ def encrypt(plaintext: str) -> bytes:
 def decrypt(ciphertext: bytes) -> str | None:
     """Decrypt a ciphertext blob. Returns ``None`` if the blob is
     corrupted or the encryption key has changed since it was written —
-    callers fall back to the env-var default in that case."""
+    callers fall back to the env-var default in that case.
+
+    When a non-empty blob fails to decrypt we log a warning at the
+    application level — silently falling through hides the fact that
+    per-source tokens are dead after a ``SECRET_KEY`` rotation, which
+    would otherwise leave admins puzzled by failing private-repo
+    scans for a while.
+    """
     if not ciphertext:
         return None
     try:
         return _fernet().decrypt(ciphertext).decode("utf-8")
     except InvalidToken:
+        from app.core.logging import get_logger
+
+        get_logger(__name__).warning(
+            "fernet decrypt failed — secret_key rotated? "
+            "Per-source token is dead, falling back to env-var default"
+        )
         return None

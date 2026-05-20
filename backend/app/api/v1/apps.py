@@ -10,11 +10,12 @@ from typing import Annotated
 # segments, each starting with a letter, alphanumeric + underscore.
 _PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, require_browse_access
+from app.core.rate_limit import limiter
 from app.api.v1.apks import (
     _apk_size_cap_bytes,
     attach_apk_to_app,
@@ -285,7 +286,9 @@ async def create_app_with_apk(
 
 
 @router.post("/with-github-source", response_model=AppDetail, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/minute")
 async def create_app_with_github_source(
+    request: Request,
     payload: AppCreateFromGithub,
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],

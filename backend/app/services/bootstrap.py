@@ -43,11 +43,17 @@ async def _create_tables_if_needed() -> None:
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Idempotent column additions for upgrades that don't justify a full
-        # migration yet. Each statement is its own savepoint so a partial
-        # failure (e.g. column already exists on a different type) does not
-        # poison the others.
+        # Backend + worker boot in parallel under docker-compose; both
+        # call into here. Take a Postgres advisory lock so the
+        # idempotent ALTERs (especially the ``DO $$ ALTER COLUMN
+        # whats_new TYPE JSON $$`` block) never race — without this,
+        # the second connection blocks on the ALTER's table lock and
+        # the noisy "tuple concurrently updated" errors poison the
+        # transaction. ``pg_advisory_lock`` is session-scoped so we
+        # explicitly unlock after the loop.
         from sqlalchemy import text
+
+        await conn.execute(text("SELECT pg_advisory_lock(hashtext('fdroid-store:bootstrap'))"))
         for stmt in (
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS icon_is_custom BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE apks ADD COLUMN IF NOT EXISTS whats_new TEXT",
@@ -120,6 +126,10 @@ async def _create_tables_if_needed() -> None:
                 await conn.execute(text(stmt))
             except Exception as exc:  # noqa: BLE001
                 log.info("skipping migration step", stmt=stmt, error=str(exc))
+        # Release the bootstrap lock — without this the connection
+        # holds it until close, which happens implicitly at engine
+        # shutdown but is worth being explicit about.
+        await conn.execute(text("SELECT pg_advisory_unlock(hashtext('fdroid-store:bootstrap'))"))
 
 
 # Mirrors F-Droid's default category list (subset, can be edited by admin)

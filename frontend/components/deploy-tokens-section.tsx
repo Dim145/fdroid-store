@@ -25,8 +25,25 @@ import { cn, formatDate } from "@/lib/utils";
 
 /* The endpoint the CI runner POSTs to. Surfaced verbatim in the
  * one-time reveal so the user can paste it directly into their
- * pipeline config. */
-function uploadUrlFor(appId: string): string {
+ * pipeline config.
+ *
+ * We prefer the admin-configured public repo address (``repo_address``
+ * from /setup/status) over ``window.location.origin`` so an admin
+ * accessing the UI via an internal hostname (VPN, k8s service) still
+ * generates snippets that point at the public ingress.
+ */
+function uploadUrlFor(appId: string, publicBase: string | null | undefined): string {
+  // The repo address points at /fdroid/repo by convention; strip it to
+  // recover the API host, then bolt /api/v1/apks/upload back on.
+  if (publicBase) {
+    try {
+      const u = new URL(publicBase);
+      const base = `${u.protocol}//${u.host}`;
+      return `${base}/api/v1/apks/upload/${appId}`;
+    } catch {
+      /* fall through to origin-based default */
+    }
+  }
   if (typeof window === "undefined") return `/api/v1/apks/upload/${appId}`;
   return `${window.location.origin}/api/v1/apks/upload/${appId}`;
 }
@@ -40,6 +57,17 @@ export function DeployTokensSection({
   const { t } = useTranslation();
   const [tokens, setTokens] = useState<DeployToken[]>([]);
   const [loading, setLoading] = useState(true);
+  // Public-facing API base for CI snippets. Falls back to
+  // ``window.location.origin`` when /setup/status is unreachable or
+  // doesn't carry a ``repo_address`` (first-time setup, etc.).
+  const [publicBase, setPublicBase] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void api.setup.status()
+      .then((s) => { if (alive) setPublicBase(s.repo_address); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<DeployTokenCreated | null>(null);
@@ -189,6 +217,7 @@ export function DeployTokensSection({
         <RevealModal
           token={created}
           appId={appId}
+          publicBase={publicBase}
           onClose={() => setCreated(null)}
         />
       )}
@@ -197,6 +226,7 @@ export function DeployTokensSection({
       {instructionsOpen && (
         <InstructionsModal
           appId={appId}
+          publicBase={publicBase}
           onClose={() => setInstructionsOpen(false)}
         />
       )}
@@ -264,10 +294,12 @@ function TokenRow({
 function RevealModal({
   token,
   appId,
+  publicBase,
   onClose,
 }: {
   token: DeployTokenCreated;
   appId: string;
+  publicBase: string | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -289,7 +321,7 @@ function RevealModal({
     };
   }, [onClose]);
 
-  const url = uploadUrlFor(appId);
+  const url = uploadUrlFor(appId, publicBase);
   const snippets: Record<typeof tab, string> = {
     curl: `curl -X POST "${url}" \\\n  -H "Authorization: Bearer ${token.full_token}" \\\n  -F "file=@build/outputs/apk/release/app-release.apk"`,
     ghactions:
@@ -482,9 +514,11 @@ function CredentialBlock({
  *  because we don't (and can't) remember the plaintext token. */
 function InstructionsModal({
   appId,
+  publicBase,
   onClose,
 }: {
   appId: string;
+  publicBase: string | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -506,7 +540,7 @@ function InstructionsModal({
     };
   }, [onClose]);
 
-  const url = uploadUrlFor(appId);
+  const url = uploadUrlFor(appId, publicBase);
   const PLACEHOLDER = "<YOUR_TOKEN>";
   const snippets: Record<typeof tab, string> = {
     curl: `curl -X POST "${url}" \\\n  -H "Authorization: Bearer ${PLACEHOLDER}" \\\n  -F "file=@build/outputs/apk/release/app-release.apk"`,

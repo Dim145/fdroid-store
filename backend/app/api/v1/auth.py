@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
@@ -203,6 +203,34 @@ async def refresh(request: Request, payload: RefreshRequest, db: DbSession) -> T
     except AuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return _pair(access, refresh_tok)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+@limiter.limit("20/minute")
+async def logout(request: Request, payload: RefreshRequest, db: DbSession) -> Response:
+    """Revoke the refresh-token chain so the session is dead server-side.
+
+    The frontend ``clearTokens`` wipe only kills the local copy — without
+    this endpoint a refresh token exfiltrated before the user clicked
+    logout (browser backup, console exposure, etc.) stays usable until
+    natural expiry. Accepts the refresh token in the body (same shape
+    as ``/refresh``); a missing or malformed value silently 204s so a
+    careless retry can't be turned into an enumeration oracle.
+    """
+    from jwt import InvalidTokenError as _JWTError
+    from app.core.security import decode_token
+    from app.services.auth_service import _revoke_refresh_chain
+
+    try:
+        decoded = decode_token(payload.refresh_token)
+    except _JWTError:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    jti = decoded.get("jti")
+    if not isinstance(jti, str):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    await _revoke_refresh_chain(db, jti)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # --------------------------------------------------------------------------

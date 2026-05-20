@@ -7,13 +7,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, get_uploader_for_app
 from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
+from app.core.rate_limit import limiter
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, AppVisibility
@@ -269,6 +270,7 @@ async def attach_apk_to_app(
 # --------------------------------------------------------------------------
 @router.post("/inspect", response_model=ApkInspect)
 async def inspect_apk(
+    db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
     file: UploadFile = File(...),
 ) -> ApkInspect:
@@ -309,7 +311,9 @@ async def inspect_apk(
 
 
 @router.post("/inspect-github", response_model=GithubApkInspect)
+@limiter.limit("10/minute")
 async def inspect_github(
+    request: Request,
     payload: GithubInspectRequest,
     user: Annotated[User, Depends(get_current_user)],
 ) -> GithubApkInspect:
@@ -432,6 +436,7 @@ async def inspect_github(
 async def upload_apk(
     app_id: uuid.UUID,
     db: DbSession,
+    request: Request,
     user: Annotated[User, Depends(get_uploader_for_app)],
     file: UploadFile = File(...),
 ) -> ApkRead:
@@ -477,6 +482,33 @@ async def upload_apk(
         await _maybe_scan_upload(db, tmp_path=tmp_path)
         apk = await attach_apk_to_app(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+        )
+        # Audit trail. Includes the credential descriptor stashed by
+        # ``get_uploader_for_app`` so a leaked deploy token's activity
+        # is traceable to the token prefix even after the resulting
+        # APK row is the only remaining DB artefact.
+        cred = getattr(request.state, "upload_credential", {"kind": "unknown"})
+        from app.services.audit import write_event
+        await write_event(
+            db,
+            action="apk.uploaded",
+            actor=user,
+            target_type="apk",
+            target_id=apk.id,
+            summary=(
+                f"uploaded {app.package_name} v{meta.version_name} "
+                f"({meta.version_code}) via {cred.get('kind', 'unknown')}"
+            ),
+            payload={
+                "app_id": str(app.id),
+                "package_name": app.package_name,
+                "version_code": meta.version_code,
+                "version_name": meta.version_name,
+                "size_bytes": meta.size_bytes,
+                "sha256": meta.sha256,
+                "credential": cred,
+            },
+            request=request,
         )
         if apk.status == ApkStatus.PUBLISHED:
             await enqueue_reindex()

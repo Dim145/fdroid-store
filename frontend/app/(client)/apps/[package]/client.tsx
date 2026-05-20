@@ -471,6 +471,12 @@ function Stat({
   );
 }
 
+// Same allow-list used by ``FundingChip`` below — http(s) and mailto
+// are safe; everything else (javascript:, data:, vbscript:, file:…) is
+// rejected. An app owner who sets ``website="javascript:alert(1)"`` via
+// the manage page would otherwise XSS every visitor of the public fiche.
+const _SAFE_LINK_RE = /^(https?|mailto):/i;
+
 function SpecRow({
   icon,
   label,
@@ -482,6 +488,7 @@ function SpecRow({
   value: string | null | undefined;
   link?: string | null;
 }) {
+  const safeLink = link && _SAFE_LINK_RE.test(link) ? link : null;
   return (
     <div className="flex items-center gap-3 px-5 py-3 text-sm">
       <div className="flex w-20 shrink-0 items-center gap-1.5 text-[11px] uppercase tracking-wider text-ink-mute">
@@ -490,9 +497,9 @@ function SpecRow({
       </div>
       <div className="min-w-0 flex-1 truncate text-ink">
         {value ? (
-          link ? (
+          safeLink ? (
             <a
-              href={link}
+              href={safeLink}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-primary hover:underline"

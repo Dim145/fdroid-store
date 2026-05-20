@@ -9,6 +9,7 @@ The endpoint:
 from __future__ import annotations
 
 import hashlib
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -25,6 +26,7 @@ from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, AppVisibility
 from app.models.audit import DownloadEvent
+from app.models.user import User, UserRole
 from app.storage import get_storage
 from app.storage.local import LocalStorage
 from app.storage.s3 import S3Storage
@@ -90,12 +92,19 @@ async def _dispatch_root(
     request: Request,
     db,
     api_key: ApiKey | None,
+    signed_user_id: str | None = None,
 ) -> Response:
     """Shared dispatcher for both Basic-auth and path-token routes."""
     if filename in _INDEX_FILES:
         return await _serve_index(filename, api_key)
     if filename.lower().endswith(".apk"):
-        return await _serve_apk(filename, request=request, db=db, api_key=api_key)
+        return await _serve_apk(
+            filename,
+            request=request,
+            db=db,
+            api_key=api_key,
+            signed_user_id=signed_user_id,
+        )
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
@@ -116,15 +125,16 @@ async def serve(
          private mode without triggering the browser's Basic-auth prompt.
       3. Anonymous, only when the repo is in public mode.
     """
-    if api_key is None:
-        token_ok = t is not None and verify_download_token(filename, t) is not None
-        if not token_ok and not await is_public_mode(db):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required",
-                headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
-            )
-    return await _dispatch_root(filename, request, db, api_key)
+    signed_user_id: str | None = None
+    if api_key is None and t is not None:
+        signed_user_id = verify_download_token(filename, t)
+    if api_key is None and signed_user_id is None and not await is_public_mode(db):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
+        )
+    return await _dispatch_root(filename, request, db, api_key, signed_user_id)
 
 
 async def _media_anonymously_visible(
@@ -403,8 +413,18 @@ async def _serve_apk(
     request: Request,
     db,
     api_key: ApiKey | None,
+    signed_user_id: str | None = None,
 ) -> Response:
-    """Locate the APK by file name and serve it (with auth checks)."""
+    """Locate the APK by file name and serve it (with auth checks).
+
+    Two authentication channels feed into the private-app ACL:
+      * ``api_key`` — F-Droid client over HTTP Basic; must belong to
+        the app's owner and carry the ``can_download_private`` scope.
+      * ``signed_user_id`` — SPA-issued HMAC token (see
+        ``apks.issue_download_url``). The token already enforces
+        ownership/admin at sign time, but we re-verify here in case
+        ownership transferred between sign and click.
+    """
     apk = (
         await db.execute(
             select(Apk).options(selectinload(Apk.app)).where(Apk.file_name == filename)
@@ -415,17 +435,32 @@ async def _serve_apk(
 
     app = apk.app
     if app.visibility == AppVisibility.PRIVATE:
-        # Only the owner's API key may download a private APK. A foreign API
-        # key (even one with ``can_download_private``) is treated like an
-        # anonymous request — 401 prompts for Basic auth, indistinguishable
-        # from a wrong-credential case.
+        # API-key path — must be the owner's key and carry the scope.
         owner_match = (
             api_key is not None
             and api_key.can_download_private
             and app.owner_id is not None
             and api_key.user_id == app.owner_id
         )
-        if not owner_match:
+        # Signed-URL path — resolve the user, accept owner or admin.
+        # Ownership transfer between sign-time and click-time
+        # invalidates the URL (revalidation, not just signature check).
+        signed_match = False
+        if not owner_match and signed_user_id is not None:
+            try:
+                signed_uuid = uuid.UUID(signed_user_id)
+            except (TypeError, ValueError):
+                signed_uuid = None
+            if signed_uuid is not None:
+                u = (
+                    await db.execute(select(User).where(User.id == signed_uuid))
+                ).scalar_one_or_none()
+                if u is not None and u.is_active:
+                    signed_match = (
+                        u.role == UserRole.ADMIN
+                        or (app.owner_id is not None and u.id == app.owner_id)
+                    )
+        if not (owner_match or signed_match):
             return Response(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},

@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,6 +209,7 @@ async def _deploy_token_user_for_app(
 async def get_uploader_for_app(
     app_id: uuid.UUID,
     db: DbSession,
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
     """Auth dependency for the per-app APK upload endpoint.
@@ -220,7 +221,11 @@ async def get_uploader_for_app(
 
     The deploy-token path returns the token's ``created_by`` user so
     downstream quota + audit machinery attributes the upload to the
-    human that owns the credential, not a synthetic CI identity.
+    human that owns the credential, not a synthetic CI identity. We
+    also stash a short ``upload_credential`` descriptor on
+    ``request.state`` so the upload handler can include it in the
+    audit log — a CI deploy token uploading would otherwise leave no
+    trace beyond the resulting Apk row.
     """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
@@ -238,7 +243,15 @@ async def get_uploader_for_app(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or revoked deploy token for this app",
             )
+        # Stash just the safe prefix on request.state. NEVER log the
+        # secret half — that's what the deploy token's prefix is for.
+        parts = parse_deploy_token(token)
+        request.state.upload_credential = {
+            "kind": "deploy_token",
+            "prefix": parts[0] if parts else None,
+        }
         return user
+    request.state.upload_credential = {"kind": "jwt"}
     return await _user_from_jwt(token, db)
 
 

@@ -76,6 +76,35 @@ type FetchOptions = RequestInit & {
 // and clear tokens — logging the user out mid-session.
 let _refreshInflight: Promise<boolean> | null = null;
 
+/** Cached upload cap fetched lazily from /setup/status. Throws an
+ *  ``Error`` with a humane message when the file exceeds the limit
+ *  so the user gets a clean inline error instead of waiting for the
+ *  server's 413 on a multi-minute upload. Cache is populated once
+ *  per page load — admins changing the cap need a tab refresh, which
+ *  matches the lifetime of the React app anyway. */
+let _uploadCapMb: number | null = null;
+async function _assertWithinUploadCap(file: File): Promise<void> {
+  if (_uploadCapMb === null) {
+    try {
+      const status = await fetch(`${API_URL}/api/v1/setup/status`).then((r) => r.json());
+      _uploadCapMb = typeof status?.upload_max_apk_mb === "number" ? status.upload_max_apk_mb : 200;
+    } catch {
+      // Best-effort: if /setup/status is unreachable just skip the
+      // pre-flight (the server still enforces the cap).
+      _uploadCapMb = Number.POSITIVE_INFINITY;
+    }
+  }
+  const cap = _uploadCapMb ?? Number.POSITIVE_INFINITY;
+  const capBytes = cap * 1024 * 1024;
+  if (file.size > capBytes) {
+    const mb = Math.round(file.size / (1024 * 1024));
+    throw new Error(
+      `APK is ${mb} MB but the repo cap is ${cap} MB. Ask an admin to raise upload_max_apk_mb or split the build.`,
+    );
+  }
+}
+
+
 async function refreshAccessToken(): Promise<boolean> {
   if (_refreshInflight) return _refreshInflight;
   _refreshInflight = (async () => {
@@ -87,7 +116,19 @@ async function refreshAccessToken(): Promise<boolean> {
       body: JSON.stringify({ refresh_token: refresh }),
     });
     if (!res.ok) {
+      // Refresh failed: the refresh-token chain is dead (revoked,
+      // expired, family-revoked because somebody replayed it). Wipe
+      // the local copy AND notify any subscriber of the auth store
+      // so the UI flips to anonymous immediately rather than waiting
+      // for the next route change. The dynamic import dodges a
+      // circular import between this module and auth-store.
       clearTokens();
+      try {
+        const { useAuth } = await import("@/lib/auth-store");
+        useAuth.setState({ user: null, loading: false });
+      } catch {
+        /* fail silently — wipe already happened */
+      }
       return false;
     }
     const data = (await res.json()) as { access_token: string; refresh_token: string };
@@ -211,6 +252,17 @@ export const api = {
       anonymous: true,
       body: JSON.stringify({ email, password }),
     }),
+  /** Server-side revoke of the refresh-token chain. Best-effort —
+   *  the caller always wipes local tokens afterwards regardless of
+   *  the outcome, so a network blip can't leave the UI logged-in.
+   *  Sent ``anonymous: true`` because the access JWT may already be
+   *  past its expiry by the time the user clicks logout. */
+  logout: (refreshToken: string) =>
+    apiFetch<void>("/api/v1/auth/logout", {
+      method: "POST",
+      anonymous: true,
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    }),
   signup: (payload: { email: string; username: string; password: string; full_name?: string; invite_code?: string }) =>
     apiFetch<TokenPair>("/api/v1/auth/signup", {
       method: "POST",
@@ -251,7 +303,8 @@ export const api = {
       ),
     create: (payload: AppCreate) =>
       apiFetch<AppSummary>("/api/v1/apps", { method: "POST", body: JSON.stringify(payload) }),
-    createWithApk: (payload: AppCreateWithApk) => {
+    createWithApk: async (payload: AppCreateWithApk) => {
+      await _assertWithinUploadCap(payload.file);
       const fd = new FormData();
       fd.append("file", payload.file);
       fd.append("name", payload.name);
@@ -269,7 +322,8 @@ export const api = {
     update: (id: string, payload: AppUpdatePayload) =>
       apiFetch<AppSummary>(`/api/v1/apps/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
     remove: (id: string) => apiFetch<void>(`/api/v1/apps/${id}`, { method: "DELETE" }),
-    uploadApk: (appId: string, file: File) => {
+    uploadApk: async (appId: string, file: File) => {
+      await _assertWithinUploadCap(file);
       const fd = new FormData();
       fd.append("file", file);
       return apiFetch<Apk>(`/api/v1/apks/upload/${appId}`, { method: "POST", body: fd });
@@ -609,6 +663,7 @@ export type SetupStatusResponse = {
   repo_address: string | null;
   repo_icon_path: string | null;
   repo_fingerprint: string | null;
+  upload_max_apk_mb: number;
 };
 
 // ---------------------------------------------------------------------------

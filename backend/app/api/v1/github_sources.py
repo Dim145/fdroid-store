@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 
 from app.api.deps import DbSession, get_current_user
+from app.core.rate_limit import limiter
 from app.models.app import App
 from app.models.github_source import GithubSource, GithubSourceStatus
 from app.models.user import User
@@ -62,11 +63,12 @@ async def get_github_source(
     "/{app_id}/github-source",
     response_model=GithubSourceUpsertResponse,
 )
+@limiter.limit("10/minute")
 async def upsert_github_source(
     app_id: uuid.UUID,
+    request: Request,
     payload: GithubSourceUpsert,
     db: DbSession,
-    request: Request,
     actor: Annotated[User, Depends(get_current_user)],
 ) -> GithubSourceUpsertResponse:
     """Create or replace the release source. Owner/admin only —
@@ -277,10 +279,11 @@ async def delete_github_source(
     "/{app_id}/github-source/scan",
     status_code=status.HTTP_202_ACCEPTED,
 )
+@limiter.limit("20/minute")
 async def scan_now(
     app_id: uuid.UUID,
-    db: DbSession,
     request: Request,
+    db: DbSession,
     actor: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     """Trigger a one-shot scan of this app's GitHub source.

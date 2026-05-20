@@ -950,6 +950,7 @@
         "scanQueued": "Scan mis en file — actualisation du statut…",
         "scanFailed": "Impossible de démarrer le scan",
         "loadFailed": "Impossible de charger la source",
+        "lostAccess": "Contact perdu avec le backend — rafraîchis pour réessayer.",
         "lastScanned": "Dernier scan : {{date}}",
         "neverScanned": "Pas encore scanné.",
         "statusIdle": "En attente du premier scan",

@@ -36,6 +36,29 @@ async def _load_config(db: AsyncSession) -> RepoConfig | None:
     return (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
 
 
+async def _lock_quota_subject(db: AsyncSession, user_id) -> None:
+    """Acquire a per-owner advisory lock for the lifetime of the current
+    transaction. Two concurrent uploads from the same owner serialise
+    here so the SUM/COUNT under the cap reflect each other — without
+    this, both reads run before either commit and the cap is bypassed
+    proportionally to the parallelism (CWE-367).
+
+    We use a Postgres advisory lock keyed on a stable hash of the user
+    UUID rather than ``SELECT FOR UPDATE`` on the ``users`` row so that
+    unrelated user-row updates (e.g. ``preferred_locale``) don't block
+    on upload progress.
+    """
+    from sqlalchemy import text
+
+    # ``pg_advisory_xact_lock`` releases automatically when the
+    # transaction commits or rolls back. ``hashtext`` produces an
+    # int4 from any string — UUID stringification is stable.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+        {"k": f"quota:{user_id}"},
+    )
+
+
 async def ensure_can_create_app(db: AsyncSession, user: User) -> None:
     """Refuse with 403 when the user has hit ``max_apps``."""
     if user.role == UserRole.ADMIN:
@@ -47,6 +70,9 @@ async def ensure_can_create_app(db: AsyncSession, user: User) -> None:
     )
     if cap is None:
         return
+    # Serialise quota checks for this owner so N parallel creates
+    # can't all observe the same pre-commit COUNT and overshoot.
+    await _lock_quota_subject(db, user.id)
     owned = (
         await db.execute(
             select(func.count(App.id)).where(App.owner_id == user.id)
@@ -69,6 +95,10 @@ async def ensure_can_upload_apk(
     if user.role == UserRole.ADMIN:
         return
     config = await _load_config(db)
+    # Same TOCTOU defence as ensure_can_create_app — parallel uploads
+    # from the same owner would otherwise each read the pre-upload
+    # totals and all pass the cap.
+    await _lock_quota_subject(db, user.id)
 
     storage_cap = _effective(
         user.quota_max_storage_bytes,

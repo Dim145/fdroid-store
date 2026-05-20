@@ -82,6 +82,27 @@ async def create_deploy_token(
     app = await _load_app_or_404(db, app_id)
     await assert_can_manage_app(db, actor, app)
 
+    # Cap the per-app token count to keep the table bounded. Active
+    # tokens only — revoked rows are kept for audit but don't count.
+    MAX_ACTIVE = 10
+    from sqlalchemy import func
+    active_count = (
+        await db.execute(
+            select(func.count(DeployToken.id)).where(
+                DeployToken.app_id == app_id,
+                DeployToken.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    if active_count >= MAX_ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Per-app deploy token cap reached ({active_count}/{MAX_ACTIVE}). "
+                "Revoke an unused token before minting a new one."
+            ),
+        )
+
     full, prefix, hashed = generate_deploy_token()
     row = DeployToken(
         app_id=app_id,

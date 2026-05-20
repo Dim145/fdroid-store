@@ -87,7 +87,21 @@ export const useAuth = create<AuthState>((set) => ({
     return me;
   },
 
-  logout() {
+  async logout() {
+    // Server-side revoke first so the refresh-token chain is dead
+    // even if someone exfiltrated the refresh blob from localStorage
+    // before this call. We then clear the local copy regardless of
+    // the server's response — a backend hiccup must not leave the
+    // user "logged in" client-side, and the 204 is best-effort.
+    const { getRefreshToken, api } = await import("@/lib/api");
+    const refresh = getRefreshToken();
+    if (refresh) {
+      try {
+        await api.logout(refresh);
+      } catch {
+        /* offline / 5xx — fall through to local wipe */
+      }
+    }
     clearTokens();
     set({ user: null, loading: false });
   },

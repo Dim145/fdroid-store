@@ -91,6 +91,11 @@ class SetupStatus(BaseModel):
     # addition to /auth/methods) so the SPA can decide synchronously, on the
     # same fetch it already does, whether to gate the catalogue.
     public_mode: bool = True
+    # Admin-set APK upload cap in megabytes. Exposed publicly so the
+    # frontend can fail-fast (clean inline error) instead of waiting
+    # for the backend's 413 on a multi-minute upload that exceeded
+    # the cap. Knowing the limit is not sensitive — it's a UX limit.
+    upload_max_apk_mb: int = 200
 
 
 class SetupWizardRequest(BaseModel):

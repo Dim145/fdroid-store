@@ -39,6 +39,7 @@ async def setup_status(db: DbSession) -> SetupStatus:
         repo_icon_path=config.icon_path if config else None,
         repo_fingerprint=config.keystore_fingerprint_sha256 if config else None,
         public_mode=config.public_mode if config else True,
+        upload_max_apk_mb=config.upload_max_apk_mb if config else 200,
     )
 
 
