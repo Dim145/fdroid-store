@@ -153,8 +153,25 @@ def verify_api_key_secret(secret: str, hashed: str) -> bool:
 
 
 def _hash_api_secret(secret: str) -> str:
-    # We use plain SHA-256 — the secret is high-entropy random already; bcrypt
-    # would add cost on every authenticated repo request.
+    # CodeQL flags ``hashlib.sha256(secret)`` as a weak password hash.
+    # That's a heuristic mis-fire here: this function NEVER receives a
+    # user password. Its only callers are:
+    #
+    #   * generate_api_key() / generate_deploy_token() — both produce
+    #     the ``secret`` half via ``secrets.token_urlsafe(32)``, which
+    #     is 256 bits of cryptographically random data.
+    #   * verify_api_key_secret() / verify_deploy_token_secret() —
+    #     constant-time compare against a stored hash of the above.
+    #
+    # 256 bits of uniform entropy is computationally indistinguishable
+    # from a one-time pad against any brute-force attempt; a slow KDF
+    # like argon2 / bcrypt protects against dictionary attacks on
+    # low-entropy human input, a class of attack that doesn't exist
+    # here. Switching this to argon2 would add ~100ms per F-Droid
+    # client request (clients fire 50+ requests per index sync) for
+    # zero security benefit.
+    #
+    # lgtm [py/weak-sensitive-data-hashing]
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
