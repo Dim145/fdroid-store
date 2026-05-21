@@ -325,6 +325,7 @@ async def create_app_with_apk(
     response_model=AppDetail,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit("10/minute")
 async def create_app_with_staged_apk(
     request: Request,
     payload: AppCreateFromStagedApk,
@@ -350,6 +351,9 @@ async def create_app_with_staged_apk(
         payload.staging_token, user_id=user.id,
     )
     try:
+        # Drop the staged blob on EVERY exit path (success → promoted,
+        # failure → don't orphan in storage forever). See the matching
+        # comment in ``upload_apk_staged``.
         await ensure_can_upload_apk(db, user, incoming_size_bytes=tmp_path.stat().st_size)
         await _maybe_scan_upload(db, tmp_path=tmp_path)
         meta = await parse_or_400(tmp_path)
@@ -424,10 +428,10 @@ async def create_app_with_staged_apk(
         payload_out = AppDetail.model_validate(result)
         payload_out.owner_username = result.owner.username if result.owner else None
         _attach_media_token(payload_out, result, user)
-        await _discard_staged_apk(content_hash)
         return payload_out
     finally:
         tmp_path.unlink(missing_ok=True)
+        await _discard_staged_apk(content_hash)
 
 
 @router.post("/with-github-source", response_model=AppDetail, status_code=status.HTTP_201_CREATED)

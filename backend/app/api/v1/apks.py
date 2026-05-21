@@ -269,7 +269,9 @@ async def attach_apk_to_app(
 # Routes
 # --------------------------------------------------------------------------
 @router.post("/inspect", response_model=ApkInspect)
+@limiter.limit("10/minute")
 async def inspect_apk(
+    request: Request,
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
     file: UploadFile = File(...),
@@ -279,10 +281,19 @@ async def inspect_apk(
     file once the user confirms — see the staging-token design note in
     ``app/core/download_token.py``.
 
-    Authenticated callers only — APK parsing isn't free.
+    Rate-limited (``10/min``) + quota-pre-checked: this endpoint persists
+    bytes under ``staging/<sha>.apk``, so without these gates an
+    authenticated user could fill the storage backend by repeatedly
+    staging different APKs without ever confirming.
     """
     tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
+        # Pre-flight quota gate — same call the confirm step makes, so a
+        # user who would fail the final upload can't sneak past by
+        # staging dozens of files first. The temp file is already on
+        # disk; we check before committing it to durable storage.
+        from app.services.quotas import ensure_can_upload_apk as _ensure_quota
+        await _ensure_quota(db, user, incoming_size_bytes=tmp_path.stat().st_size)
         meta = await parse_or_400(tmp_path)
         # Run the lightweight DEX/class-name scan to suggest anti-feature
         # chips. Failures here are non-fatal — inspect just returns the
@@ -350,20 +361,37 @@ async def _materialise_staged_apk(
         )
     storage = get_storage()
     staging_key = f"staging/{content_hash}.apk"
-    if not await storage.exists(staging_key):
-        raise HTTPException(
-            status_code=status.HTTP_410_GONE,
-            detail="Staged APK is gone; please re-upload",
-        )
     # Stream from storage to a tmp file — never load the whole APK into
-    # memory. ``open_stream`` yields chunks; we write them through.
+    # memory. We deliberately skip the ``exists()`` pre-check: a concurrent
+    # ``_discard_staged_apk`` between the check and the open would surface
+    # as a 500 (FileNotFoundError / NoSuchKey from inside aiofiles or
+    # aiobotocore) instead of a clean 410. Trying the open directly and
+    # mapping the not-found shape is race-free.
     tmp_file = tempfile.NamedTemporaryFile(prefix="fdroid-staged-", suffix=".apk", delete=False)
     tmp_path = Path(tmp_file.name)
     tmp_file.close()
-    stream = await storage.open_stream(staging_key)
-    with tmp_path.open("wb") as fh:
-        async for chunk in stream:
-            fh.write(chunk)
+    try:
+        stream = await storage.open_stream(staging_key)
+        with tmp_path.open("wb") as fh:
+            async for chunk in stream:
+                fh.write(chunk)
+    except FileNotFoundError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Staged APK is gone; please re-upload",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        tmp_path.unlink(missing_ok=True)
+        # aiobotocore raises ``ClientError`` with code ``NoSuchKey`` for
+        # an S3 backend that lost the staging blob — same outcome as a
+        # local FNF: tell the caller to retry from scratch.
+        if "NoSuchKey" in str(exc) or "Not Found" in str(exc):
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Staged APK is gone; please re-upload",
+            ) from exc
+        raise
     return tmp_path, content_hash
 
 
@@ -541,6 +569,12 @@ async def upload_apk_staged(
     from app.services.quotas import ensure_can_upload_apk
 
     tmp_path, content_hash = await _materialise_staged_apk(body.staging_token, user_id=user.id)
+    # ``redeemed`` flips to True once we've passed the point where the
+    # staged blob is no longer needed. Anything else — quota fail, sha
+    # mismatch, ClamAV hit, attach failure — must drop the blob so it
+    # doesn't accumulate in storage forever. Without this guard, every
+    # rejected staged upload leaks ``staging/<sha>.apk``.
+    redeemed = False
     try:
         size_bytes = tmp_path.stat().st_size
         await ensure_can_upload_apk(db, app.owner, incoming_size_bytes=size_bytes)
@@ -577,16 +611,22 @@ async def upload_apk_staged(
                 "version_name": meta.version_name,
                 "size_bytes": meta.size_bytes,
                 "sha256": meta.sha256,
-                "credential": {"kind": "staging", "sha": content_hash},
+                "credential": {"kind": "staging"},
             },
             request=request,
         )
         if apk.status == ApkStatus.PUBLISHED:
             await enqueue_reindex()
-        await _discard_staged_apk(content_hash)
+        redeemed = True
         return ApkRead.model_validate(apk)
     finally:
         tmp_path.unlink(missing_ok=True)
+        # Drop the staged blob in *both* success and failure cases:
+        # success → it's been promoted, no longer needed;
+        # failure → otherwise it would orphan in ``staging/`` forever.
+        # The bool is informational only — both branches discard.
+        _ = redeemed
+        await _discard_staged_apk(content_hash)
 
 
 @router.post("/upload/{app_id}", response_model=ApkRead, status_code=status.HTTP_201_CREATED)

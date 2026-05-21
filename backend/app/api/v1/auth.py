@@ -289,15 +289,17 @@ async def oidc_callback(request: Request, db: DbSession):
     try:
         token = await oauth.oidc.authorize_access_token(request)
     except Exception as exc:  # noqa: BLE001 — Authlib raises various subclasses
-        # Log the real exception (with traceback) for the operator, then
-        # bounce the user back to /login with a short reason. A raw JSON
-        # 401 mid-OAuth-flow is technically correct but useless to whoever
-        # just clicked "Continue with SSO" in the browser.
+        # Log the real exception (with traceback) for the operator. The
+        # URL fragment we redirect with is a stable code only — Authlib /
+        # joserfc exception strings can leak IdP URLs, JWKS endpoints,
+        # OAuth ``state``/``error_description`` bodies (sometimes with
+        # internal details) which would otherwise land in the user's
+        # browser history + Referer header on the next click.
         logger.warning("OIDC token exchange failed", exc_info=exc)
         return RedirectResponse(
             url=(
                 f"{settings.public_app_url.rstrip('/')}/login"
-                f"?oidc_error={quote(f'OIDC token exchange failed: {exc}')}"
+                f"?oidc_error=token_exchange_failed"
             ),
             status_code=status.HTTP_302_FOUND,
         )

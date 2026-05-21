@@ -20,6 +20,27 @@
 
 let authToken = null;
 
+/** Ask every controlled window for a fresh token. Used on the first
+ *  fetch after activation when the page hasn't yet pushed via
+ *  ``set-token`` — without this, that first <img> burst races the
+ *  registration handshake and lands as 404 against private apps. */
+async function _solicitTokenFromClients() {
+  try {
+    const list = await self.clients.matchAll({ type: "window" });
+    for (const client of list) {
+      client.postMessage({ type: "need-token" });
+    }
+    // Give the page a brief window to reply with ``set-token``. We
+    // don't await a specific reply — the message handler updates
+    // ``authToken`` and any near-simultaneous fetch will pick it up.
+    for (let i = 0; i < 10 && !authToken; i++) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  } catch (_) {
+    /* matchAll can throw on insecure contexts; harmless. */
+  }
+}
+
 self.addEventListener("install", () => {
   // Activate the new worker immediately on update; without skipWaiting
   // a freshly-deployed SW would idle until every existing tab closed.
@@ -33,6 +54,17 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("message", (event) => {
+  // Defense-in-depth: only accept messages from same-origin Window
+  // clients. A same-origin XSS would still defeat this (the attacker
+  // can grab the JWT from localStorage directly), but cross-origin or
+  // SharedWorker-style senders are refused.
+  if (event.source && event.source.url) {
+    try {
+      if (new URL(event.source.url).origin !== self.location.origin) return;
+    } catch (_) {
+      return;
+    }
+  }
   const data = event.data;
   if (!data || typeof data !== "object") return;
   if (data.type === "set-token") {
@@ -59,13 +91,42 @@ self.addEventListener("fetch", (event) => {
     !url.pathname.startsWith("/fdroid/repo/")
     && !url.pathname.startsWith("/r/")
   ) return;
-  // No token to add → let the browser fetch normally. Public apps
-  // still succeed; private ones get the 404 they would have anyway.
-  if (!authToken) return;
+  // No token to add → either the page hasn't pushed one yet (first
+  // paint after a hard reload, SW just activated) or the user really
+  // is anonymous. Solicit one from any window client and wait briefly;
+  // if nothing arrives, let the browser fetch normally (public apps
+  // succeed, private ones get the 404 they would have anyway).
+  if (!authToken) {
+    event.respondWith((async () => {
+      await _solicitTokenFromClients();
+      if (!authToken) return fetch(event.request);
+      return fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer " + authToken,
+          ...(req.headers.get("accept") ? { Accept: req.headers.get("accept") } : {}),
+        },
+        mode: "same-origin",
+        credentials: "omit",
+        cache: "default",
+        redirect: "error",
+      });
+    })());
+    return;
+  }
 
   // Build a fresh same-origin Request with Authorization. The original
   // <img> fetch is mode='no-cors', which disallows setting arbitrary
   // headers — that's why we construct a new Request explicitly.
+  //
+  // ``redirect: "error"`` so a 3xx response from /fdroid/repo/* fails
+  // loudly here rather than silently following the redirect. If the
+  // backend ever started returning 302s (e.g. an S3-CDN passthrough
+  // we'd otherwise want to keep behind us), a cross-origin hop with
+  // the Bearer header would leak the JWT to the redirect target.
+  // Per Fetch spec the browser strips Authorization on cross-origin
+  // redirects, BUT a same-host → other-same-host redirect retains
+  // it; explicit "error" closes that hole entirely.
   event.respondWith(
     fetch(url.toString(), {
       method: "GET",
@@ -77,7 +138,7 @@ self.addEventListener("fetch", (event) => {
       mode: "same-origin",
       credentials: "omit",
       cache: "default",
-      redirect: "follow",
+      redirect: "error",
     }),
   );
 });

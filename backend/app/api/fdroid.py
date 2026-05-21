@@ -68,21 +68,26 @@ def _cache_control_for(storage_key: str) -> str:
     """Sensible browser-cache policy for the F-Droid asset shape.
 
     Three buckets:
-      * Index files (``index-v1.jar`` / ``index-v2.json`` / ``entry.jar``)
-        — rewritten on every reindex, so the client MUST revalidate.
-      * APK files — the version code is baked into the filename, so the
-        bytes behind a given URL never change. Long immutable cache.
-      * Everything else (icons, screenshots, banners) — content can be
-        replaced under a stable key, but the frontend always appends
-        ``?v=<updated_at>`` to cache-bust on actual changes. One day
-        is fine; we never serve stale bytes for more than that window.
+      * Index files — rewritten on every reindex, MUST revalidate.
+      * APK files — version code is baked into the filename so the
+        bytes behind a URL never change. Long immutable cache.
+        ``private`` (not ``public``) because private-mode APK URLs
+        are gated by per-user credentials (Basic-auth API key OR a
+        per-user signed ``?t=``); a shared CDN keyed on URL alone
+        would otherwise replay one user's authorized 200 to other
+        callers (CWE-525).
+      * Everything else (icons, screenshots, banners) — content can
+        be replaced under a stable key but the frontend cache-busts
+        with ``?v=<updated_at>``. Identity-gated for private apps
+        served via the SW JWT-bearer path; same shared-CDN concern,
+        same ``private`` answer.
     """
     name = storage_key.rsplit("/", 1)[-1].lower()
     if name in {"index-v1.jar", "index-v2.json", "entry.jar"}:
         return "no-cache, must-revalidate"
     if name.endswith(".apk"):
-        return "public, max-age=31536000, immutable"
-    return "public, max-age=86400"
+        return "private, max-age=31536000, immutable"
+    return "private, max-age=86400"
 
 
 async def _serve_storage_object(storage_key: str, *, content_type: str) -> Response:
@@ -226,11 +231,23 @@ async def _media_anonymously_visible(
         and api_key.user_id == app_row.owner_id
     ):
         return True
-    if bearer_user is not None and bearer_user.is_active and (
-        bearer_user.role == UserRole.ADMIN
-        or (app_row.owner_id is not None and bearer_user.id == app_row.owner_id)
-    ):
-        return True
+    if bearer_user is not None and bearer_user.is_active:
+        if bearer_user.role == UserRole.ADMIN:
+            return True
+        if app_row.owner_id is not None and bearer_user.id == app_row.owner_id:
+            return True
+        # Co-maintainers manage media + listing on the apps they collab
+        # on (see ``app/services/app_permissions.py``). They need to
+        # render private-app images in the SPA just like owners do.
+        from app.models.app_collaborator import AppCollaborator
+        collab = await db.execute(
+            select(AppCollaborator.id).where(
+                AppCollaborator.app_id == app_row.id,
+                AppCollaborator.user_id == bearer_user.id,
+            ).limit(1)
+        )
+        if collab.scalar_one_or_none() is not None:
+            return True
     return False
 
 

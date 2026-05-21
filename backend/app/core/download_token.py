@@ -14,6 +14,7 @@ after a few minutes so a leaked URL has bounded blast radius.
 from __future__ import annotations
 
 import hmac
+import re
 import uuid
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -177,11 +178,18 @@ def sign_staging_token(
     return f"{content_hash}.{uid}.{exp}.{_sign_staging(_staging_payload(content_hash, uid, exp))}"
 
 
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
 def verify_staging_token(token: str, user_id: str | uuid.UUID) -> str | None:
     """Returns the bound content_hash when the token is valid for this user.
 
     Refuses tokens that aren't bound to ``user_id`` — even if signed
     correctly — so a leaked token can't be redeemed by anyone else.
+    ``content_hash`` is also matched against a strict lowercase-hex
+    SHA-256 regex before being returned, so it cannot smuggle a path
+    segment into ``staging/{content_hash}.apk`` even if the HMAC secret
+    were ever compromised (defense-in-depth against CWE-22 / CWE-23).
     """
     if not token:
         return None
@@ -189,6 +197,8 @@ def verify_staging_token(token: str, user_id: str | uuid.UUID) -> str | None:
         content_hash, uid, exp_str, sig = token.split(".", 3)
         exp = int(exp_str)
     except (ValueError, AttributeError):
+        return None
+    if not _SHA256_RE.match(content_hash):
         return None
     if uid != str(user_id):
         return None

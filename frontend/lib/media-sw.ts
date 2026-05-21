@@ -20,6 +20,18 @@ export function registerMediaSW(): void {
   if (!("serviceWorker" in navigator)) return;
   registered = true;
 
+  // Kill-switch escape hatch — append ``?nosw=1`` to any URL to
+  // unregister the worker. Useful when a buggy ``sw.js`` ships and
+  // bricks every controlled tab without a manual DevTools intervention.
+  try {
+    if (new URLSearchParams(window.location.search).get("nosw") === "1") {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((r) => r.unregister());
+      });
+      return;
+    }
+  } catch (_) { /* malformed query — fall through and register normally */ }
+
   navigator.serviceWorker
     .register("/sw.js", { scope: "/" })
     .then(() => navigator.serviceWorker.ready)
@@ -31,6 +43,23 @@ export function registerMediaSW(): void {
       // eslint-disable-next-line no-console
       console.warn("media SW registration failed:", err);
     });
+
+  // The SW asks for the token when it intercepts a fetch before the
+  // page has had a chance to push one (first paint after a hard reload).
+  // Answer the request so the in-flight fetch can be authenticated.
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "need-token") {
+      pushTokenToSW();
+    }
+  });
+
+  // Re-push on controller change — when a fresh SW activates (e.g.
+  // first install, hot update), ``controller`` flips and the previous
+  // in-memory token is gone. Without this, the new SW would have to
+  // rely on its own ``need-token`` solicitation for several seconds.
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    pushTokenToSW();
+  });
 }
 
 /** Send the current JWT to the SW. Called on first registration, after
