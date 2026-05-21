@@ -97,6 +97,13 @@ async def generate_keystore(
     # <pid>/cmdline (CWE-214).
     cmd = [
         "keytool", "-genkeypair",
+        # Force the JVM's SecureRandom to /dev/urandom. Default on modern
+        # JVMs is already file:/dev/urandom, but on the jlink'd minimal
+        # JRE we ship the java.security policy isn't always picked up
+        # reliably — under low entropy keytool blocks on /dev/random and
+        # the subprocess.communicate() hits its timeout instead of ever
+        # returning a clean error.
+        "-J-Djava.security.egd=file:/dev/urandom",
         "-keystore", str(path),
         "-storetype", "PKCS12",
         "-storepass:env", "FDROID_STOREPASS",
@@ -112,7 +119,17 @@ async def generate_keystore(
         env_extra={"FDROID_STOREPASS": keystore_password, "FDROID_KEYPASS": key_password},
     )
     if rc != 0:
-        raise KeystoreError(f"keytool genkeypair failed: {err or out}")
+        # keytool sometimes dies without writing anything to stderr (signal
+        # kill, native crash). Surfacing only ``err or out`` would then
+        # show the harmless "Generating ... RSA key pair" banner that's
+        # already on stdout and tell the operator nothing. Include rc and
+        # both streams so the real cause is visible.
+        bits = [f"rc={rc}"]
+        if err.strip():
+            bits.append(f"stderr: {err.strip()}")
+        if out.strip():
+            bits.append(f"stdout: {out.strip()}")
+        raise KeystoreError("keytool genkeypair failed — " + " | ".join(bits))
     # File ends up readable by group/world under the default umask; tighten
     # to 0600 so a sidecar process running as a different UID can't read
     # the .p12 bytes and brute-force the password offline (CWE-276).
@@ -164,7 +181,12 @@ async def read_keystore_info(path: Path, keystore_password: str) -> KeystoreInfo
         env_extra={"FDROID_STOREPASS": keystore_password},
     )
     if rc != 0:
-        raise KeystoreError(f"keytool -list failed: {err or out}")
+        bits = [f"rc={rc}"]
+        if err.strip():
+            bits.append(f"stderr: {err.strip()}")
+        if out.strip():
+            bits.append(f"stdout: {out.strip()}")
+        raise KeystoreError("keytool -list failed — " + " | ".join(bits))
 
     alias_match = re.search(r"Alias name:\s*(\S+)", out)
     fp_match = _FINGERPRINT_RE.search(out)

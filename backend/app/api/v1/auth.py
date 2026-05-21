@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import logging
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.api.deps import DbSession
 from app.core.config import settings
@@ -274,10 +279,29 @@ async def oidc_callback(request: Request, db: DbSession):
     oauth = get_oauth()
     if oauth is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OIDC disabled")
+    # Pin the redirect_uri to the same value sent at auth time. Authlib
+    # otherwise rebuilds it from ``request.url``, which behind a reverse
+    # proxy that doesn't forward X-Forwarded-Proto/Host can produce a
+    # scheme/host mismatch — the IdP then rejects the token swap with
+    # ``redirect_uri_mismatch`` and Authlib surfaces a 401 with a cryptic
+    # detail. Forcing the value here means the only way it can mismatch
+    # is a genuine PUBLIC_API_URL misconfiguration.
+    redirect_uri = f"{settings.public_api_url.rstrip('/')}/api/v1/auth/oidc/callback"
     try:
-        token = await oauth.oidc.authorize_access_token(request)
+        token = await oauth.oidc.authorize_access_token(request, redirect_uri=redirect_uri)
     except Exception as exc:  # noqa: BLE001 — Authlib raises various subclasses
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"OIDC error: {exc}") from exc
+        # Log the real exception (with traceback) for the operator, then
+        # bounce the user back to /login with a short reason. A raw JSON
+        # 401 mid-OAuth-flow is technically correct but useless to whoever
+        # just clicked "Continue with SSO" in the browser.
+        logger.warning("OIDC token exchange failed", exc_info=exc)
+        return RedirectResponse(
+            url=(
+                f"{settings.public_app_url.rstrip('/')}/login"
+                f"?oidc_error={quote(f'OIDC token exchange failed: {exc}')}"
+            ),
+            status_code=status.HTTP_302_FOUND,
+        )
     userinfo = token.get("userinfo") or {}
     if not userinfo:
         userinfo = await oauth.oidc.userinfo(token=token)
@@ -323,7 +347,6 @@ async def oidc_callback(request: Request, db: DbSession):
         # Bounce the user back to /login with the reason in a query param.
         # A raw JSON 400 mid-OAuth-flow is technically correct but useless to
         # whoever just clicked "Continue with SSO" in the browser.
-        from urllib.parse import quote
         return RedirectResponse(
             url=(
                 f"{settings.public_app_url.rstrip('/')}/login?oidc_error={quote(str(exc))}"

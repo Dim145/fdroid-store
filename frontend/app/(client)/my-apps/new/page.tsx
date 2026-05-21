@@ -122,7 +122,22 @@ function NewAppInner() {
       // Repo-level metadata enrichments — the GitHub tagline becomes
       // the summary, license/homepage/source/author follow the natural
       // mapping. Skipped when the user already typed something.
-      if (!summary && info.repo_description) setSummary(info.repo_description);
+      //
+      // GitHub allows ~350 chars in its description; our ``summary``
+      // column caps at 255. Truncate when seeding so the form submits
+      // cleanly. The full text also lands in ``description`` (when
+      // empty) so nothing is lost — the operator can re-edit either
+      // field before saving.
+      if (info.repo_description) {
+        if (!summary) {
+          const SUMMARY_CAP = 240;
+          const raw = info.repo_description.trim();
+          setSummary(
+            raw.length <= SUMMARY_CAP ? raw : raw.slice(0, SUMMARY_CAP - 1).trimEnd() + "…",
+          );
+        }
+        if (!description) setDescription(info.repo_description.trim());
+      }
       if (!license && info.repo_license_spdx) setLicense(info.repo_license_spdx);
       if (!website && info.repo_homepage) setWebsite(info.repo_homepage);
       if (!sourceCode) setSourceCode(info.repo_html_url);

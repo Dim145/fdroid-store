@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -29,7 +29,6 @@ from app.models.audit import DownloadEvent
 from app.models.user import User, UserRole
 from app.storage import get_storage
 from app.storage.local import LocalStorage
-from app.storage.s3 import S3Storage
 
 # Public + Basic-auth endpoints. Mounted at /fdroid/repo in main.py.
 router = APIRouter()
@@ -65,26 +64,38 @@ def _hash_ip(ip: str | None) -> str | None:
     return hashlib.sha256(ip.encode("utf-8")).hexdigest()
 
 
-async def _stream_or_redirect(storage_key: str, *, content_type: str) -> Response:
+async def _serve_storage_object(storage_key: str, *, content_type: str) -> Response:
+    """Serve a stored object through the backend.
+
+    We deliberately do NOT redirect to an S3 public URL even when one
+    is available: the redirect path bypasses every backend control
+    that the caller-side access checks rely on (private-app gating,
+    audit, rate limits, slowapi), and an S3 backend that refuses
+    anonymous reads (Garage, private MinIO bucket, …) just 403s on
+    the redirect. Streaming keeps the surface uniform — the bytes
+    always traverse the backend, so an admin who pulled a deploy
+    token revoke / disabled a user can be sure no in-flight download
+    is using the old credential against a publicly readable bucket.
+    """
     storage = get_storage()
     if isinstance(storage, LocalStorage):
         path = storage.local_path(storage_key)
         if not path.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+        # FileResponse already sets Content-Length from the stat.
         return FileResponse(str(path), media_type=content_type)
-    if isinstance(storage, S3Storage):
-        public = storage.public_url(storage_key)
-        if public:
-            return RedirectResponse(public, status_code=status.HTTP_302_FOUND)
-        if not await storage.exists(storage_key):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-        stream = await storage.open_stream(storage_key)
-        return StreamingResponse(stream, media_type=content_type)
-    # Generic fallback for custom backends
     if not await storage.exists(storage_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    # Best-effort Content-Length — without it the F-Droid client shows
+    # an indeterminate progress bar on a 30 MB APK. ``storage.size``
+    # does a HEAD against S3 which is cheap.
+    headers: dict[str, str] = {}
+    try:
+        headers["Content-Length"] = str(await storage.size(storage_key))
+    except Exception:  # noqa: BLE001 — best-effort, fall through without the header
+        pass
     stream = await storage.open_stream(storage_key)
-    return StreamingResponse(stream, media_type=content_type)
+    return StreamingResponse(stream, media_type=content_type, headers=headers)
 
 
 async def _dispatch_root(
@@ -203,7 +214,7 @@ async def serve_icon(
     key = f"icons/{filename}"
     if not await storage.exists(key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
-    return await _stream_or_redirect(key, content_type=_content_type_for(filename))
+    return await _serve_storage_object(key, content_type=_content_type_for(filename))
 
 
 # Screenshots and other localized media: served from
@@ -249,7 +260,7 @@ async def serve_singleton_media(
     storage = get_storage()
     if not await storage.exists(key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    return await _stream_or_redirect(key, content_type=_content_type_for(filename))
+    return await _serve_storage_object(key, content_type=_content_type_for(filename))
 
 
 @router.get("/{package}/{locale}/{kind}/{filename}")
@@ -276,7 +287,7 @@ async def serve_media(
     storage = get_storage()
     if not await storage.exists(key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    return await _stream_or_redirect(key, content_type=_content_type_for(filename))
+    return await _serve_storage_object(key, content_type=_content_type_for(filename))
 
 
 def _content_type_for(filename: str) -> str:
@@ -392,7 +403,7 @@ async def _serve_index(filename: str, api_key: ApiKey | None) -> Response:
     if api_key is not None and api_key.can_download_private:
         per_user_key = f"{user_private_prefix(api_key.user_id)}/{filename}"
         if await storage.exists(per_user_key):
-            return await _stream_or_redirect(
+            return await _serve_storage_object(
                 per_user_key, content_type=_INDEX_FILES[filename],
             )
 
@@ -404,7 +415,7 @@ async def _serve_index(filename: str, api_key: ApiKey | None) -> Response:
                 "Index not built yet. The admin must complete setup and trigger a reindex."
             ),
         )
-    return await _stream_or_redirect(storage_key, content_type=_INDEX_FILES[filename])
+    return await _serve_storage_object(storage_key, content_type=_INDEX_FILES[filename])
 
 
 async def _serve_apk(
@@ -485,4 +496,4 @@ async def _serve_apk(
     except Exception:  # noqa: BLE001
         pass
 
-    return await _stream_or_redirect(apk.storage_key, content_type="application/vnd.android.package-archive")
+    return await _serve_storage_object(apk.storage_key, content_type="application/vnd.android.package-archive")

@@ -31,6 +31,48 @@ export function mediaUrl(storageKey: string | null | undefined, version?: number
 const ACCESS_TOKEN_KEY = "fdroid.access";
 const REFRESH_TOKEN_KEY = "fdroid.refresh";
 
+/**
+ * Flatten an HTTP error body's ``detail`` into a human-readable string.
+ *
+ * FastAPI ships two shapes:
+ *   * ``detail: "free-form string"`` — what most of our hand-rolled
+ *     ``HTTPException(detail=...)`` calls produce.
+ *   * ``detail: [{ type, loc, msg, input, ctx }, ...]`` — what
+ *     Pydantic-driven request validation rejects look like.
+ *
+ * The pre-existing ``String(detail)`` worked for case 1 but stringified
+ * case 2 to literal ``[object Object]``. This helper reaches into each
+ * validation entry, drops the ``body`` prefix from ``loc``, and joins
+ * everything into a single readable line.
+ */
+function formatApiDetail(detail: unknown): string {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(formatDetailItem).filter(Boolean).join("; ");
+  }
+  if (typeof detail === "object") {
+    return formatDetailItem(detail);
+  }
+  return String(detail);
+}
+
+function formatDetailItem(item: unknown): string {
+  if (typeof item === "string") return item;
+  if (!item || typeof item !== "object") return "";
+  const it = item as { msg?: string; loc?: unknown[]; type?: string };
+  if (typeof it.msg === "string" && it.msg) {
+    if (Array.isArray(it.loc) && it.loc.length > 0) {
+      const path = it.loc
+        .filter((p) => p !== "body" && p !== "query" && p !== "path")
+        .join(".");
+      return path ? `${path}: ${it.msg}` : it.msg;
+    }
+    return it.msg;
+  }
+  return JSON.stringify(item);
+}
+
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -187,7 +229,7 @@ export async function apiFetch<T = unknown>(
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     if (body && typeof body === "object" && "detail" in body) {
-      detail = String((body as { detail: unknown }).detail);
+      detail = formatApiDetail((body as { detail: unknown }).detail) || detail;
     }
     throw new ApiError(res.status, detail, body);
   }
