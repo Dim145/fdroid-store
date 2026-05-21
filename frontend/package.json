@@ -1,6 +1,6 @@
 {
   "name": "fdroid-store-frontend",
-  "version": "1.0.6",
+  "version": "1.0.9",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
