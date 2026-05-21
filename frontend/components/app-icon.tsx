@@ -12,6 +12,9 @@ type Props = {
   className?: string;
   /** Bump to bust the browser cache when the bytes behind a key may have changed. */
   version?: string | number;
+  /** Per-app signed token (``AppRead.media_token``); required to render
+   *  private-app icons since <img src> tags can't send Authorization. */
+  mediaToken?: string | null;
   /** Play Store-ish rounded corners by default. */
   shape?: "rounded" | "square" | "circle";
 };
@@ -26,10 +29,11 @@ export function AppIcon({
   size = 56,
   className,
   version,
+  mediaToken,
   shape = "rounded",
 }: Props) {
   const [failed, setFailed] = useState(false);
-  const url = mediaUrl(iconPath, version);
+  const url = mediaUrl(iconPath, { version, token: mediaToken });
 
   // 22% radius matches Material You / Play Store app icon styling at any size.
   const radius =

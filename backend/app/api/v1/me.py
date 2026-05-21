@@ -232,7 +232,16 @@ async def my_apps(
         .order_by(App.created_at.desc())
     )
     rows = (await db.execute(stmt)).scalars().unique().all()
-    return [AppRead.model_validate(a) for a in rows]
+    # ``/me/apps`` is by definition only invoked by the owner (or co-
+    # maintainer) of the listed apps, so we can mint a media token
+    # unconditionally — the SPA needs it for private-app thumbnails.
+    from app.api.v1.apps import _attach_media_token
+    out = []
+    for a in rows:
+        p = AppRead.model_validate(a)
+        _attach_media_token(p, a, user)
+        out.append(p)
+    return out
 
 
 # --------------------------------------------------------------------------

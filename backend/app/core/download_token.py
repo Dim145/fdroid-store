@@ -80,3 +80,55 @@ def verify_download_token(file_name: str, token: str) -> str | None:
     if not hmac.compare_digest(expected, sig):
         return None
     return uid
+
+
+# --------------------------------------------------------------------------
+# Media tokens
+# --------------------------------------------------------------------------
+# Private-app media (icons, screenshots, feature/promo/tv graphics) face the
+# same problem as APK downloads: ``<img src>`` carries no Authorization
+# header, so the logged-in SPA owner can't render their own private app's
+# images. Mirror the APK signed-URL pattern, but bind the token to the
+# **package name** instead of an individual filename — one token covers all
+# the assets of one app for the SPA's session, so we don't have to mint a
+# new URL per image.
+#
+# Token format / key derivation match the download path, except the HMAC
+# subkey is ``media`` (separate purpose, per the same CWE-1188 hygiene).
+_MEDIA_DEFAULT_TTL = 3600  # one hour — comfortable for a page sit
+
+
+def _sign_media(payload: bytes) -> str:
+    return hmac.new(_derived_key("media"), payload, sha256).hexdigest()[:32]
+
+
+def _media_payload(package_name: str, user_id: str, exp_ts: int) -> bytes:
+    return f"{package_name}|{user_id}|{exp_ts}".encode("utf-8")
+
+
+def sign_media_token(
+    package_name: str,
+    user_id: str | uuid.UUID,
+    ttl_seconds: int = _MEDIA_DEFAULT_TTL,
+) -> str:
+    """Mint a ``?t=`` token that unlocks every media URL under ``<package>/``."""
+    uid = str(user_id)
+    exp = int(datetime.now(UTC).timestamp()) + ttl_seconds
+    return f"{uid}.{exp}.{_sign_media(_media_payload(package_name, uid, exp))}"
+
+
+def verify_media_token(package_name: str, token: str) -> str | None:
+    """Constant-time check bound to a package. Returns the user_id if valid."""
+    if not token:
+        return None
+    try:
+        uid, exp_str, sig = token.split(".", 2)
+        exp = int(exp_str)
+    except (ValueError, AttributeError):
+        return None
+    if exp < int(datetime.now(UTC).timestamp()):
+        return None
+    expected = _sign_media(_media_payload(package_name, uid, exp))
+    if not hmac.compare_digest(expected, sig):
+        return None
+    return uid

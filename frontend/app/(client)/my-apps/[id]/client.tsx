@@ -550,7 +550,7 @@ function ManageAppInner() {
       {/* ──── Icon ──── */}
       <Section id="icon" step={stepOf("icon")} title={t("myApps.edit.sections.icon")} subtitle={t("myApps.edit.sections.iconSubtitle")}>
         <div className="flex flex-wrap items-center gap-5">
-          <AppIcon iconPath={app.icon_path} name={app.name} size={96} version={app.updated_at} className="shadow-e2" />
+          <AppIcon iconPath={app.icon_path} name={app.name} size={96} version={app.updated_at} mediaToken={app.media_token} className="shadow-e2" />
           <div className="flex-1 space-y-2">
             <Badge variant={app.icon_is_custom ? "primary" : "outline"}>
               {app.icon_is_custom ? t("myApps.edit.iconCustom") : t("myApps.edit.iconAuto")}
@@ -592,7 +592,7 @@ function ManageAppInner() {
             label={t("myApps.edit.banner.featured")}
             hint={t("myApps.edit.banner.featuredHint")}
             aspect="aspect-[1024/500]"
-            url={mediaUrl(app.feature_graphic_path) || null}
+            url={mediaUrl(app.feature_graphic_path, { token: app.media_token }) || null}
             onUpload={uploadFeatureGraphic}
             onClear={clearFeatureGraphic}
           />
@@ -600,7 +600,7 @@ function ManageAppInner() {
             label={t("myApps.edit.banner.promo")}
             hint={t("myApps.edit.banner.promoHint")}
             aspect="aspect-[320/180]"
-            url={mediaUrl(app.promo_graphic_path) || null}
+            url={mediaUrl(app.promo_graphic_path, { token: app.media_token }) || null}
             onUpload={uploadPromoGraphic}
             onClear={clearPromoGraphic}
           />
@@ -608,7 +608,7 @@ function ManageAppInner() {
             label={t("myApps.edit.banner.tv")}
             hint={t("myApps.edit.banner.tvHint")}
             aspect="aspect-video"
-            url={mediaUrl(app.tv_banner_path) || null}
+            url={mediaUrl(app.tv_banner_path, { token: app.media_token }) || null}
             onUpload={uploadTvBanner}
             onClear={clearTvBanner}
           />
@@ -656,6 +656,7 @@ function ManageAppInner() {
                     key={s.id}
                     screenshot={s}
                     index={i}
+                    mediaToken={app.media_token}
                     onDelete={deleteScreenshot}
                   />
                 ))}
@@ -941,6 +942,7 @@ function Hero({ app }: { app: AppDetail }) {
             name={app.name}
             size={96}
             version={app.updated_at}
+            mediaToken={app.media_token}
             className="shadow-e2"
           />
           <div className="min-w-0 flex-1">
@@ -1551,10 +1553,12 @@ function BannerSlot({
 function SortableScreenshot({
   screenshot,
   index,
+  mediaToken,
   onDelete,
 }: {
   screenshot: Screenshot;
   index: number;
+  mediaToken: string | null;
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
@@ -1567,7 +1571,7 @@ function SortableScreenshot({
     isDragging,
   } = useSortable({ id: screenshot.id });
 
-  const url = mediaUrl(screenshot.storage_key);
+  const url = mediaUrl(screenshot.storage_key, { token: mediaToken });
   if (!url) return null;
 
   return (

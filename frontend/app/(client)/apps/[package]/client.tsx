@@ -162,6 +162,7 @@ export default function AppDetailClient() {
               size={140}
               shape="rounded"
               version={app.updated_at}
+              mediaToken={app.media_token}
               className="shadow-e3"
             />
             <NsfwTag active={app.is_nsfw} size="md" />
@@ -241,7 +242,7 @@ export default function AppDetailClient() {
         <section className="mt-10">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={mediaUrl(app.feature_graphic_path) || ""}
+            src={mediaUrl(app.feature_graphic_path, { token: app.media_token }) || ""}
             alt={`${app.name} feature graphic`}
             className="w-full rounded-2xl border border-outline-soft bg-surface-2 object-cover shadow-e1"
           />
@@ -254,7 +255,7 @@ export default function AppDetailClient() {
           <h2 className="section-title mb-3">{t("appDetail.screenshots")}</h2>
           <div className="rail -mx-4 px-4 md:-mx-2 md:px-2">
             {screenshots.map((s) => {
-              const url = mediaUrl(s.storage_key);
+              const url = mediaUrl(s.storage_key, { token: app.media_token });
               if (!url) return null;
               return (
                 <a

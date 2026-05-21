@@ -256,6 +256,13 @@ class AppRead(BaseModel):
     feature_graphic_path: str | None = None
     promo_graphic_path: str | None = None
     tv_banner_path: str | None = None
+    # Short-lived signed query token the SPA appends as ``?t=<token>`` on
+    # every media URL of this app. Required for the owner's browser to
+    # render private-app images, because ``<img src>`` tags carry no
+    # Authorization header and the media route would otherwise 404 the
+    # request. Populated only when the caller is authorised to view this
+    # app's private media; ``None`` for public apps + anonymous callers.
+    media_token: str | None = None
     visibility: AppVisibility
     status: AppStatus
     suggested_version_code: int | None

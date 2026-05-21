@@ -15,6 +15,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, require_browse_access
+from app.core.download_token import sign_media_token
 from app.core.rate_limit import limiter
 from app.api.v1.apks import (
     _apk_size_cap_bytes,
@@ -73,6 +74,26 @@ def _pick_locale_overrides(
     if exact is None:
         return None, None, None
     return exact.name, exact.summary, exact.description
+
+
+def _attach_media_token(payload, app: App, user: User | None) -> None:
+    """Mint a per-app media token when the caller is allowed to see this
+    app's private images. Anonymous + non-owner callers get ``None``.
+
+    Private-app icons / screenshots / banners are gated by
+    ``_media_anonymously_visible`` in the F-Droid route, which only
+    recognises Basic-auth API keys. Browser ``<img src>`` tags carry no
+    Authorization header, so the SPA needs a query-string token to
+    unlock the same files. This helper is the one place that decides
+    whether to mint it; callers attach the result to the response.
+    """
+    if app.visibility == AppVisibility.PUBLIC:
+        return
+    if user is None:
+        return
+    is_owner = app.owner_id is not None and user.id == app.owner_id
+    if user.role == UserRole.ADMIN or is_owner:
+        payload.media_token = sign_media_token(app.package_name, user.id)
 
 
 def _apply_locale(payload, app: App, preferred_locale: str | None):
@@ -144,10 +165,12 @@ async def list_apps(
     if not show_nsfw:
         rows = [a for a in rows if not a.is_nsfw]
     preferred_locale = user.preferred_locale if user else None
-    return [
-        _apply_locale(AppRead.model_validate(a), a, preferred_locale)
-        for a in rows
-    ]
+    out = []
+    for a in rows:
+        p = _apply_locale(AppRead.model_validate(a), a, preferred_locale)
+        _attach_media_token(p, a, user)
+        out.append(p)
+    return out
 
 
 @router.post("/with-apk", response_model=AppDetail, status_code=status.HTTP_201_CREATED)
@@ -290,6 +313,7 @@ async def create_app_with_apk(
         ).scalar_one()
         payload = AppDetail.model_validate(result)
         payload.owner_username = result.owner.username if result.owner else None
+        _attach_media_token(payload, result, user)
         return payload
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -494,6 +518,7 @@ async def create_app_with_github_source(
         ).scalar_one()
         out = AppDetail.model_validate(result)
         out.owner_username = result.owner.username if result.owner else None
+        _attach_media_token(out, result, user)
         return out
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -568,7 +593,9 @@ async def create_app(
     )
     db.add(app)
     await db.flush()
-    return AppRead.model_validate(app)
+    payload = AppRead.model_validate(app)
+    _attach_media_token(payload, app, user)
+    return payload
 
 
 async def _load_app_or_404(db, app_id_or_pkg: str) -> App:
@@ -615,6 +642,7 @@ async def get_app(
     payload = AppDetail.model_validate(app)
     payload.owner_username = app.owner.username if app.owner else None
     payload.download_count = download_count
+    _attach_media_token(payload, app, user)
     # Resolved retention cap — computed server-side so the manage
     # page banner doesn't need to fetch admin-only RepoConfig. We
     # also surface the raw repo default so the admin override input
@@ -693,7 +721,9 @@ async def update_app(
 
     await db.flush()
     await enqueue_reindex()
-    return AppRead.model_validate(app)
+    payload = AppRead.model_validate(app)
+    _attach_media_token(payload, app, user)
+    return payload
 
 
 async def _apply_suggested_version_override(

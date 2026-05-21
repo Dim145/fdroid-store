@@ -22,10 +22,27 @@ export const REPO_URL =
  *  Storage keys mirror the repo URL layout (icons/foo.png →
  *  /fdroid/repo/icons/foo.png). Versioning via a query param helps browsers
  *  pick up icon swaps without a hard refresh. */
-export function mediaUrl(storageKey: string | null | undefined, version?: number | string): string | null {
+export function mediaUrl(
+  storageKey: string | null | undefined,
+  versionOrOpts?: number | string | { version?: number | string; token?: string | null },
+): string | null {
   if (!storageKey) return null;
-  const v = version != null ? `?v=${encodeURIComponent(String(version))}` : "";
-  return `${REPO_URL}/${storageKey}${v}`;
+  let version: number | string | undefined;
+  let token: string | null | undefined;
+  if (versionOrOpts != null && typeof versionOrOpts === "object") {
+    version = versionOrOpts.version;
+    token = versionOrOpts.token;
+  } else {
+    version = versionOrOpts;
+  }
+  // Private-app media requires the per-app signed token (AppRead.media_token)
+  // because <img src> tags carry no Authorization header. Public-app
+  // media doesn't need it; the backend ignores ?t= when not required.
+  const qs: string[] = [];
+  if (token) qs.push(`t=${encodeURIComponent(token)}`);
+  if (version != null) qs.push(`v=${encodeURIComponent(String(version))}`);
+  const tail = qs.length ? `?${qs.join("&")}` : "";
+  return `${REPO_URL}/${storageKey}${tail}`;
 }
 
 const ACCESS_TOKEN_KEY = "fdroid.access";
@@ -762,6 +779,11 @@ export type AppSummary = {
   feature_graphic_path: string | null;
   promo_graphic_path: string | null;
   tv_banner_path: string | null;
+  /** Short-lived ``?t=`` token for media URLs on this app. Required for
+   *  private-app images (icon, screenshots, banners) because <img src>
+   *  tags carry no Authorization header; populated only when the caller
+   *  is authorised. Public apps + anonymous callers see ``null``. */
+  media_token: string | null;
   visibility: "public" | "private";
   status: "draft" | "pending_review" | "published" | "rejected" | "archived";
   suggested_version_code: number | null;

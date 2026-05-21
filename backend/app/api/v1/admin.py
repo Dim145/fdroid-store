@@ -216,7 +216,7 @@ async def delete_user(
 @router.get("/apps", response_model=list[AppDetail])
 async def admin_list_apps(
     db: DbSession,
-    _: Annotated[User, Depends(get_current_admin)],
+    user: Annotated[User, Depends(get_current_admin)],
     status_filter: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -239,12 +239,14 @@ async def admin_list_apps(
     if status_filter:
         stmt = stmt.where(App.status == status_filter)
     rows = (await db.execute(stmt.limit(min(limit, 500)).offset(offset))).scalars().unique().all()
+    from app.api.v1.apps import _attach_media_token
     out: list[AppDetail] = []
     for a in rows:
         detail = AppDetail.model_validate(a)
         if a.owner is not None:
             detail.owner_id = a.owner.id
             detail.owner_username = a.owner.username
+        _attach_media_token(detail, a, user)
         out.append(detail)
     return out
 
@@ -322,7 +324,10 @@ async def admin_update_app(
         )
     await db.flush()
     await enqueue_reindex()
-    return AppRead.model_validate(app)
+    from app.api.v1.apps import _attach_media_token
+    payload = AppRead.model_validate(app)
+    _attach_media_token(payload, app, admin)
+    return payload
 
 
 # --------------------------------------------------------------------------

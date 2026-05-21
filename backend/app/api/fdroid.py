@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_api_key_from_basic_auth, is_public_mode
-from app.core.download_token import verify_download_token
+from app.core.download_token import verify_download_token, verify_media_token
 from app.core.security import parse_api_key, verify_api_key_secret
 from app.fdroid.repo_builder import REPO_PUBLIC_PREFIX, user_private_prefix
 from app.models.api_key import ApiKey
@@ -64,6 +64,27 @@ def _hash_ip(ip: str | None) -> str | None:
     return hashlib.sha256(ip.encode("utf-8")).hexdigest()
 
 
+def _cache_control_for(storage_key: str) -> str:
+    """Sensible browser-cache policy for the F-Droid asset shape.
+
+    Three buckets:
+      * Index files (``index-v1.jar`` / ``index-v2.json`` / ``entry.jar``)
+        — rewritten on every reindex, so the client MUST revalidate.
+      * APK files — the version code is baked into the filename, so the
+        bytes behind a given URL never change. Long immutable cache.
+      * Everything else (icons, screenshots, banners) — content can be
+        replaced under a stable key, but the frontend always appends
+        ``?v=<updated_at>`` to cache-bust on actual changes. One day
+        is fine; we never serve stale bytes for more than that window.
+    """
+    name = storage_key.rsplit("/", 1)[-1].lower()
+    if name in {"index-v1.jar", "index-v2.json", "entry.jar"}:
+        return "no-cache, must-revalidate"
+    if name.endswith(".apk"):
+        return "public, max-age=31536000, immutable"
+    return "public, max-age=86400"
+
+
 async def _serve_storage_object(storage_key: str, *, content_type: str) -> Response:
     """Serve a stored object through the backend.
 
@@ -77,13 +98,14 @@ async def _serve_storage_object(storage_key: str, *, content_type: str) -> Respo
     token revoke / disabled a user can be sure no in-flight download
     is using the old credential against a publicly readable bucket.
     """
+    headers = {"Cache-Control": _cache_control_for(storage_key)}
     storage = get_storage()
     if isinstance(storage, LocalStorage):
         path = storage.local_path(storage_key)
         if not path.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
         # FileResponse already sets Content-Length from the stat.
-        return FileResponse(str(path), media_type=content_type)
+        return FileResponse(str(path), media_type=content_type, headers=headers)
     if not await storage.exists(storage_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
     # Two response shapes depending on size:
@@ -111,9 +133,9 @@ async def _serve_storage_object(storage_key: str, *, content_type: str) -> Respo
         size = None
     if size is not None and size <= BUFFER_LIMIT:
         data = await storage.get_bytes(storage_key)
-        return Response(content=data, media_type=content_type)
+        return Response(content=data, media_type=content_type, headers=headers)
     stream = await storage.open_stream(storage_key)
-    return StreamingResponse(stream, media_type=content_type)
+    return StreamingResponse(stream, media_type=content_type, headers=headers)
 
 
 async def _dispatch_root(
@@ -208,6 +230,7 @@ async def serve_icon(
     filename: str,
     db: DbSession,
     api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    t: str | None = None,
 ) -> Response:
     """Icons.
 
@@ -215,7 +238,9 @@ async def serve_icon(
     file naming (``icons/<package>.png``) made the F-Droid serve route a
     package-name oracle for private packages (CWE-203). Catalogue
     thumbnails of public apps stay public so the logged-out home page
-    still renders.
+    still renders. Owners' SPA sessions pass a ``?t=<media_token>`` that
+    binds to the package (see ``download_token.sign_media_token``); the
+    token survives the lack of an Authorization header on ``<img>`` tags.
     """
     # Filename layout is ``<package>.png``, ``<package>-custom.png``,
     # ``fdroid-icon.png`` (the repo's own icon), or ``repo-icon-<ts>.png``.
@@ -224,10 +249,12 @@ async def serve_icon(
     package_name: str | None = None
     if not base.startswith("repo-icon") and base != "fdroid-icon":
         package_name = base.removesuffix("-custom")
-    if package_name and not await _media_anonymously_visible(
-        db=db, package_name=package_name, api_key=api_key,
-    ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
+    if package_name:
+        token_ok = bool(t and verify_media_token(package_name, t))
+        if not token_ok and not await _media_anonymously_visible(
+            db=db, package_name=package_name, api_key=api_key,
+        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
     storage = get_storage()
     key = f"icons/{filename}"
     if not await storage.exists(key):
@@ -277,13 +304,15 @@ async def serve_singleton_media(
     filename: str,
     db: DbSession,
     api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    t: str | None = None,
 ) -> Response:
     if filename not in _ALLOWED_SINGLETON_MEDIA:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     for seg in (package, locale, filename):
         if not seg or "/" in seg or seg.startswith("."):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
+    token_ok = bool(t and verify_media_token(package, t))
+    if not token_ok and not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     storage = get_storage()
     key = f"{package}/{locale}/{filename}"
@@ -307,6 +336,7 @@ async def serve_media(
     filename: str,
     db: DbSession,
     api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    t: str | None = None,
 ) -> Response:
     # Screenshots are <img>-loaded previews but the URL doubles as a
     # package-name oracle for private apps if served anonymously. Gate on
@@ -317,7 +347,8 @@ async def serve_media(
     for seg in (package, locale, kind, filename):
         if not seg or "/" in seg or seg.startswith("."):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
+    token_ok = bool(t and verify_media_token(package, t))
+    if not token_ok and not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     storage = get_storage()
     key = f"{package}/{locale}/{kind}/{filename}"
