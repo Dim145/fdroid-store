@@ -1145,6 +1145,13 @@ export type SetupWizardPayload = {
   keystore_b64?: string;
 };
 
+/** Coarse origin family for a download event — see
+ *  ``backend/app/core/user_agent.py`` for the classifier. The frontend
+ *  uses this to render small chips on the history view so the user can
+ *  tell at a glance which downloads came from a phone's F-Droid client
+ *  vs the SPA in a browser. */
+export type ClientKind = "fdroid" | "web" | "cli" | "other" | "unknown";
+
 export type DownloadHistoryItem = {
   app_id: string;
   package_name: string;
@@ -1161,6 +1168,9 @@ export type DownloadHistoryItem = {
   latest_apk_version_code: number | null;
   latest_apk_version_name: string | null;
   has_update_available: boolean;
+  /** Partial count map by client family. Missing keys mean "zero" —
+   *  the backend omits buckets with no events to keep payloads tight. */
+  client_breakdown: Partial<Record<ClientKind, number>>;
 };
 
 export type AdminStats = {

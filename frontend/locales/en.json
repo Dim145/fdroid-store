@@ -549,7 +549,14 @@
     "view": "Open",
     "update": "Update",
     "whyNoInstalled": "Why no \"installed\" indicator?",
-    "whyNoInstalledBody": "The F-Droid Android client doesn't broadcast install status to the repository, so we can't truly know if an APK is still on your device. We show the latest version you downloaded plus whether a newer one is available — the closest approximation a server-side view can offer."
+    "whyNoInstalledBody": "The F-Droid Android client doesn't broadcast install status to the repository, so we can't truly know if an APK is still on your device. We show the latest version you downloaded plus whether a newer one is available — the closest approximation a server-side view can offer.",
+    "client": {
+      "fdroid": "F-Droid",
+      "web": "Web",
+      "cli": "CLI",
+      "other": "Other",
+      "unknown": "Unknown"
+    }
   },
   "profile": {
     "eyebrow": "Profile",

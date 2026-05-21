@@ -549,7 +549,14 @@
     "view": "Ouvrir",
     "update": "Mettre à jour",
     "whyNoInstalled": "Pourquoi pas d'indicateur \"installé\" ?",
-    "whyNoInstalledBody": "Le client F-Droid Android ne diffuse pas le statut d'installation au dépôt, donc on ne peut pas vraiment savoir si un APK est encore sur ton appareil. On affiche la dernière version que tu as téléchargée plus la disponibilité éventuelle d'une plus récente — la meilleure approximation possible côté serveur."
+    "whyNoInstalledBody": "Le client F-Droid Android ne diffuse pas le statut d'installation au dépôt, donc on ne peut pas vraiment savoir si un APK est encore sur ton appareil. On affiche la dernière version que tu as téléchargée plus la disponibilité éventuelle d'une plus récente — la meilleure approximation possible côté serveur.",
+    "client": {
+      "fdroid": "F-Droid",
+      "web": "Web",
+      "cli": "CLI",
+      "other": "Autre",
+      "unknown": "Inconnu"
+    }
   },
   "profile": {
     "eyebrow": "Profil",

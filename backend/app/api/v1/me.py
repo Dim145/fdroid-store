@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user
 from app.core.security import hash_password, verify_password
+from app.core.user_agent import classify_user_agent
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppVisibility
 from app.models.audit import DownloadEvent
@@ -145,14 +146,18 @@ async def my_download_history(
     rows = (await db.execute(stmt)).all()
 
     # For each app, look up which APK the user actually downloaded most
-    # recently — version_code + version_name. We resolve with a single
-    # query keyed on (user, app, max(created_at)).
-    last_apk_ids = (
+    # recently — version_code + version_name — AND in the same pass
+    # tally the user_agent into a coarse "web vs client" breakdown.
+    # Single query keyed on (user, app); UA classification happens in
+    # Python on the rows we already had to fetch for the latest-APK
+    # lookup, so the breakdown is effectively free.
+    events_raw = (
         await db.execute(
             select(
                 DownloadEvent.app_id,
                 DownloadEvent.apk_id,
                 DownloadEvent.created_at,
+                DownloadEvent.user_agent,
             )
             .where(
                 DownloadEvent.user_id == user.id,
@@ -160,13 +165,18 @@ async def my_download_history(
             )
         )
     ).all()
-    # Reduce to ``{app_id: apk_id with max created_at}``.
+    # Reduce to ``{app_id: apk_id with max created_at}`` + per-app UA
+    # family counts.
     chosen_apk_per_app: dict[uuid_module.UUID, uuid_module.UUID] = {}
     chosen_at: dict[uuid_module.UUID, datetime] = {}
-    for app_id, apk_id, created_at in last_apk_ids:
+    client_breakdown_per_app: dict[uuid_module.UUID, dict[str, int]] = {}
+    for app_id, apk_id, created_at, user_agent in events_raw:
         if app_id not in chosen_at or created_at > chosen_at[app_id]:
             chosen_at[app_id] = created_at
             chosen_apk_per_app[app_id] = apk_id
+        kind = classify_user_agent(user_agent)
+        bd = client_breakdown_per_app.setdefault(app_id, {})
+        bd[kind] = bd.get(kind, 0) + 1
 
     # Mint a signed media token per-row so private-app icons render.
     # ``<img src>`` carries no Authorization header; without this the
@@ -215,6 +225,12 @@ async def my_download_history(
                     bool(last_apk and current_latest)
                     and current_latest.version_code > last_apk.version_code
                 ),
+                # Coarse origin tally (web / fdroid / cli / other /
+                # unknown). The frontend renders one chip per non-zero
+                # bucket so the user can see at a glance whether they
+                # grabbed an APK from their phone's F-Droid client or
+                # straight from the SPA in a desktop browser.
+                "client_breakdown": client_breakdown_per_app.get(app.id, {}),
             }
         )
     return {"items": items}

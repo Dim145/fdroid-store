@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Check, Download, Library, Sparkles } from "lucide-react";
+import { ArrowUpRight, Check, Download, Globe, HelpCircle, Library, Smartphone, Sparkles, Terminal } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -9,7 +9,7 @@ import { AppIcon } from "@/components/app-icon";
 import { AuthGuard } from "@/components/auth-guard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, type DownloadHistoryItem } from "@/lib/api";
+import { api, type ClientKind, type DownloadHistoryItem } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 
@@ -322,6 +322,14 @@ function UpdateCard({ item, index }: { item: DownloadHistoryItem; index: number 
 
 function ShelfRow({ item, index }: { item: DownloadHistoryItem; index: number }) {
   const { t } = useTranslation();
+  // Render only non-zero buckets, ordered by count desc so the most
+  // common origin reads first. Backend omits empty buckets to keep the
+  // payload tight, so a partial-record ``??`` default is mandatory.
+  const breakdown = item.client_breakdown ?? {};
+  const buckets = (["fdroid", "web", "cli", "other", "unknown"] as const)
+    .map((k) => [k, breakdown[k] ?? 0] as const)
+    .filter(([, n]) => n > 0)
+    .sort(([, a], [, b]) => b - a);
   return (
     <li
       style={{ animationDelay: `${Math.min(index, 9) * 30}ms` }}
@@ -355,6 +363,16 @@ function ShelfRow({ item, index }: { item: DownloadHistoryItem; index: number })
             </>
           )}
         </div>
+        {/* Per-origin chips. Lives on the meta line rather than in the
+            right-hand stat column so the data is visible on mobile too
+            (the stat column is ``md:`` only). */}
+        {buckets.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {buckets.map(([kind, count]) => (
+              <ClientKindChip key={kind} kind={kind} count={count} />
+            ))}
+          </div>
+        )}
       </div>
       <div className="hidden text-right md:block">
         <div className="text-[10px] uppercase tracking-wider text-ink-mute">
@@ -371,6 +389,62 @@ function ShelfRow({ item, index }: { item: DownloadHistoryItem; index: number })
         {t("history.view")} <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={2.4} />
       </Link>
     </li>
+  );
+}
+
+
+/* Per-origin chip — one per non-zero bucket in the client_breakdown.
+ *
+ * Visual: a hairline pill with the family icon + tabular count + the
+ * family label. Each family gets a tint so the eye can scan a list of
+ * apps and answer "did I grab this from the SPA, or from my phone's
+ * F-Droid client?" at a glance:
+ *
+ *   • F-Droid  — primary-container (green), Smartphone icon
+ *   • Web      — surface-2 + ink-soft, Globe icon
+ *   • CLI      — accent-container (amber), Terminal icon
+ *   • Other /  — muted surface-2, HelpCircle icon (visually hushed since
+ *     Unknown    these are usually noise — old scrapers, missing UA, …)
+ *
+ * Kept compact (text-[10px], no extra padding) so a row with two
+ * chips doesn't blow up the row height. */
+function ClientKindChip({ kind, count }: { kind: ClientKind; count: number }) {
+  const { t } = useTranslation();
+  const conf: Record<ClientKind, { Icon: typeof Globe; tone: string }> = {
+    fdroid: {
+      Icon: Smartphone,
+      tone: "border-primary/40 bg-primary-container/40 text-primary-on-container",
+    },
+    web: {
+      Icon: Globe,
+      tone: "border-outline-soft bg-surface-2 text-ink-soft",
+    },
+    cli: {
+      Icon: Terminal,
+      tone: "border-accent/40 bg-accent-container/30 text-accent-on-container",
+    },
+    other: {
+      Icon: HelpCircle,
+      tone: "border-outline-soft bg-surface-2 text-ink-mute",
+    },
+    unknown: {
+      Icon: HelpCircle,
+      tone: "border-outline-soft bg-surface-2 text-ink-mute",
+    },
+  };
+  const { Icon, tone } = conf[kind];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-pill border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+        tone,
+      )}
+      title={t(`history.client.${kind}`)}
+    >
+      <Icon className="h-2.5 w-2.5" strokeWidth={2.4} />
+      <span className="tabular-nums">{count}</span>
+      <span>{t(`history.client.${kind}`)}</span>
+    </span>
   );
 }
 
