@@ -314,7 +314,12 @@ async def oidc_callback(request: Request, db: DbSession):
     # of its tenants, on a multi-tenant provider) could silently claim an
     # existing local account whose email happens to match — instant
     # takeover. The check is binary: ``False`` and missing both fail.
-    if not bool(userinfo.get("email_verified")):
+    #
+    # Operators of single-tenant IdPs that don't emit ``email_verified``
+    # at all (Defguard, some Keycloak setups) can disable the gate via
+    # ``OIDC_REQUIRE_EMAIL_VERIFIED=false`` in .env — see the warning
+    # logged at startup in services/oidc_service.py when the gate is off.
+    if settings.oidc_require_email_verified and not bool(userinfo.get("email_verified")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="OIDC email is not marked verified by the identity provider",

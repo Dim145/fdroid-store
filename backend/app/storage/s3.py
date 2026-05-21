@@ -119,16 +119,21 @@ class S3Storage(Storage):
     async def open_stream(self, key: str) -> AsyncIterator[bytes]:
         # We open the client/stream within an async generator so resources are
         # released when iteration stops.
+        #
+        # aiobotocore 2.x exposes the raw aiohttp ``ClientResponse`` as the
+        # body wrapper, whose ``read()`` no longer accepts a chunk-size
+        # argument — calling ``await stream.read(N)`` raises
+        # ``TypeError: ClientResponse.read() takes 1 positional argument
+        # but 2 were given``. The right primitive is the underlying
+        # ``StreamReader.iter_chunked`` on ``stream.content``, which
+        # yields up-to-N-byte chunks as the network delivers them.
         client_ctx = self._client()
 
         async def _gen() -> AsyncIterator[bytes]:
             async with client_ctx as s3:
                 resp = await s3.get_object(Bucket=self.bucket, Key=key)
                 async with resp["Body"] as stream:
-                    while True:
-                        chunk = await stream.read(self.CHUNK)
-                        if not chunk:
-                            break
+                    async for chunk in stream.content.iter_chunked(self.CHUNK):
                         yield chunk
 
         return _gen()

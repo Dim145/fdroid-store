@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     oidc_client_secret: str | None = None
     oidc_scopes: str = "openid profile email"
     oidc_admin_claim: str | None = None  # "claim=value" → admin role when claim equals value
+    # Default behaviour: reject OIDC callbacks whose ``email_verified``
+    # claim is False or missing. This blocks account takeover when an
+    # attacker can register an unverified email at the IdP that happens
+    # to match an existing local account (the OIDC link step merges by
+    # email). Some self-hosted IdPs (Defguard, certain Keycloak realms)
+    # don't emit ``email_verified`` at all; flipping this to False lets
+    # those work but disables the protection — only safe when you fully
+    # trust your IdP's email-validation flow.
+    oidc_require_email_verified: bool = True
 
     # ----- CORS ---------------------------------------------------------------
     cors_origins: str = "http://localhost:3000"

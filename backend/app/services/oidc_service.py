@@ -7,6 +7,20 @@ from authlib.integrations.starlette_client import OAuth
 from joserfc.jws import JWSRegistry
 
 from app.core.config import settings
+from app.core.logging import get_logger
+
+log = get_logger(__name__)
+
+if settings.oidc_enabled and not settings.oidc_require_email_verified:
+    # Loud at boot. Surfacing this once per process restart catches
+    # operators who flipped the toggle and forgot why — the takeover
+    # vector this protects against is documented next to the env var
+    # in core/config.py and at the gate site in api/v1/auth.py.
+    log.warning(
+        "OIDC email-verified gate is disabled "
+        "(OIDC_REQUIRE_EMAIL_VERIFIED=false). "
+        "Unverified IdP emails can now claim local accounts by email match."
+    )
 
 # Some OIDC providers (Defguard observed at 700+ bytes; Keycloak too when
 # configured to include ``x5c`` cert chains in the ``kid``) ship ID-token
