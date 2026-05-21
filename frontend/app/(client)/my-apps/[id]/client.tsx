@@ -17,7 +17,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, Eye, GripVertical, ImagePlus, Plus, RotateCcw, ShieldAlert, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, Trash2, Upload, X, XCircle } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -39,6 +39,19 @@ import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { useAuth } from "@/lib/auth-store";
 import { toast } from "@/lib/toast-store";
 import { cn, formatBytes, formatDate, pickLocalizedText } from "@/lib/utils";
+
+/** Per-file upload tracker for the multi-screenshot upload flow. One
+ *  entry exists from the moment a file enters the queue until ~900 ms
+ *  after the entire batch finishes — that linger time lets the user see
+ *  the success badge land before the placeholder swaps out for the
+ *  persisted tile. */
+type PendingShot = {
+  tempId: string;
+  name: string;
+  status: "queued" | "uploading" | "done" | "error";
+  screenshot?: Screenshot;
+  error?: string;
+};
 
 function ManageAppInner() {
   const { t } = useTranslation();
@@ -81,6 +94,13 @@ function ManageAppInner() {
   // doesn't flash through "old order → server → new order".
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   const [reorderingScreenshots, setReorderingScreenshots] = useState(false);
+  // Per-file upload progress for screenshots. Each entry is a "tile slot"
+  // that renders inline next to the persisted screenshots: a spinner
+  // while uploading, the real image once the API call resolves, an
+  // error chip if the upload failed. Cleared a moment after ``load()``
+  // syncs the persisted shots back into ``screenshots`` so the UI never
+  // shows the same image twice.
+  const [pendingShots, setPendingShots] = useState<PendingShot[]>([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -360,12 +380,62 @@ function ManageAppInner() {
   }
   async function uploadScreenshots(files: FileList | null) {
     if (!app || !files || files.length === 0) return;
-    try {
-      await api.apps.uploadScreenshots(app.id, Array.from(files));
-      toast.success(t("myApps.edit.screenshots.uploaded", { count: files.length }));
-      await load();
-    } catch (e) {
-      toast.error(t("myApps.edit.screenshots.uploadFailed"), e instanceof Error ? e.message : undefined);
+    // Upload sequentially, one file per request, so:
+    //   1. each upload's completion is observable as a state transition
+    //      (the placeholder tile morphs into the real screenshot tile);
+    //   2. the section header counter advances 0/N → 1/N → … → N/N
+    //      instead of jumping from 0 to N at the very end;
+    //   3. a failure on file 3/5 leaves files 1, 2, 4, 5 succeeded —
+    //      previously a single multipart upload was atomic-failure.
+    // Trade-off: N HTTP round-trips instead of one. For screenshots
+    // (small files, low count) the latency cost is negligible.
+    const fileList = Array.from(files);
+    const queue: PendingShot[] = fileList.map((f, i) => ({
+      tempId: `pending-${Date.now()}-${i}-${f.name}`,
+      name: f.name,
+      status: "queued" as const,
+    }));
+    setPendingShots(queue);
+    let successCount = 0;
+    let errorCount = 0;
+    for (let i = 0; i < fileList.length; i++) {
+      const tempId = queue[i].tempId;
+      setPendingShots((prev) =>
+        prev.map((p) => (p.tempId === tempId ? { ...p, status: "uploading" } : p)),
+      );
+      try {
+        const res = await api.apps.uploadScreenshots(app.id, [fileList[i]]);
+        const screenshot = res[0];
+        setPendingShots((prev) =>
+          prev.map((p) =>
+            p.tempId === tempId ? { ...p, status: "done", screenshot } : p,
+          ),
+        );
+        successCount++;
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : "upload failed";
+        setPendingShots((prev) =>
+          prev.map((p) =>
+            p.tempId === tempId ? { ...p, status: "error", error: errMsg } : p,
+          ),
+        );
+        errorCount++;
+      }
+    }
+    // Resync persisted state. Hold the placeholder strip visible for a
+    // short beat so the user sees the green/red badges land before the
+    // placeholders disappear into the real grid.
+    await load();
+    window.setTimeout(() => setPendingShots([]), 900);
+    if (errorCount === 0) {
+      toast.success(t("myApps.edit.screenshots.uploaded", { count: successCount }));
+    } else if (successCount > 0) {
+      toast.error(
+        t("myApps.edit.screenshots.uploadFailed"),
+        t("myApps.edit.screenshots.partialUpload", { ok: successCount, failed: errorCount }),
+      );
+    } else {
+      toast.error(t("myApps.edit.screenshots.uploadFailed"));
     }
   }
   async function deleteScreenshot(screenshotId: string) {
@@ -647,32 +717,16 @@ function ManageAppInner() {
             className="sr-only"
           />
         </label>
-        {screenshots.length === 0 ? (
-          <p className="mt-4 text-sm italic text-ink-mute">{t("myApps.edit.screenshots.empty")}</p>
-        ) : (
-          <DndContext
-            sensors={dndSensors}
-            collisionDetection={closestCenter}
-            onDragEnd={onScreenshotDragEnd}
-          >
-            <SortableContext
-              items={screenshots.map((s) => s.id)}
-              strategy={rectSortingStrategy}
-            >
-              <div className={cn("mt-4 flex flex-wrap gap-3", reorderingScreenshots && "opacity-90")}>
-                {screenshots.map((s, i) => (
-                  <SortableScreenshot
-                    key={s.id}
-                    screenshot={s}
-                    index={i}
-                    mediaToken={app.media_token}
-                    onDelete={deleteScreenshot}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-        )}
+        <ScreenshotUploadProgress pendingShots={pendingShots} />
+        <ScreenshotGrid
+          screenshots={screenshots}
+          pendingShots={pendingShots}
+          mediaToken={app.media_token}
+          reordering={reorderingScreenshots}
+          dndSensors={dndSensors}
+          onDragEnd={onScreenshotDragEnd}
+          onDelete={deleteScreenshot}
+        />
       </Section>
 
       {/* ──── Translations ──── */}
@@ -1632,6 +1686,293 @@ function SortableScreenshot({
     </div>
   );
 }
+
+/* The visible grid for the screenshots section. Merges the persisted
+ * screenshots (sortable) with the in-flight pending placeholders so the
+ * user sees images appear progressively rather than waiting for the
+ * whole batch to finish.
+ *
+ * Once a placeholder lands as ``done`` it carries the same screenshot
+ * id as the freshly-fetched persistent tile — we filter the persisted
+ * list against the in-flight set so we never render the same image
+ * twice during the brief overlap. After ``pendingShots`` clears, the
+ * filter becomes a no-op and the real grid takes over fully. */
+function ScreenshotGrid({
+  screenshots,
+  pendingShots,
+  mediaToken,
+  reordering,
+  dndSensors,
+  onDragEnd,
+  onDelete,
+}: {
+  screenshots: Screenshot[];
+  pendingShots: PendingShot[];
+  mediaToken: string | null;
+  reordering: boolean;
+  dndSensors: ReturnType<typeof useSensors>;
+  onDragEnd: (e: DragEndEvent) => void;
+  onDelete: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const pendingDoneIds = useMemo(
+    () =>
+      new Set(
+        pendingShots
+          .filter((p) => p.status === "done" && p.screenshot)
+          .map((p) => p.screenshot!.id),
+      ),
+    [pendingShots],
+  );
+  const visible = useMemo(
+    () => screenshots.filter((s) => !pendingDoneIds.has(s.id)),
+    [screenshots, pendingDoneIds],
+  );
+
+  if (visible.length === 0 && pendingShots.length === 0) {
+    return (
+      <p className="mt-4 text-sm italic text-ink-mute">{t("myApps.edit.screenshots.empty")}</p>
+    );
+  }
+
+  return (
+    <div className={cn("mt-4 flex flex-wrap gap-3", reordering && "opacity-90")}>
+      {visible.length > 0 && (
+        <DndContext
+          sensors={dndSensors}
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+        >
+          <SortableContext
+            items={visible.map((s) => s.id)}
+            strategy={rectSortingStrategy}
+          >
+            {visible.map((s, i) => (
+              <SortableScreenshot
+                key={s.id}
+                screenshot={s}
+                index={i}
+                mediaToken={mediaToken}
+                onDelete={onDelete}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+      )}
+      {pendingShots.map((p) => (
+        <PendingShotTile key={p.tempId} pending={p} mediaToken={mediaToken} />
+      ))}
+    </div>
+  );
+}
+
+
+/* The header chip that sits above the screenshot grid while an upload
+ * batch is in flight. Three jobs:
+ *  1. A glance-readable counter (N done / M total) so the user knows how
+ *     much further they have to wait.
+ *  2. A progress meter that fills as ``done + error`` advances — the
+ *     bar tints amber when any file errored so the final state isn't
+ *     ambiguous.
+ *  3. A status eyebrow that flips from "uploading" through "uploaded"
+ *     or "uploaded with errors" before fading out with the placeholders.
+ *
+ * Matches the editorial typesetter aesthetic of the rest of the page:
+ * mono uppercase eyebrow, tabular-nums counter, hairline border, no
+ * embellishment beyond what carries information. */
+function ScreenshotUploadProgress({
+  pendingShots,
+}: {
+  pendingShots: PendingShot[];
+}) {
+  const { t } = useTranslation();
+  if (pendingShots.length === 0) return null;
+
+  const total = pendingShots.length;
+  const doneCount = pendingShots.filter((p) => p.status === "done").length;
+  const errorCount = pendingShots.filter((p) => p.status === "error").length;
+  const processingCount = pendingShots.filter(
+    (p) => p.status === "queued" || p.status === "uploading",
+  ).length;
+  const pct = Math.round(((doneCount + errorCount) / total) * 100);
+
+  const stateKey =
+    processingCount > 0
+      ? "uploadingEyebrow"
+      : errorCount > 0
+        ? "uploadedWithErrorsEyebrow"
+        : "uploadedAllEyebrow";
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mt-4 overflow-hidden rounded-2xl border border-outline-soft bg-surface-2"
+    >
+      <div className="flex items-center gap-3 px-4 py-3">
+        {processingCount > 0 ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" strokeWidth={2.2} />
+        ) : errorCount > 0 ? (
+          <XCircle className="h-4 w-4 shrink-0 text-accent" strokeWidth={2.2} />
+        ) : (
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" strokeWidth={2.2} />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute">
+              {t(`myApps.edit.screenshots.${stateKey}`)}
+            </span>
+            <span className="font-mono text-xs tabular-nums text-ink">
+              <span className={cn(errorCount > 0 ? "text-accent" : "text-primary")}>
+                {doneCount}
+              </span>
+              <span className="text-ink-mute"> / </span>
+              <span>{total}</span>
+              {errorCount > 0 && (
+                <span className="ml-2 text-[10px] uppercase tracking-wider text-danger">
+                  {t("myApps.edit.screenshots.partialFailedChip", { failed: errorCount })}
+                </span>
+              )}
+            </span>
+          </div>
+          {/* Progress meter. Uses ``transition-[width]`` so each per-file
+              completion eases the bar forward — a static bar that
+              snaps would lose the "things are moving" feeling. */}
+          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-pill bg-surface">
+            <div
+              className={cn(
+                "h-full transition-[width] duration-500 ease-out",
+                errorCount > 0 ? "bg-accent" : "bg-primary",
+              )}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* A single in-flight upload tile. Four visual states:
+ *   queued     → dashed border, idle dot, file name
+ *   uploading  → solid border, spinner, file name, primary tint
+ *   done       → actual image rendered with a tiny green check chip
+ *                in the corner that lasts until the parent clears the
+ *                ``pendingShots`` array a beat after the batch finishes
+ *   error      → red dashed border, X icon, error message tooltip
+ *
+ * Sized to roughly mirror a portrait phone screenshot (h-44 × w-28) so
+ * the placeholder occupies the same footprint the persisted tile will
+ * once the grid refreshes — no jarring layout shift on swap. */
+function PendingShotTile({
+  pending,
+  mediaToken,
+}: {
+  pending: PendingShot;
+  mediaToken: string | null;
+}) {
+  const { t } = useTranslation();
+  const url = pending.screenshot
+    ? mediaUrl(pending.screenshot.storage_key, { token: mediaToken })
+    : null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={`${pending.name} — ${pending.status}`}
+      className={cn(
+        "relative h-44 w-28 shrink-0 overflow-hidden rounded-xl border bg-surface-2 transition-colors",
+        pending.status === "queued" && "border-dashed border-outline",
+        pending.status === "uploading" && "border-primary/40 shadow-e1",
+        pending.status === "done" && "border-primary/40 shadow-e1",
+        pending.status === "error" && "border-dashed border-danger/60 bg-danger-container/30",
+      )}
+    >
+      {/* Done state shows the actual uploaded image so the user gets
+          their first real preview without waiting for the batch to
+          finish. Falls back to the status indicator if the URL builder
+          returns null (token missing, anonymous, etc.) */}
+      {pending.status === "done" && url ? (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt={pending.name}
+            className="h-full w-full object-contain animate-fade-up"
+            draggable={false}
+          />
+          <span className="absolute right-1.5 top-1.5 inline-flex items-center gap-1 rounded-pill bg-surface/90 px-1.5 py-0.5 shadow-e1 backdrop-blur">
+            <CheckCircle2 className="h-3 w-3 text-primary" strokeWidth={2.6} />
+            <span className="font-mono text-[9px] uppercase tracking-wider text-primary">
+              {t("myApps.edit.screenshots.pendingDone")}
+            </span>
+          </span>
+        </>
+      ) : (
+        <>
+          {/* Faint diagonal hatch in the background while we wait — the
+              same print-shop texture as the page's letterhead rule but
+              denser, so the empty slot reads as "in progress" rather
+              than "empty". */}
+          <div
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute inset-0 opacity-[0.06]",
+              pending.status === "uploading" && "opacity-[0.10]",
+            )}
+            style={{
+              backgroundImage:
+                "repeating-linear-gradient(45deg, rgb(var(--ink)) 0 1px, transparent 1px 6px)",
+            }}
+          />
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-2 text-center">
+            {pending.status === "queued" && (
+              <>
+                <span className="relative flex h-5 w-5 items-center justify-center">
+                  <span className="absolute inline-flex h-3 w-3 animate-ping rounded-full bg-ink-mute/60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-ink-mute" />
+                </span>
+                <span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-mute">
+                  {t("myApps.edit.screenshots.pendingQueued")}
+                </span>
+              </>
+            )}
+            {pending.status === "uploading" && (
+              <>
+                <Loader2 className="h-6 w-6 animate-spin text-primary" strokeWidth={2} />
+                <span className="font-mono text-[9px] uppercase tracking-[0.22em] text-primary">
+                  {t("myApps.edit.screenshots.pendingUploading")}
+                </span>
+              </>
+            )}
+            {pending.status === "error" && (
+              <>
+                <XCircle className="h-6 w-6 text-danger" strokeWidth={2} />
+                <span className="font-mono text-[9px] uppercase tracking-[0.22em] text-danger">
+                  {t("myApps.edit.screenshots.pendingError")}
+                </span>
+              </>
+            )}
+          </div>
+        </>
+      )}
+      {/* File-name caption — only while pre-image so we don't paint
+          over the actual screenshot. The mono font matches the meta-
+          line treatment in the rest of the page chrome. */}
+      {pending.status !== "done" && (
+        <div
+          className="absolute inset-x-0 bottom-0 truncate border-t border-outline-soft bg-surface/85 px-2 py-1 text-center font-mono text-[9px] text-ink-soft backdrop-blur"
+          title={pending.name}
+        >
+          {pending.name}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 /* Two-track category picker: top row shows what's currently on the app
  * (chip-pills with an X), bottom row shows the rest of the taxonomy as
