@@ -279,16 +279,15 @@ async def oidc_callback(request: Request, db: DbSession):
     oauth = get_oauth()
     if oauth is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OIDC disabled")
-    # Pin the redirect_uri to the same value sent at auth time. Authlib
-    # otherwise rebuilds it from ``request.url``, which behind a reverse
-    # proxy that doesn't forward X-Forwarded-Proto/Host can produce a
-    # scheme/host mismatch — the IdP then rejects the token swap with
-    # ``redirect_uri_mismatch`` and Authlib surfaces a 401 with a cryptic
-    # detail. Forcing the value here means the only way it can mismatch
-    # is a genuine PUBLIC_API_URL misconfiguration.
-    redirect_uri = f"{settings.public_api_url.rstrip('/')}/api/v1/auth/oidc/callback"
+    # NOTE: do NOT pass ``redirect_uri=...`` here. Authlib stores the
+    # value at ``authorize_redirect`` time in the session and threads
+    # it into the internal ``fetch_access_token`` call itself; passing
+    # it again as a kwarg causes "got multiple values for keyword
+    # argument 'redirect_uri'". The session-stored value is exactly the
+    # one we sent at auth time, so a reverse-proxy URL drift between
+    # request.url and PUBLIC_API_URL doesn't enter the picture.
     try:
-        token = await oauth.oidc.authorize_access_token(request, redirect_uri=redirect_uri)
+        token = await oauth.oidc.authorize_access_token(request)
     except Exception as exc:  # noqa: BLE001 — Authlib raises various subclasses
         # Log the real exception (with traceback) for the operator, then
         # bounce the user back to /login with a short reason. A raw JSON
