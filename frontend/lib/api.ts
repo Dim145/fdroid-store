@@ -28,20 +28,18 @@ export function mediaUrl(
 ): string | null {
   if (!storageKey) return null;
   let version: number | string | undefined;
-  let token: string | null | undefined;
   if (versionOrOpts != null && typeof versionOrOpts === "object") {
     version = versionOrOpts.version;
-    token = versionOrOpts.token;
+    // ``token`` is accepted for backward compatibility but no longer
+    // appended to the URL. Auth for private-app media is now handled
+    // by the Service Worker (``public/sw.js``) which intercepts
+    // <img> fetches and adds ``Authorization: Bearer <jwt>``. Keeping
+    // the token out of the URL means a stable string → effective
+    // browser cache against the Cache-Control headers we already set.
   } else {
     version = versionOrOpts;
   }
-  // Private-app media requires the per-app signed token (AppRead.media_token)
-  // because <img src> tags carry no Authorization header. Public-app
-  // media doesn't need it; the backend ignores ?t= when not required.
-  const qs: string[] = [];
-  if (token) qs.push(`t=${encodeURIComponent(token)}`);
-  if (version != null) qs.push(`v=${encodeURIComponent(String(version))}`);
-  const tail = qs.length ? `?${qs.join("&")}` : "";
+  const tail = version != null ? `?v=${encodeURIComponent(String(version))}` : "";
   return `${REPO_URL}/${storageKey}${tail}`;
 }
 
@@ -192,6 +190,14 @@ async function refreshAccessToken(): Promise<boolean> {
     }
     const data = (await res.json()) as { access_token: string; refresh_token: string };
     setTokens(data.access_token, data.refresh_token);
+    // Notify the media Service Worker of the rotated token so private-
+    // app <img> fetches keep working after a silent refresh.
+    try {
+      const { pushTokenToSW } = await import("@/lib/media-sw");
+      pushTokenToSW();
+    } catch {
+      /* SW glue not available — non-fatal */
+    }
     return true;
   })();
   try {

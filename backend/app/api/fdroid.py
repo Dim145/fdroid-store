@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_api_key_from_basic_auth, is_public_mode
+from app.api.deps import DbSession, get_api_key_from_basic_auth, get_current_user_optional, is_public_mode
 from app.core.download_token import verify_download_token, verify_media_token
 from app.core.security import parse_api_key, verify_api_key_secret
 from app.fdroid.repo_builder import REPO_PUBLIC_PREFIX, user_private_prefix
@@ -193,6 +193,7 @@ async def _media_anonymously_visible(
     db,
     package_name: str,
     api_key: ApiKey | None,
+    bearer_user: User | None = None,
 ) -> bool:
     """Return True if the underlying app (looked up by package) may be
     served through the media routes for this caller.
@@ -201,8 +202,11 @@ async def _media_anonymously_visible(
     name guessable by probing. The rule is:
 
       * PUBLIC + PUBLISHED → always visible.
-      * PRIVATE → only the owner's API key may fetch it. Other API keys
-        and anonymous callers are 404'd, indistinguishable from a typo.
+      * PRIVATE → owner's API key OR a JWT bearer (web SPA via the
+        Service Worker that adds ``Authorization: Bearer <jwt>`` on
+        every <img> fetch) belonging to the owner / an admin.
+      * Other API keys and anonymous callers are 404'd, indistinguishable
+        from a typo.
       * Repo-level media (no matching App row, e.g. the catalogue icon)
         stays anonymous so the logged-out home page renders.
     """
@@ -222,6 +226,11 @@ async def _media_anonymously_visible(
         and api_key.user_id == app_row.owner_id
     ):
         return True
+    if bearer_user is not None and bearer_user.is_active and (
+        bearer_user.role == UserRole.ADMIN
+        or (app_row.owner_id is not None and bearer_user.id == app_row.owner_id)
+    ):
+        return True
     return False
 
 
@@ -230,6 +239,7 @@ async def serve_icon(
     filename: str,
     db: DbSession,
     api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    bearer_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
     t: str | None = None,
 ) -> Response:
     """Icons.
@@ -253,6 +263,7 @@ async def serve_icon(
         token_ok = bool(t and verify_media_token(package_name, t))
         if not token_ok and not await _media_anonymously_visible(
             db=db, package_name=package_name, api_key=api_key,
+            bearer_user=bearer_user,
         ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
     storage = get_storage()
@@ -304,6 +315,7 @@ async def serve_singleton_media(
     filename: str,
     db: DbSession,
     api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    bearer_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
     t: str | None = None,
 ) -> Response:
     if filename not in _ALLOWED_SINGLETON_MEDIA:
@@ -312,7 +324,9 @@ async def serve_singleton_media(
         if not seg or "/" in seg or seg.startswith("."):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     token_ok = bool(t and verify_media_token(package, t))
-    if not token_ok and not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
+    if not token_ok and not await _media_anonymously_visible(
+        db=db, package_name=package, api_key=api_key, bearer_user=bearer_user,
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     storage = get_storage()
     key = f"{package}/{locale}/{filename}"
@@ -336,6 +350,7 @@ async def serve_media(
     filename: str,
     db: DbSession,
     api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)] = None,
+    bearer_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
     t: str | None = None,
 ) -> Response:
     # Screenshots are <img>-loaded previews but the URL doubles as a
@@ -348,7 +363,9 @@ async def serve_media(
         if not seg or "/" in seg or seg.startswith("."):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     token_ok = bool(t and verify_media_token(package, t))
-    if not token_ok and not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
+    if not token_ok and not await _media_anonymously_visible(
+        db=db, package_name=package, api_key=api_key, bearer_user=bearer_user,
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     storage = get_storage()
     key = f"{package}/{locale}/{kind}/{filename}"

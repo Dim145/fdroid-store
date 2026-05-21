@@ -9,6 +9,7 @@ import {
   getAccessToken,
   setTokens,
 } from "@/lib/api";
+import { pushTokenToSW, registerMediaSW } from "@/lib/media-sw";
 
 /** Resolved login outcome. ``user`` is set on success; ``mfaToken`` is set
  *  when the password check passed but a second factor is required — the
@@ -59,6 +60,7 @@ export const useAuth = create<AuthState>((set) => ({
       return { kind: "mfa", mfaToken: res.mfa_token };
     }
     setTokens(res.access_token, res.refresh_token);
+    pushTokenToSW();
     const me = await api.me();
     set({ user: me, loading: false });
     return { kind: "ok", user: me };
@@ -67,6 +69,7 @@ export const useAuth = create<AuthState>((set) => ({
   async finishMfaLogin(mfaToken, code) {
     const tokens = await api.loginMfa({ mfa_token: mfaToken, code });
     setTokens(tokens.access_token, tokens.refresh_token);
+    pushTokenToSW();
     const me = await api.me();
     set({ user: me, loading: false });
     return me;
@@ -75,6 +78,7 @@ export const useAuth = create<AuthState>((set) => ({
   async signup(payload) {
     const tokens = await api.signup(payload);
     setTokens(tokens.access_token, tokens.refresh_token);
+    pushTokenToSW();
     const me = await api.me();
     set({ user: me, loading: false });
     return me;
@@ -82,6 +86,7 @@ export const useAuth = create<AuthState>((set) => ({
 
   async acceptOidcTokens(access, refresh) {
     setTokens(access, refresh);
+    pushTokenToSW();
     const me = await api.me();
     set({ user: me, loading: false });
     return me;
@@ -103,6 +108,7 @@ export const useAuth = create<AuthState>((set) => ({
       }
     }
     clearTokens();
+    pushTokenToSW();
     set({ user: null, loading: false });
   },
 }));
@@ -111,6 +117,14 @@ export const useAuth = create<AuthState>((set) => ({
 // resolve them to a user before any page reads from the store. Without this,
 // reloading any route other than `/` or `/login` left the store unauthenticated
 // even with valid tokens, because no component triggered fetchMe() globally.
-if (typeof window !== "undefined" && getAccessToken()) {
-  void useAuth.getState().fetchMe();
+//
+// Also: register the media Service Worker as early as possible so
+// <img src> tags for private-app icons get the Authorization header
+// added by the SW on their way through. The worker boots once per
+// origin and persists across tabs / restarts.
+if (typeof window !== "undefined") {
+  registerMediaSW();
+  if (getAccessToken()) {
+    void useAuth.getState().fetchMe();
+  }
 }
