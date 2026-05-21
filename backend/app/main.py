@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import __version__
@@ -45,11 +44,22 @@ def create_app() -> FastAPI:
 
     # Rate limiter (slowapi). The state must be attached BEFORE the route
     # decorators run; including the dependency module at import time
-    # already prepares the registry, here we just install the middleware
-    # and the 429 handler.
+    # already prepares the registry, here we just expose the limiter on
+    # ``app.state`` (so the ``@limiter.limit(...)`` decorators can find
+    # it) and register the 429 handler.
+    #
+    # We deliberately do NOT install ``SlowAPIMiddleware``. It's a
+    # ``BaseHTTPMiddleware`` subclass, which buffers every response body
+    # before re-emitting it — fine for small JSON, but it silently
+    # drops bytes for ``StreamingResponse`` of any meaningful size.
+    # That's how a 93 MB APK download arrived at the client as 0 bytes
+    # while still returning 200. The decorators on individual routes
+    # are what actually enforce the limit (they raise
+    # ``RateLimitExceeded``, which the handler above turns into a 429);
+    # the middleware only added the X-RateLimit-* response headers,
+    # which we're willing to give up.
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
 
     app.add_middleware(
         CORSMiddleware,

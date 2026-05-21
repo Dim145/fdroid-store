@@ -4,8 +4,18 @@ from __future__ import annotations
 from functools import lru_cache
 
 from authlib.integrations.starlette_client import OAuth
+from joserfc.jws import JWSRegistry
 
 from app.core.config import settings
+
+# Some OIDC providers (Defguard observed at 700+ bytes; Keycloak too when
+# configured to include ``x5c`` cert chains in the ``kid``) ship ID-token
+# JOSE headers that exceed joserfc's conservative 512-byte default. The
+# resulting ``ExceededSizeError: Header size exceeds 512 bytes`` blocks
+# the whole token-exchange path. Raising the cap to 8 KiB covers any
+# realistic header layout including a full embedded JWK or a multi-cert
+# x5c chain; the validation that matters (signature, claims) is unchanged.
+JWSRegistry.max_header_length = 8 * 1024
 
 
 @lru_cache(maxsize=1)
