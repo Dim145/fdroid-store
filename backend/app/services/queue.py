@@ -17,13 +17,28 @@ def _redis_settings() -> RedisSettings:
     return RedisSettings.from_dsn(settings.redis_url)
 
 
-async def enqueue_reindex() -> None:
-    """Schedule a repo reindex. Multiple enqueues coalesce naturally because
-    arq deduplicates by job_id."""
+async def enqueue_reindex(*, force: bool = False) -> None:
+    """Schedule a repo reindex.
+
+    Default behaviour (``force=False``) pins the job to ``_job_id="rebuild_index"``
+    so a burst of auto-enqueues (APK upload + publish + edit happening in
+    seconds) collapses into one run. Arq dedupes both queued *and* recently-
+    finished jobs by job id — the latter via the result key that lingers in
+    redis for ~24h — so a manual "Rebuild now" press that lands inside that
+    window would silently no-op.
+
+    ``force=True`` mints a unique job id so the admin button always actually
+    runs. Mirrors the ``fetch_github_source`` scan-now pattern.
+    """
     try:
         pool = await create_pool(_redis_settings())
         try:
-            await pool.enqueue_job("rebuild_index", _job_id="rebuild_index")
+            if force:
+                import time as _time
+                job_id = f"rebuild_index:manual:{int(_time.time() * 1000)}"
+            else:
+                job_id = "rebuild_index"
+            await pool.enqueue_job("rebuild_index", _job_id=job_id)
         finally:
             await pool.close()
     except Exception as exc:  # noqa: BLE001

@@ -538,7 +538,10 @@ async def update_repo_config(
 async def trigger_reindex(
     _: Annotated[User, Depends(get_current_admin)],
 ) -> dict:
-    await enqueue_reindex()
+    # Manual press — bypass the job-id dedup so the worker actually runs
+    # even when a recent rebuild's result is still in redis. Background
+    # enqueues elsewhere (upload, edit, …) keep the coalescing default.
+    await enqueue_reindex(force=True)
     return {"queued": True}
 
 
