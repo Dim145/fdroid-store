@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
 import tempfile
 from dataclasses import dataclass, field
@@ -123,23 +124,25 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
        cannot escape the tmpdir before it reaches androguard's
        ``APK(str(p))`` (CWE-22 / CWE-23 defence-in-depth).
     """
-    # ``resolve(strict=True)`` follows symlinks AND raises ``FileNotFoundError``
-    # if the path doesn't exist — covering both the existence check and
-    # the tmpdir-confinement check in one call.
-    try:
-        p_resolved = Path(path).resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        raise ApkParseError(f"APK not found at {path}") from exc
-    tmpdir = Path(tempfile.gettempdir()).resolve()
-    try:
-        p_resolved.relative_to(tmpdir)
-    except ValueError as exc:
+    # Canonicalise with ``os.path.realpath`` and gate access with an
+    # explicit ``startswith`` against the OS temp dir. This particular
+    # pair is the path-injection barrier shape CodeQL's python ruleset
+    # recognises (see PathInjectionQuery.qll in github/codeql);
+    # ``Path.resolve().relative_to()`` is semantically equivalent but
+    # currently isn't tracked as a sanitiser by the analyser.
+    #
+    # ``str(path)`` because ``realpath`` only accepts str / bytes on
+    # older runtimes; on 3.13 a ``Path`` works but the explicit cast
+    # is harmless and keeps the contract clear.
+    candidate = os.path.realpath(str(path))
+    tmpdir = os.path.realpath(tempfile.gettempdir())
+    if not (candidate == tmpdir or candidate.startswith(tmpdir + os.sep)):
         raise ApkParseError(
             "APK path must be inside the system temp directory"
-        ) from exc
-    if not p_resolved.is_file():
-        raise ApkParseError(f"APK is not a regular file at {p_resolved}")
-    p = p_resolved
+        )
+    if not os.path.isfile(candidate):
+        raise ApkParseError(f"APK not found at {candidate}")
+    p = Path(candidate)
 
     def _read() -> tuple[APK, str, int]:
         apk = APK(str(p))
