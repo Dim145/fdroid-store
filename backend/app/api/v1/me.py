@@ -11,10 +11,10 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import DbSession, get_current_user
 from app.core.security import hash_password, verify_password
 from app.models.apk import Apk, ApkStatus
-from app.models.app import App
+from app.models.app import App, AppVisibility
 from app.models.audit import DownloadEvent
 from app.models.refresh_token import RefreshToken
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.schemas.app import AppRead
 from app.schemas.auth import ChangePasswordRequest
@@ -168,6 +168,11 @@ async def my_download_history(
             chosen_at[app_id] = created_at
             chosen_apk_per_app[app_id] = apk_id
 
+    # Mint a signed media token per-row so private-app icons render.
+    # ``<img src>`` carries no Authorization header; without this the
+    # history view 404s every private app's thumbnail.
+    from app.core.download_token import sign_media_token
+
     items = []
     for app, last_at, dl_count, bytes_total, max_vc in rows:
         last_apk = next(
@@ -180,12 +185,21 @@ async def my_download_history(
             (a for a in app.apks if a.status == ApkStatus.PUBLISHED),
             None,
         )
+        # Only mint a token for non-public apps the caller can actually
+        # see (admin or owner). Public-app icons need no token.
+        is_owner = app.owner_id is not None and app.owner_id == user.id
+        media_token = None
+        if app.visibility != AppVisibility.PUBLIC and (
+            user.role == UserRole.ADMIN or is_owner
+        ):
+            media_token = sign_media_token(app.package_name, user.id)
         items.append(
             {
                 "app_id": str(app.id),
                 "package_name": app.package_name,
                 "app_name": app.name,
                 "icon_path": app.icon_path,
+                "media_token": media_token,
                 "download_count": int(dl_count),
                 "bytes_total": int(bytes_total or 0),
                 "last_downloaded_at": last_at.isoformat() if last_at else None,

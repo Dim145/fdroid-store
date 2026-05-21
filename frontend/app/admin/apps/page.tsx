@@ -347,7 +347,7 @@ function PendingRow({
   return (
     <li className="rounded-2xl border border-outline-soft bg-surface p-3">
       <div className="flex flex-wrap items-center gap-3">
-        <AppIcon iconPath={app.icon_path} name={app.name} size={40} shape="rounded" version={app.updated_at} />
+        <AppIcon iconPath={app.icon_path} name={app.name} size={40} shape="rounded" version={app.updated_at} mediaToken={app.media_token} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <span className="truncate text-sm font-semibold text-ink">{app.name}</span>
@@ -483,7 +483,7 @@ function AppRow({
       )}
     >
       <div className="relative shrink-0">
-        <AppIcon iconPath={app.icon_path} name={app.name} size={44} shape="rounded" version={app.updated_at} />
+        <AppIcon iconPath={app.icon_path} name={app.name} size={44} shape="rounded" version={app.updated_at} mediaToken={app.media_token} />
         <NsfwTag active={app.is_nsfw} />
       </div>
       <div className="min-w-0 flex-1">
@@ -589,7 +589,7 @@ function AppDrawer({
     <>
       <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-outline-soft bg-surface/90 px-6 py-4 backdrop-blur">
         <div className="relative shrink-0">
-          <AppIcon iconPath={app.icon_path} name={app.name} size={56} shape="rounded" version={app.updated_at} />
+          <AppIcon iconPath={app.icon_path} name={app.name} size={56} shape="rounded" version={app.updated_at} mediaToken={app.media_token} />
           <NsfwTag active={app.is_nsfw} size="md" />
         </div>
         <div className="min-w-0 flex-1">

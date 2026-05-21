@@ -74,7 +74,7 @@ function MyAppsInner() {
               className="surface surface-interactive group flex items-center gap-4 p-4 animate-fade-up"
               style={{ animationDelay: `${Math.min(i * 30, 240)}ms` }}
             >
-              <AppIcon iconPath={app.icon_path} name={app.name} size={64} version={app.updated_at} />
+              <AppIcon iconPath={app.icon_path} name={app.name} size={64} version={app.updated_at} mediaToken={app.media_token} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Link

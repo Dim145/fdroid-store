@@ -44,6 +44,7 @@ export function FeatureHero({ app, kicker }: Props) {
           size={144}
           shape="rounded"
           version={app.updated_at}
+          mediaToken={app.media_token}
           className="shadow-e3"
         />
         <div className="min-w-0">

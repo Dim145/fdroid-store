@@ -1113,6 +1113,9 @@ export type DownloadHistoryItem = {
   package_name: string;
   app_name: string;
   icon_path: string | null;
+  /** Same per-app signed token as ``AppRead.media_token`` — only set
+   *  when the user can see the private app behind this row. */
+  media_token: string | null;
   download_count: number;
   bytes_total: number;
   last_downloaded_at: string | null;

@@ -262,6 +262,7 @@ function UpdateCard({ item, index }: { item: DownloadHistoryItem; index: number 
           iconPath={item.icon_path}
           name={item.app_name}
           size={64}
+          mediaToken={item.media_token}
           className="shrink-0 shadow-e2 transition-transform group-hover:scale-[1.04]"
         />
         <div className="min-w-0 flex-1">
@@ -330,6 +331,7 @@ function ShelfRow({ item, index }: { item: DownloadHistoryItem; index: number })
         iconPath={item.icon_path}
         name={item.app_name}
         size={48}
+        mediaToken={item.media_token}
         className="shrink-0"
       />
       <div className="min-w-0 flex-1">

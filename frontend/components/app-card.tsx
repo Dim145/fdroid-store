@@ -59,7 +59,7 @@ function ListItem({
         </span>
       )}
       <div className="relative shrink-0">
-        <AppIcon iconPath={app.icon_path} name={app.name} size={56} shape="rounded" version={app.updated_at} />
+        <AppIcon iconPath={app.icon_path} name={app.name} size={56} shape="rounded" version={app.updated_at} mediaToken={app.media_token} />
         <NsfwTag active={app.is_nsfw} />
       </div>
       <div className="min-w-0 flex-1">
@@ -103,6 +103,7 @@ function Tile({ app, className }: { app: AppSummary; className?: string }) {
           size={120}
           shape="rounded"
           version={app.updated_at}
+          mediaToken={app.media_token}
           className="shadow-e1 transition-transform duration-200 group-hover:scale-[1.02]"
         />
         <NsfwTag active={app.is_nsfw} />
@@ -155,6 +156,7 @@ function Feature({ app, className }: { app: AppSummary; className?: string }) {
             size={88}
             shape="rounded"
             version={app.updated_at}
+            mediaToken={app.media_token}
             className="shadow-e2"
           />
           <NsfwTag active={app.is_nsfw} />
@@ -183,7 +185,7 @@ function Mini({ app, className }: { app: AppSummary; className?: string }) {
         className,
       )}
     >
-      <AppIcon iconPath={app.icon_path} name={app.name} size={32} shape="rounded" version={app.updated_at} />
+      <AppIcon iconPath={app.icon_path} name={app.name} size={32} shape="rounded" version={app.updated_at} mediaToken={app.media_token} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-medium text-ink">{app.name}</div>
         <div className="truncate text-[10px] text-ink-mute font-mono">
