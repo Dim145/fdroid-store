@@ -1157,6 +1157,11 @@ export type DownloadHistoryItem = {
   package_name: string;
   app_name: string;
   icon_path: string | null;
+  /** App record's ``updated_at`` timestamp. Used as the cache-buster
+   *  in ``mediaUrl(icon_path, { version })`` so the icon URL on
+   *  /history matches the one served on /apps and /my-apps — without
+   *  this, every navigation between those pages was a cache miss. */
+  updated_at: string | null;
   /** Same per-app signed token as ``AppRead.media_token`` — only set
    *  when the user can see the private app behind this row. */
   media_token: string | null;

@@ -209,6 +209,26 @@ async def my_download_history(
                 "package_name": app.package_name,
                 "app_name": app.name,
                 "icon_path": app.icon_path,
+                # The frontend's ``mediaUrl(path, { version })`` appends
+                # ``?v=<updated_at>`` so the URL is stable across pages
+                # for the same icon (cache hit) but turns over when the
+                # owner replaces the asset. /apps already does this;
+                # without ``updated_at`` here, /history rendered the
+                # icon under a bare URL and the browser cached the two
+                # variants independently — re-downloading on every
+                # /history → /apps round-trip.
+                #
+                # Format note: ``datetime.isoformat()`` gives
+                # ``+00:00`` for UTC, but Pydantic v2 (used by /apps)
+                # serialises tz-aware UTC datetimes with a trailing
+                # ``Z``. The two are semantically equivalent but the
+                # URL-encoded forms differ (``Z`` vs ``%2B00%3A00``),
+                # so the cache would split into two entries again.
+                # Normalise to the ``Z`` form to match /apps exactly.
+                "updated_at": (
+                    app.updated_at.isoformat().replace("+00:00", "Z")
+                    if app.updated_at else None
+                ),
                 "media_token": media_token,
                 "download_count": int(dl_count),
                 "bytes_total": int(bytes_total or 0),
