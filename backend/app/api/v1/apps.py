@@ -278,6 +278,12 @@ async def create_app_with_apk(
                     selectinload(App.apks),
                     selectinload(App.owner),
                     selectinload(App.screenshots),
+                    # ``AppDetail.localizations`` is read during model_validate
+                    # below — without this the sync Pydantic walker triggers a
+                    # lazy load and SQLAlchemy raises ``MissingGreenlet``.
+                    # The two sibling create paths (with-github-source,
+                    # patch) already eager-load it; this one was the outlier.
+                    selectinload(App.localizations),
                 )
                 .where(App.id == app.id)
             )
