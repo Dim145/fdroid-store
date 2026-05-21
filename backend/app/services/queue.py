@@ -20,24 +20,35 @@ def _redis_settings() -> RedisSettings:
 async def enqueue_reindex(*, force: bool = False) -> None:
     """Schedule a repo reindex.
 
-    Default behaviour (``force=False``) pins the job to ``_job_id="rebuild_index"``
-    so a burst of auto-enqueues (APK upload + publish + edit happening in
-    seconds) collapses into one run. Arq dedupes both queued *and* recently-
-    finished jobs by job id — the latter via the result key that lingers in
-    redis for ~24h — so a manual "Rebuild now" press that lands inside that
-    window would silently no-op.
+    Arq dedupes by ``_job_id`` against both queued *and* recently-finished
+    jobs — the result key lingers in redis for ~24h, so a fixed id like
+    ``"rebuild_index"`` would silently swallow every enqueue between the
+    first run of the day and the result-TTL expiry. Symptom: APKs
+    uploaded all day never appear in the F-Droid index until tomorrow.
 
-    ``force=True`` mints a unique job id so the admin button always actually
-    runs. Mirrors the ``fetch_github_source`` scan-now pattern.
+    To stay useful, we use a **per-minute job id** by default:
+
+      * Multiple events inside the same minute (upload → publish →
+        another upload) coalesce into a single rebuild — same intent as
+        the old fixed id.
+      * Events in different minutes each get their own rebuild because
+        the bucket flipped — the 24h result TTL never blocks the next
+        bucket.
+
+    ``force=True`` short-circuits to a millisecond-unique id so the admin
+    "Trigger reindex" button always actually runs even when the current
+    minute's rebuild is already cached.
     """
+    import time as _time
+
     try:
         pool = await create_pool(_redis_settings())
         try:
             if force:
-                import time as _time
                 job_id = f"rebuild_index:manual:{int(_time.time() * 1000)}"
             else:
-                job_id = "rebuild_index"
+                bucket = int(_time.time() // 60)
+                job_id = f"rebuild_index:{bucket}"
             await pool.enqueue_job("rebuild_index", _job_id=job_id)
         finally:
             await pool.close()
