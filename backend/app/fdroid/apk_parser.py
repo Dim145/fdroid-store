@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -105,12 +106,40 @@ def _safe_int(v) -> int | None:
 async def parse_apk(path: str | Path) -> ApkMetadata:
     """Parse an APK at ``path`` and return its metadata.
 
-    Heavy work runs in a thread so the event loop stays responsive on large
-    APKs.
+    Heavy work runs in a thread so the event loop stays responsive on
+    large APKs.
+
+    ``path`` must resolve to a regular file under the system temp
+    directory. Every caller in the codebase already feeds us such a
+    path (either ``save_upload_to_temp`` from the upload endpoints or
+    ``_download_apk`` from the rescan service — both use
+    ``tempfile.NamedTemporaryFile``), but enforcing it here gives us
+    two things:
+
+    1. A loud failure if a future caller ever passes an
+       arbitrary user-controlled path by mistake.
+    2. An explicit sanitiser that CodeQL's ``py/path-injection``
+       tracker recognises, so the upload-derived path provably
+       cannot escape the tmpdir before it reaches androguard's
+       ``APK(str(p))`` (CWE-22 / CWE-23 defence-in-depth).
     """
-    p = Path(path)
-    if not p.exists():
-        raise ApkParseError(f"APK not found at {p}")
+    # ``resolve(strict=True)`` follows symlinks AND raises ``FileNotFoundError``
+    # if the path doesn't exist — covering both the existence check and
+    # the tmpdir-confinement check in one call.
+    try:
+        p_resolved = Path(path).resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ApkParseError(f"APK not found at {path}") from exc
+    tmpdir = Path(tempfile.gettempdir()).resolve()
+    try:
+        p_resolved.relative_to(tmpdir)
+    except ValueError as exc:
+        raise ApkParseError(
+            "APK path must be inside the system temp directory"
+        ) from exc
+    if not p_resolved.is_file():
+        raise ApkParseError(f"APK is not a regular file at {p_resolved}")
+    p = p_resolved
 
     def _read() -> tuple[APK, str, int]:
         apk = APK(str(p))
