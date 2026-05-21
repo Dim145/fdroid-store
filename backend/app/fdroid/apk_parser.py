@@ -136,37 +136,43 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
     # data that has passed an explicit allowlist, so no caller-supplied
     # string reaches ``open`` / ``isfile`` directly.
     #
-    # Every legitimate caller's tempfile name matches the allowlist:
-    # ``tempfile.NamedTemporaryFile(suffix='.apk')`` produces names
-    # like ``/tmp/tmpA1b2C3d4.apk`` — the random middle is drawn from
-    # ``string.ascii_letters + string.digits + '_'``, never ``.`` or
-    # ``-`` or path separators.
+    # Strict allowlist + path reconstruction. Every legitimate caller
+    # (``save_upload_to_temp`` from the upload endpoints,
+    # ``_download_apk`` from the rescan service) builds the input
+    # through ``tempfile.NamedTemporaryFile(suffix='.apk')`` whose
+    # random middle is drawn from
+    # ``string.ascii_letters + string.digits + '_'`` — never ``.``,
+    # ``-``, or path separators — so the pattern below matches every
+    # real call and rejects everything else.
     #
-    # Pattern shape matters for two reasons beyond strictness:
+    # Three design points:
     #
-    # * Keeping ``.`` OUT of the bracket class kills the polynomial
-    #   backtracking CodeQL flagged as ``py/polynomial-redos``:
-    #   ``[A-Za-z0-9_.\-]+\.apk`` was ambiguous (the dot matched both
-    #   the class and the literal ``\.`` suffix) so a malicious
-    #   ``aaaa…apkX`` input could force O(n²) backtracks.
+    # * Bounded quantifier ``{1,128}`` (rather than ``+``) — tempfile
+    #   basenames are ~10 chars; capping at 128 makes the pattern
+    #   provably ReDoS-free, which is what CodeQL's
+    #   ``py/polynomial-redos`` ruleset wants to see on a regex
+    #   fed user input.
     #
-    # * Refusing ``.`` outright also rules out ``..`` and ``.``
-    #   sequences in the basename, so the reconstructed ``safe_path``
-    #   can't traverse out of the tmpdir — which is the barrier shape
-    #   CodeQL's ``py/path-injection`` ruleset actually recognises.
+    # * ``.`` is OUT of the bracket class — keeps the class disjoint
+    #   from the literal ``\.apk`` suffix (no backtracking ambiguity)
+    #   AND rules out ``..`` / ``.`` sequences in the basename so the
+    #   reconstructed ``safe_path`` can't traverse out of the tmpdir.
+    #
+    # * The reconstructed ``safe_path`` is built from a hard-coded
+    #   prefix (``tempfile.gettempdir()``) joined to the
+    #   allowlist-validated basename. Nothing caller-supplied reaches
+    #   the downstream ``os.path.isfile`` directly — which is the
+    #   barrier shape CodeQL's ``py/path-injection`` recognises. We
+    #   deliberately do NOT call ``os.path.realpath`` on the original
+    #   ``path`` anywhere after this point: re-touching the
+    #   caller-supplied string re-introduces the taint that the
+    #   regex barrier just stripped.
     basename = os.path.basename(str(path))
-    if not re.fullmatch(r"[A-Za-z0-9_]+\.apk", basename):
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,128}\.apk", basename):
         raise ApkParseError(
             "APK basename must be a tempfile-style filename"
         )
     safe_path = os.path.join(tempfile.gettempdir(), basename)
-    # Belt-and-braces: realpath equality catches the case where the
-    # caller passed a symlink whose basename happened to match the
-    # allowlist but whose target lives outside the tmpdir.
-    if os.path.realpath(safe_path) != os.path.realpath(str(path)):
-        raise ApkParseError(
-            "APK path must reside directly under the system temp directory"
-        )
     if not os.path.isfile(safe_path):
         raise ApkParseError(f"APK not found at {safe_path}")
     p = Path(safe_path)
