@@ -124,25 +124,38 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
        cannot escape the tmpdir before it reaches androguard's
        ``APK(str(p))`` (CWE-22 / CWE-23 defence-in-depth).
     """
-    # Canonicalise with ``os.path.realpath`` and gate access with an
-    # explicit ``startswith`` against the OS temp dir. This particular
-    # pair is the path-injection barrier shape CodeQL's python ruleset
-    # recognises (see PathInjectionQuery.qll in github/codeql);
-    # ``Path.resolve().relative_to()`` is semantically equivalent but
-    # currently isn't tracked as a sanitiser by the analyser.
+    # Path-injection barrier. Two previous attempts (
+    # ``Path.resolve().relative_to`` and ``os.path.realpath +
+    # startswith``) gave correct runtime semantics but CodeQL's
+    # ``py/path-injection`` data-flow tracker didn't propagate the
+    # sanitisation across them. The pattern below — regex allowlist on
+    # the basename, then reconstruction of the final path from a
+    # constant prefix + the validated basename — is the strongest
+    # barrier shape the analyser recognises: the path used by the
+    # downstream FS op is now built from a hard-coded directory plus
+    # data that has passed an explicit allowlist, so no caller-supplied
+    # string reaches ``open`` / ``isfile`` directly.
     #
-    # ``str(path)`` because ``realpath`` only accepts str / bytes on
-    # older runtimes; on 3.13 a ``Path`` works but the explicit cast
-    # is harmless and keeps the contract clear.
-    candidate = os.path.realpath(str(path))
-    tmpdir = os.path.realpath(tempfile.gettempdir())
-    if not (candidate == tmpdir or candidate.startswith(tmpdir + os.sep)):
+    # Every legitimate caller's tempfile name matches the allowlist:
+    # ``tempfile.NamedTemporaryFile(suffix='.apk')`` produces names
+    # like ``/tmp/tmpA1b2C3d4.apk`` — alphanumerics + underscore +
+    # period + hyphen. We don't accept directory separators.
+    basename = os.path.basename(str(path))
+    if not re.fullmatch(r"[A-Za-z0-9_.\-]+\.apk", basename):
         raise ApkParseError(
-            "APK path must be inside the system temp directory"
+            "APK basename must be a tempfile-style filename"
         )
-    if not os.path.isfile(candidate):
-        raise ApkParseError(f"APK not found at {candidate}")
-    p = Path(candidate)
+    safe_path = os.path.join(tempfile.gettempdir(), basename)
+    # Belt-and-braces: realpath equality catches the case where the
+    # caller passed a symlink whose basename happened to match the
+    # allowlist but whose target lives outside the tmpdir.
+    if os.path.realpath(safe_path) != os.path.realpath(str(path)):
+        raise ApkParseError(
+            "APK path must reside directly under the system temp directory"
+        )
+    if not os.path.isfile(safe_path):
+        raise ApkParseError(f"APK not found at {safe_path}")
+    p = Path(safe_path)
 
     def _read() -> tuple[APK, str, int]:
         apk = APK(str(p))
