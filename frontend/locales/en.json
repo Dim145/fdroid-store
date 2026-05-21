@@ -269,6 +269,8 @@
     "install": "Install",
     "orDownloadApk": "Or download .apk",
     "screenshots": "Screenshots",
+    "screenshotsCount_one": "{{count}} screenshot",
+    "screenshotsCount_other": "{{count}} screenshots",
     "whatsNew": "What's new",
     "aboutThisApp": "About this app",
     "noDescription": "No description provided.",

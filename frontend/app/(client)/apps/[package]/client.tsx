@@ -154,7 +154,7 @@ export default function AppDetailClient() {
           <ArrowLeft className="h-4 w-4" /> {t("appDetail.backToApps")}
         </Link>
 
-        <div className="grid items-start gap-6 md:grid-cols-[auto_1fr_auto] md:gap-10">
+        <div className="grid items-start gap-6 md:grid-cols-[auto_1fr] md:gap-8">
           <div className="relative w-fit">
             <AppIcon
               iconPath={app.icon_path}
@@ -184,31 +184,36 @@ export default function AppDetailClient() {
             </p>
             <p className="mt-0.5 font-mono text-xs text-ink-mute">{app.package_name}</p>
 
-            {/* Stats row */}
-            <dl className="mt-5 grid max-w-md grid-cols-3 gap-4 border-t border-outline-soft pt-4 text-center">
-              <Stat label={t("appDetail.stats.version")} value={latest ? `v${latest.version_name}` : "—"} mono />
-              <Stat label={t("appDetail.stats.size")} value={latest ? formatBytes(latest.size_bytes) : "—"} mono />
-              <Stat
-                label={t("appDetail.stats.downloads")}
-                value={formatCount(app.download_count)}
-                mono
-                title={t("appDetail.totalDownloads", { count: app.download_count.toLocaleString() })}
-              />
-            </dl>
-          </div>
-
-          {/* Desktop: a direct ".apk" download is the only useful action since
-              the fdroidrepo:// scheme is a dead end without an Android device.
-              The column is forced to the AppIcon's 140px height + items-center
-              so the pill sits at the icon's vertical midpoint — centring on the
-              row would drop it next to the stats line instead. */}
-          <div className="hidden md:flex md:h-[140px] md:items-center">
-            <InstallPill
-              apkFileName={latest?.file_name}
-              apkId={latest?.id}
-              size="xl"
-              mode="download"
-            />
+            {/* Stats + primary CTA on the same row. Previously the
+                download button sat in its own ``auto`` grid column at
+                the far right of a ``[auto_1fr_auto]`` layout, leaving a
+                large dead band between the stats and the button on
+                wide screens. Folding the CTA into the stats row keeps
+                the primary action visually anchored to the data it
+                summarises and reclaims the dead band. */}
+            <div className="mt-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-5 border-t border-outline-soft pt-4">
+              <dl className="grid flex-1 min-w-[16rem] max-w-md grid-cols-3 gap-4 text-center">
+                <Stat label={t("appDetail.stats.version")} value={latest ? `v${latest.version_name}` : "—"} mono />
+                <Stat label={t("appDetail.stats.size")} value={latest ? formatBytes(latest.size_bytes) : "—"} mono />
+                <Stat
+                  label={t("appDetail.stats.downloads")}
+                  value={formatCount(app.download_count)}
+                  mono
+                  title={t("appDetail.totalDownloads", { count: app.download_count.toLocaleString() })}
+                />
+              </dl>
+              {/* Desktop CTA. The mobile equivalent below carries the
+                  F-Droid deeplink instead — the raw .apk is the right
+                  fit only on a desktop browser. */}
+              <div className="hidden md:block">
+                <InstallPill
+                  apkFileName={latest?.file_name}
+                  apkId={latest?.id}
+                  size="xl"
+                  mode="download"
+                />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -252,29 +257,61 @@ export default function AppDetailClient() {
       {/* ──── Screenshots ──── */}
       {screenshots.length > 0 && (
         <section className="mt-10">
-          <h2 className="section-title mb-3">{t("appDetail.screenshots")}</h2>
-          <div className="rail -mx-4 px-4 md:-mx-2 md:px-2">
-            {screenshots.map((s) => {
-              const url = mediaUrl(s.storage_key, { token: app.media_token });
-              if (!url) return null;
-              return (
-                <a
-                  key={s.id}
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block shrink-0 overflow-hidden rounded-2xl border border-outline-soft bg-surface-2 shadow-e1 transition-shadow hover:shadow-e3"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={url}
-                    alt={`${app.name} screenshot`}
-                    loading="lazy"
-                    className="h-80 w-auto object-contain md:h-[420px]"
-                  />
-                </a>
-              );
-            })}
+          <div className="mb-3 flex items-baseline justify-between gap-3">
+            <h2 className="section-title">{t("appDetail.screenshots")}</h2>
+            {screenshots.length > 3 && (
+              <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute">
+                {t("appDetail.screenshotsCount", {
+                  count: screenshots.length,
+                  defaultValue: "{{count}} captures",
+                })}
+              </span>
+            )}
+          </div>
+          {/* Wrap the rail in a relative container so we can pin a
+              fade-mask overlay against the right edge. Without it, the
+              row of screenshots ran off the viewport with no visual
+              cue that more existed beyond the fold — the scrollbar is
+              hidden by ``.rail``, so the user had no signal whatsoever
+              that a horizontal scroll was even possible. */}
+          <div className="relative -mx-4 md:-mx-2">
+            <div className="rail px-4 md:px-2">
+              {screenshots.map((s) => {
+                const url = mediaUrl(s.storage_key, { token: app.media_token });
+                if (!url) return null;
+                return (
+                  <a
+                    key={s.id}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block shrink-0 overflow-hidden rounded-2xl border border-outline-soft bg-surface-2 shadow-e1 transition-shadow hover:shadow-e3"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={url}
+                      alt={`${app.name} screenshot`}
+                      loading="lazy"
+                      className="h-80 w-auto object-contain md:h-[420px]"
+                    />
+                  </a>
+                );
+              })}
+            </div>
+            {/* Right-edge fade only when the rail can actually scroll
+                (3+ portrait shots ≈ ~960 px wide, always overflows on
+                a typical viewport). The mask uses the page background
+                so the fade reads as "the content continues" rather
+                than a coloured overlay. */}
+            {screenshots.length > 2 && (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-y-0 right-0 hidden w-16 md:block"
+                style={{
+                  background: "linear-gradient(to left, rgb(var(--bg)) 0%, rgb(var(--bg) / 0.85) 35%, transparent 100%)",
+                }}
+              />
+            )}
           </div>
         </section>
       )}

@@ -232,6 +232,22 @@
   .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
 
+  /* Forces the OpenType ``zero`` feature off — useful for hardening
+     against fonts that flip slashed-zero on by default but respect
+     the standard feature toggle. */
+  .nums-no-slash { font-feature-settings: "zero" 0; }
+
+  /* "Display digits" — drop the mono face on big stat tiles. Geist Mono
+     ships a slashed-zero glyph that, scaled up to 3xl/4xl/5xl, reads
+     as a crosshair/reticle artefact and visibly breaks the row of
+     numbers. Using the sans-serif display font gives us a clean 0
+     while keeping tabular alignment (the body sans is tabular-aware
+     via font-variant-numeric). */
+  .stat-digits {
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    font-feature-settings: "zero" 0;
+  }
+
   /* Truncate to N lines. */
   .line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
   .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

@@ -421,7 +421,7 @@ function TelemetryCard({
         )}
       </div>
 
-      <div className="mt-2 text-5xl font-bold tabular-nums tracking-tight text-ink">
+      <div className="nums-no-slash mt-2 text-5xl font-bold tabular-nums tracking-tight text-ink">
         {display}
       </div>
       <div className="mt-1 text-xs text-ink-mute">{sub}</div>

@@ -633,7 +633,7 @@ function Stat({
   return (
     <div>
       <dt className="text-[10px] uppercase tracking-[0.18em] text-ink-mute">{label}</dt>
-      <dd className={cn("mt-1 font-mono text-3xl font-bold tabular-nums tracking-tight md:text-4xl", color)}>
+      <dd className={cn("nums-no-slash mt-1 text-3xl font-bold tabular-nums tracking-tight md:text-4xl", color)}>
         {display}
       </dd>
     </div>

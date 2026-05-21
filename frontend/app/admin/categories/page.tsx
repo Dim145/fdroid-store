@@ -314,7 +314,7 @@ function Stat({
   return (
     <div>
       <dt className="text-[10px] uppercase tracking-[0.18em] text-ink-mute">{label}</dt>
-      <dd className={cn("mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight md:text-5xl", color)}>
+      <dd className={cn("nums-no-slash mt-1 text-4xl font-bold tabular-nums tracking-tight md:text-5xl", color)}>
         {display}
       </dd>
     </div>
@@ -372,12 +372,29 @@ function SortChip({
 /*  Category tile                                                              */
 /* -------------------------------------------------------------------------- */
 
-/** Stable hue from the category name so the same chip wears the same
- *  colour across reloads, like the user avatars. */
-function hueFor(name: string): number {
+/** Stable per-category accent picked from a curated 10-tone palette
+ *  rather than 360° of random hue. A free `name -> hsl(360)` mapping
+ *  meant a catalogue with a dozen categories could land on neon pink,
+ *  fluo magenta, and dark olive next to each other — visually noisy
+ *  and "random-looking". The shorter palette keeps the chip-identity
+ *  signal while reading as deliberate rather than algorithmic. */
+const CATEGORY_PALETTE: { h: number; s: number; l: number }[] = [
+  { h: 354, s: 62, l: 56 }, // brick red
+  { h: 22, s: 78, l: 58 }, // burnt orange
+  { h: 42, s: 75, l: 55 }, // amber
+  { h: 142, s: 48, l: 50 }, // pine green
+  { h: 175, s: 52, l: 48 }, // teal
+  { h: 205, s: 62, l: 58 }, // sky blue
+  { h: 248, s: 55, l: 64 }, // periwinkle
+  { h: 290, s: 45, l: 58 }, // mauve
+  { h: 330, s: 55, l: 60 }, // dusty pink
+  { h: 90, s: 40, l: 52 }, // moss
+];
+
+function paletteFor(name: string): { h: number; s: number; l: number } {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  return Math.abs(h) % 360;
+  return CATEGORY_PALETTE[Math.abs(h) % CATEGORY_PALETTE.length];
 }
 
 function CategoryTile({
@@ -409,7 +426,7 @@ function CategoryTile({
   const count = category.app_count ?? 0;
   const isEmpty = count === 0;
   const ratio = maxCount > 0 ? count / maxCount : 0;
-  const hue = hueFor(category.name);
+  const accent = paletteFor(category.name);
 
   return (
     <li
@@ -431,14 +448,14 @@ function CategoryTile({
           "absolute left-0 top-0 h-full w-[3px] transition-colors",
           isEmpty && "saturate-0 opacity-50",
         )}
-        style={{ backgroundColor: `hsl(${hue} 70% 55%)` }}
+        style={{ backgroundColor: `hsl(${accent.h} ${accent.s}% ${accent.l}%)` }}
       />
       {/* Soft hue tint in the corner. Just enough to feel curated. */}
       {!isEmpty && (
         <div
           aria-hidden
           className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full opacity-[0.10]"
-          style={{ backgroundColor: `hsl(${hue} 80% 60%)` }}
+          style={{ backgroundColor: `hsl(${accent.h} ${Math.min(95, accent.s + 10)}% ${Math.min(75, accent.l + 8)}%)` }}
         />
       )}
 
@@ -469,18 +486,20 @@ function CategoryTile({
         )}
       </div>
 
-      {/* Usage bar — only when not editing. CSS transition on the width
-          gives a tasteful settle when the list re-sorts. */}
+      {/* Usage bar — only when not editing. Uniform ``--primary`` tint
+          across every tile so a row of cards reads as a single,
+          comparable usage chart, not a mosaic of unrelated colour bars.
+          The per-category accent already lives in the spine + corner
+          tint, where it functions as identity. CSS transition on the
+          width gives a tasteful settle when the list re-sorts. */}
       {!editing && (
         <div className="relative mt-2 px-5 pb-4">
           <div className="h-1 overflow-hidden rounded-full bg-surface-2">
             <div
-              className="h-full rounded-full transition-[width] duration-500 ease-out"
+              className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
               style={{
                 width: `${Math.max(2, ratio * 100)}%`,
-                backgroundColor: isEmpty
-                  ? "transparent"
-                  : `hsl(${hue} 70% 55%)`,
+                opacity: isEmpty ? 0 : 0.55 + 0.45 * ratio,
               }}
             />
           </div>
