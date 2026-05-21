@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronUp, EyeOff, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert, UserCircle2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, EyeOff, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert, UserCircle2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Trans, useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
@@ -12,7 +13,7 @@ import { InstallPill } from "@/components/install-pill";
 import { NsfwTag } from "@/components/nsfw-tag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api, mediaUrl, type Apk, type AppDetail } from "@/lib/api";
+import { api, mediaUrl, type Apk, type AppDetail, type Screenshot } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 import { useRepoInfo } from "@/lib/repo-store";
 import { cn, formatBytes, formatCount, formatDate, pickLocalizedText } from "@/lib/utils";
@@ -37,6 +38,11 @@ export default function AppDetailClient() {
   const [app, setApp] = useState<AppDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandDesc, setExpandDesc] = useState(false);
+  // Lightbox state: ``null`` means closed, otherwise an index into the
+  // sorted ``screenshots`` array. Stored as an index (not an id) so the
+  // prev/next arrows can step without re-resolving from the screenshot
+  // list each tick.
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   // NSFW interstitial: once consented for this navigation, stay open. Reset
   // when ``pkg`` changes so jumping between apps re-asks.
   const [nsfwAck, setNsfwAck] = useState(false);
@@ -271,16 +277,23 @@ export default function AppDetailClient() {
               that a horizontal scroll was even possible. */}
           <div className="relative -mx-4 md:-mx-2">
             <div className="rail px-4 md:px-2">
-              {screenshots.map((s) => {
+              {screenshots.map((s, i) => {
                 const url = mediaUrl(s.storage_key, { token: app.media_token });
                 if (!url) return null;
                 return (
-                  <a
+                  <button
+                    type="button"
                     key={s.id}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block shrink-0 overflow-hidden rounded-2xl border border-outline-soft bg-surface-2 shadow-e1 transition-shadow hover:shadow-e3"
+                    onClick={() => setLightboxIndex(i)}
+                    aria-label={t("appDetail.lightbox.openIndex", {
+                      index: i + 1,
+                      total: screenshots.length,
+                      defaultValue: "View screenshot {{index}} of {{total}}",
+                    })}
+                    className={cn(
+                      "group relative block shrink-0 overflow-hidden rounded-2xl border border-outline-soft bg-surface-2 shadow-e1 transition-all",
+                      "hover:-translate-y-0.5 hover:shadow-e3 hover:border-outline focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30",
+                    )}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -289,7 +302,22 @@ export default function AppDetailClient() {
                       loading="lazy"
                       className="h-80 w-auto object-contain md:h-[420px]"
                     />
-                  </a>
+                    {/* Hover scrim — "+" inside a hairline ring, like a
+                        contact-sheet zoom mark. Reveals on hover to hint
+                        at the lightbox without crowding the row. */}
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-0 flex items-center justify-center bg-bg/40 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                    >
+                      <span className="flex h-12 w-12 items-center justify-center rounded-pill border border-ink/30 bg-surface/70 text-ink shadow-e2 backdrop-blur">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                          <circle cx="11" cy="11" r="7" />
+                          <path d="m20 20-3.5-3.5" />
+                          <path d="M11 8v6M8 11h6" />
+                        </svg>
+                      </span>
+                    </span>
+                  </button>
                 );
               })}
             </div>
@@ -478,6 +506,21 @@ export default function AppDetailClient() {
           )}
         </div>
       </section>
+
+      {/* Lightbox — portal-less since ``position: fixed`` already
+          escapes the layout. Only mounted when an index is selected so
+          the keyboard / body-scroll-lock side effects fire just for
+          the duration of the viewing. */}
+      {lightboxIndex !== null && screenshots[lightboxIndex] && (
+        <ScreenshotLightbox
+          screenshots={screenshots}
+          index={lightboxIndex}
+          mediaToken={app.media_token}
+          appName={app.name}
+          onClose={() => setLightboxIndex(null)}
+          onIndex={setLightboxIndex}
+        />
+      )}
     </article>
   );
 }
@@ -555,6 +598,200 @@ function Spinner() {
   const { t } = useTranslation();
   return (
     <div className="h-7 w-7 animate-spin rounded-full border-2 border-outline-soft border-t-primary" role="status" aria-label={t("common.loading")} />
+  );
+}
+
+
+/* Screenshot lightbox — a centred image viewer with keyboard navigation
+ * and a calm editorial chrome that matches the rest of the page:
+ *
+ *   • Counter top-left ("03 / 10" — tabular mono uppercase) acts as a
+ *     position eyebrow rather than a generic dialog title.
+ *   • Close pill top-right.
+ *   • Chevron pills left/right (only when there's somewhere to go).
+ *   • Keyboard: ← → step, Esc closes.
+ *   • Tap-outside-image closes; image area itself swallows clicks so
+ *     a fat-fingered drag-to-pan doesn't dismiss the viewer.
+ *   • Body scroll locked while open so the page underneath doesn't
+ *     drift when the user pinch-zooms or wheels.
+ *   • Neighbour preload — fetch the prev/next URL ahead of time so the
+ *     arrow press swap is instant, not a fade-to-black.
+ *
+ * Chrome restraint is intentional: the photo is the page; everything
+ * else is hairline + monospace eyebrow + tabular counter. Aesthetically
+ * aligned with the page's other editorial bits (the /sections rail on
+ * /my-apps/[id], the section number on the same page, etc.). */
+function ScreenshotLightbox({
+  screenshots,
+  index,
+  mediaToken,
+  appName,
+  onClose,
+  onIndex,
+}: {
+  screenshots: Screenshot[];
+  index: number;
+  mediaToken: string | null;
+  appName: string;
+  onClose: () => void;
+  onIndex: (next: number) => void;
+}) {
+  const { t } = useTranslation();
+  const total = screenshots.length;
+  const current = screenshots[index];
+
+  const goPrev = useCallback(() => {
+    if (index > 0) onIndex(index - 1);
+  }, [index, onIndex]);
+  const goNext = useCallback(() => {
+    if (index < total - 1) onIndex(index + 1);
+  }, [index, total, onIndex]);
+
+  // Keyboard navigation + body scroll lock. Mount-only effect so we
+  // don't keep re-binding on every index change.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
+    }
+    window.addEventListener("keydown", onKey);
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = orig;
+    };
+  }, [onClose, goPrev, goNext]);
+
+  // Neighbour preload — issue a side-effect-free Image() request for
+  // index ± 1 so paging through the carousel doesn't pause for a
+  // network round-trip. Fires after each index change.
+  useEffect(() => {
+    [index - 1, index + 1].forEach((i) => {
+      if (i >= 0 && i < total) {
+        const url = mediaUrl(screenshots[i].storage_key, { token: mediaToken });
+        if (url) {
+          const img = new window.Image();
+          img.src = url;
+        }
+      }
+    });
+  }, [index, total, screenshots, mediaToken]);
+
+  // SSR-safe portal target. During the static export pre-render the
+  // body isn't available, so we bail and let the client-side mount
+  // re-render us into the portal.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  const url = mediaUrl(current.storage_key, { token: mediaToken });
+  if (!url || !mounted) return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("appDetail.lightbox.openIndex", {
+        index: index + 1,
+        total,
+        defaultValue: "Screenshot {{index}} of {{total}}",
+      })}
+      className="fixed inset-0 z-[100] flex items-center justify-center animate-fade-in"
+      onClick={onClose}
+    >
+      {/* Backdrop — deep ink with a touch of blur for depth. Sits
+          below everything else so clicks on it hit the dialog's onClick
+          and dismiss the viewer. */}
+      <div aria-hidden className="absolute inset-0 bg-bg/[0.94] backdrop-blur-md" />
+
+      {/* Top chrome: counter (left) + close (right) */}
+      <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between p-4 md:p-6">
+        <div
+          className="rounded-pill border border-outline-soft bg-surface/70 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.28em] text-ink-mute backdrop-blur"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="tabular-nums text-ink">{String(index + 1).padStart(2, "0")}</span>
+          <span className="px-2 opacity-50">/</span>
+          <span className="tabular-nums">{String(total).padStart(2, "0")}</span>
+        </div>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          aria-label={t("appDetail.lightbox.close", { defaultValue: "Close" })}
+          className="flex h-10 w-10 items-center justify-center rounded-pill border border-outline-soft bg-surface/85 text-ink-soft backdrop-blur transition-colors hover:border-outline hover:text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
+        >
+          <X className="h-4 w-4" strokeWidth={2.4} />
+        </button>
+      </div>
+
+      {/* Image — centred, with the modal-pop bounce on swap.
+          ``key`` on the image element forces a re-mount when the index
+          changes so the animation re-fires per slide. */}
+      <div
+        className="relative z-[5] max-h-[85vh] max-w-[92vw]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          key={current.id}
+          src={url}
+          alt={`${appName} screenshot ${index + 1}`}
+          className="max-h-[85vh] max-w-[92vw] animate-modal-pop rounded-2xl object-contain shadow-e3"
+          draggable={false}
+        />
+      </div>
+
+      {/* Prev/Next pills — only when there's somewhere to go. The
+          ``onClick`` stops propagation so the dialog's backdrop click
+          doesn't fire when paging. */}
+      {index > 0 && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); goPrev(); }}
+          aria-label={t("appDetail.lightbox.previous", { defaultValue: "Previous screenshot" })}
+          className="absolute left-2 z-10 flex h-12 w-12 items-center justify-center rounded-pill border border-outline-soft bg-surface/85 text-ink-soft backdrop-blur transition-colors hover:border-outline hover:text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30 md:left-6 md:h-14 md:w-14"
+        >
+          <ChevronLeft className="h-5 w-5 md:h-6 md:w-6" strokeWidth={2.4} />
+        </button>
+      )}
+      {index < total - 1 && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); goNext(); }}
+          aria-label={t("appDetail.lightbox.next", { defaultValue: "Next screenshot" })}
+          className="absolute right-2 z-10 flex h-12 w-12 items-center justify-center rounded-pill border border-outline-soft bg-surface/85 text-ink-soft backdrop-blur transition-colors hover:border-outline hover:text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30 md:right-6 md:h-14 md:w-14"
+        >
+          <ChevronRight className="h-5 w-5 md:h-6 md:w-6" strokeWidth={2.4} />
+        </button>
+      )}
+
+      {/* Bottom chrome — kbd shortcut hints + open-in-tab escape hatch
+          (some users still want the raw URL for download / sharing). */}
+      <div className="absolute inset-x-0 bottom-0 z-10 flex items-end justify-between gap-3 p-4 md:p-6">
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1.5 rounded-pill border border-outline-soft bg-surface/70 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute backdrop-blur transition-colors hover:border-outline hover:text-ink"
+        >
+          <ExternalLink className="h-3 w-3" strokeWidth={2.4} />
+          {t("appDetail.lightbox.openOriginal", { defaultValue: "Open original" })}
+        </a>
+        <div
+          aria-hidden
+          className="hidden items-center gap-2 rounded-pill border border-outline-soft bg-surface/70 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.22em] text-ink-mute backdrop-blur md:flex"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <kbd className="text-ink-soft">Esc</kbd>
+          <span className="opacity-50">·</span>
+          <kbd className="text-ink-soft">←</kbd>
+          <kbd className="text-ink-soft">→</kbd>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

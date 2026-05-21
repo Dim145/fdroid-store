@@ -271,6 +271,13 @@
     "screenshots": "Captures",
     "screenshotsCount_one": "{{count}} capture",
     "screenshotsCount_other": "{{count}} captures",
+    "lightbox": {
+      "openIndex": "Capture {{index}} sur {{total}}",
+      "close": "Fermer",
+      "previous": "Capture précédente",
+      "next": "Capture suivante",
+      "openOriginal": "Voir l'original"
+    },
     "whatsNew": "Nouveautés",
     "aboutThisApp": "À propos de l'app",
     "noDescription": "Aucune description fournie.",
