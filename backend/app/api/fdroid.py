@@ -259,6 +259,17 @@ _ALLOWED_SINGLETON_MEDIA = {
 }
 
 
+# Per-app media is currently uploaded only at the ``en-US`` locale, but
+# F-Droid clients (and our own catalogue under a non-English UI) can
+# legitimately request the same asset under a different BCP47 tag —
+# matching whichever locale the index marked as available for that app's
+# *text* localizations. Until we genuinely support per-locale media,
+# we transparently fall back to ``en-US`` when the requested locale's
+# file is missing. Keeps the "images are the same for every language"
+# contract working without forcing every caller to second-guess the tag.
+_MEDIA_FALLBACK_LOCALE = "en-US"
+
+
 @router.get("/{package}/{locale}/{filename}")
 async def serve_singleton_media(
     package: str,
@@ -274,10 +285,17 @@ async def serve_singleton_media(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     if not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    key = f"{package}/{locale}/{filename}"
     storage = get_storage()
+    key = f"{package}/{locale}/{filename}"
     if not await storage.exists(key):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        if locale != _MEDIA_FALLBACK_LOCALE:
+            fallback = f"{package}/{_MEDIA_FALLBACK_LOCALE}/{filename}"
+            if await storage.exists(fallback):
+                key = fallback
+            else:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        else:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return await _serve_storage_object(key, content_type=_content_type_for(filename))
 
 
@@ -301,10 +319,17 @@ async def serve_media(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     if not await _media_anonymously_visible(db=db, package_name=package, api_key=api_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    key = f"{package}/{locale}/{kind}/{filename}"
     storage = get_storage()
+    key = f"{package}/{locale}/{kind}/{filename}"
     if not await storage.exists(key):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        if locale != _MEDIA_FALLBACK_LOCALE:
+            fallback = f"{package}/{_MEDIA_FALLBACK_LOCALE}/{kind}/{filename}"
+            if await storage.exists(fallback):
+                key = fallback
+            else:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        else:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return await _serve_storage_object(key, content_type=_content_type_for(filename))
 
 
