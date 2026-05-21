@@ -138,10 +138,24 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
     #
     # Every legitimate caller's tempfile name matches the allowlist:
     # ``tempfile.NamedTemporaryFile(suffix='.apk')`` produces names
-    # like ``/tmp/tmpA1b2C3d4.apk`` — alphanumerics + underscore +
-    # period + hyphen. We don't accept directory separators.
+    # like ``/tmp/tmpA1b2C3d4.apk`` — the random middle is drawn from
+    # ``string.ascii_letters + string.digits + '_'``, never ``.`` or
+    # ``-`` or path separators.
+    #
+    # Pattern shape matters for two reasons beyond strictness:
+    #
+    # * Keeping ``.`` OUT of the bracket class kills the polynomial
+    #   backtracking CodeQL flagged as ``py/polynomial-redos``:
+    #   ``[A-Za-z0-9_.\-]+\.apk`` was ambiguous (the dot matched both
+    #   the class and the literal ``\.`` suffix) so a malicious
+    #   ``aaaa…apkX`` input could force O(n²) backtracks.
+    #
+    # * Refusing ``.`` outright also rules out ``..`` and ``.``
+    #   sequences in the basename, so the reconstructed ``safe_path``
+    #   can't traverse out of the tmpdir — which is the barrier shape
+    #   CodeQL's ``py/path-injection`` ruleset actually recognises.
     basename = os.path.basename(str(path))
-    if not re.fullmatch(r"[A-Za-z0-9_.\-]+\.apk", basename):
+    if not re.fullmatch(r"[A-Za-z0-9_]+\.apk", basename):
         raise ApkParseError(
             "APK basename must be a tempfile-style filename"
         )
