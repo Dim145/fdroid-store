@@ -463,6 +463,25 @@ async def _serve_apk(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
 
     app = apk.app
+
+    # Resolve the signed-URL user once up-front. We need it for two
+    # purposes: gating private-app access AND attributing the download
+    # event. Previously we only resolved it inside the private branch
+    # and never carried the result into the audit row — every
+    # logged-in SPA click on a public APK was logged as anonymous.
+    signed_user: User | None = None
+    if signed_user_id is not None:
+        try:
+            signed_uuid = uuid.UUID(signed_user_id)
+        except (TypeError, ValueError):
+            signed_uuid = None
+        if signed_uuid is not None:
+            signed_user = (
+                await db.execute(select(User).where(User.id == signed_uuid))
+            ).scalar_one_or_none()
+            if signed_user is not None and not signed_user.is_active:
+                signed_user = None
+
     if app.visibility == AppVisibility.PRIVATE:
         # API-key path — must be the owner's key and carry the scope.
         owner_match = (
@@ -471,36 +490,36 @@ async def _serve_apk(
             and app.owner_id is not None
             and api_key.user_id == app.owner_id
         )
-        # Signed-URL path — resolve the user, accept owner or admin.
-        # Ownership transfer between sign-time and click-time
-        # invalidates the URL (revalidation, not just signature check).
-        signed_match = False
-        if not owner_match and signed_user_id is not None:
-            try:
-                signed_uuid = uuid.UUID(signed_user_id)
-            except (TypeError, ValueError):
-                signed_uuid = None
-            if signed_uuid is not None:
-                u = (
-                    await db.execute(select(User).where(User.id == signed_uuid))
-                ).scalar_one_or_none()
-                if u is not None and u.is_active:
-                    signed_match = (
-                        u.role == UserRole.ADMIN
-                        or (app.owner_id is not None and u.id == app.owner_id)
-                    )
+        # Signed-URL path — accept owner or admin. Ownership transfer
+        # between sign-time and click-time invalidates the URL
+        # (revalidation, not just signature check).
+        signed_match = (
+            signed_user is not None
+            and (
+                signed_user.role == UserRole.ADMIN
+                or (app.owner_id is not None and signed_user.id == app.owner_id)
+            )
+        )
         if not (owner_match or signed_match):
             return Response(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
             )
 
+    # Attribute the download. Precedence: API key (F-Droid Basic auth)
+    # wins, then signed-URL SPA session, otherwise anonymous.
+    attributed_user_id = (
+        api_key.user_id if api_key is not None
+        else signed_user.id if signed_user is not None
+        else None
+    )
+
     # Record the download (best effort — never fail the response on this)
     try:
         ev = DownloadEvent(
             apk_id=apk.id,
             app_id=app.id,
-            user_id=api_key.user_id if api_key else None,
+            user_id=attributed_user_id,
             api_key_id=api_key.id if api_key else None,
             ip_hash=_hash_ip(request.client.host if request.client else None),
             user_agent=(request.headers.get("user-agent") or "")[:512] or None,
