@@ -375,8 +375,42 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.0.9 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.1.0 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.1.0
+
+- **Screenshot lightbox** — clicking a screenshot tile on
+  `/apps/[package]` now opens an in-page viewer (backdrop blur,
+  keyboard navigation `← → Esc`, neighbour-preload) instead of
+  spawning a new tab.
+- **Progressive screenshot upload** — uploads on the editor page now
+  run one file per request with per-file placeholders that walk
+  through queued → uploading → done / error. A header chip surfaces a
+  running count (3/5 → 4/5 → 5/5) so the user knows where they are
+  in a batch; a failure on file 3/5 no longer atom-fails the rest.
+- **Download origin chips on /history** — each app row now shows a
+  per-origin breakdown (F-Droid client / web / CLI / other) so the
+  user can tell which downloads came from their phone vs the SPA.
+  Backend classifies the User-Agent into a coarse bucket; no
+  fingerprinting, no migration, no new index.
+- **Keystore metadata read 3–10× faster** — `/admin/repo` was
+  noticeably laggy on every open because the `/setup/keystore`
+  endpoint shelled out to `keytool` (JVM cold-start, ~500ms steady,
+  multi-second on first hit). Now we parse PKCS#12 in-process via
+  `cryptography`. `keytool` is still used for key generation and
+  import, where the JVM cost is justified.
+- **Visual polish pass** — stat digits across `/history` and the
+  admin dashboards no longer render Geist Mono's slashed-zero glyph
+  (which looked like a crosshair at display sizes), `/admin/categories`
+  uses a curated 10-tone palette instead of free 360°-hue hashes
+  with a uniform `--primary` usage bar, the `/apps/[package]`
+  screenshots rail has a right-edge fade indicator and a "N captures"
+  counter, the `/admin/scans` "Analyser maintenant" CTA now states
+  why it's disabled when ClamAV is unreachable, and `/my-apps/new`'s
+  draft watermark is localised.
+
+### 1.0.0 → 1.0.9
 
 - **OIDC email_verified toggle** — new `OIDC_REQUIRE_EMAIL_VERIFIED`
   env var (default `true`). Set to `false` for IdPs that don't emit
