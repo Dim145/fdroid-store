@@ -126,6 +126,11 @@
 
           <h3>Reindex</h3>
           <p>The <em>Trigger reindex</em> button enqueues an arq job that rebuilds both the public and private indexes (<code>index-v1.jar</code> + <code>index-v2.json</code> + <code>entry.jar</code>). Watch the result in <a href="#jobs">/admin/jobs</a>.</p>
+          <p>Automatic reindexes (after every upload / publish / edit) coalesce into one run per minute — a burst of events folds into a single rebuild. The <em>Trigger reindex</em> button bypasses that dedup, so it always actually runs even if a recent automatic rebuild is still cached.</p>
+          <div class="callout">
+            <div class="badge">FIX</div>
+            <p>If apps you uploaded recently aren't showing in your F-Droid client, press <em>Trigger reindex</em> once. Older builds pinned every enqueue to the same job id, which arq dedupes against the 24h result key — silently swallowing every rebuild after the day's first. Fixed in 1.0.9; the manual button is the recovery for instances that already accumulated invisible uploads.</p>
+          </div>
         </section>
 
         <!-- 03 users + invites -->

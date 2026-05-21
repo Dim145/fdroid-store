@@ -107,6 +107,10 @@ OIDC_ISSUER=https://auth.example.com/realms/myrealm
 OIDC_CLIENT_ID=fdroid-store
 OIDC_CLIENT_SECRET=…
 OIDC_ADMIN_CLAIM=groups=fdroid-admins   # optional: auto-promote on group match
+# Reject callbacks whose ``email_verified`` claim is False or missing.
+# Default true (anti-takeover). Set to false ONLY for IdPs that don't
+# emit the claim (Defguard, some Keycloak realms).
+OIDC_REQUIRE_EMAIL_VERIFIED=true
 
 # --- optional: ClamAV (only used when the ``clamav`` profile is up) ----------
 CLAMAV_HOST=clamav
@@ -137,9 +141,14 @@ caller's credentials:
 The Android F-Droid app supports the `https://anyuser:<api_key>@host/...`
 URL form — that is the supported way to access private apps.
 
-APK downloads under `/fdroid/repo/` are nginx-served directly for public
-content, and via `X-Accel-Redirect` (`/_protected`) for private content,
-so the backend never streams APK bytes itself.
+**Downloads always stream through the backend**, regardless of storage
+backend. The earlier "302 to S3" shortcut bypassed audit, access checks
+and rate limits, and broke against S3 backends that refuse anonymous
+reads (Garage, private MinIO). `S3_PUBLIC_BASE_URL` is kept in the
+schema for backward compatibility but no longer affects the download
+path. Browser caches get sensible `Cache-Control` headers:
+`no-cache` for index files, `max-age=1d` for icons/screenshots,
+`immutable` for APKs (versionCode is in the filename).
 
 ## Auth modes
 
@@ -363,6 +372,49 @@ fields (name, description, links, categories) without re-typing.
   lock so concurrent boots can't double-create the admin.
 - **OIDC** state lives in a SESSION cookie signed by `SECRET_KEY`;
   rotate the key if compromised (this invalidates all JWTs too).
+
+## Changelog
+
+Notable changes between 1.0.0 and 1.0.9 — pure bug fixes are omitted,
+this is the operator-relevant summary.
+
+- **OIDC email_verified toggle** — new `OIDC_REQUIRE_EMAIL_VERIFIED`
+  env var (default `true`). Set to `false` for IdPs that don't emit
+  the claim at all (Defguard, some Keycloak realms). A `WARNING` is
+  logged on every boot when the gate is off.
+- **S3 downloads stream through the backend** — no more 302 to a
+  public S3 URL. Fixes the "anonymous-S3-refused" wall (Garage,
+  private MinIO) AND closes the audit / rate-limit / signed-URL
+  bypass the old shortcut created. `S3_PUBLIC_BASE_URL` becomes a
+  no-op for downloads (kept in the schema for backward compat).
+- **Signed media tokens for private apps** — the web UI now gets
+  per-app, one-hour `?t=<token>` URLs for icons / screenshots /
+  banners. `<img>` tags can finally render private-app images that
+  used to 404 against the owner's own browser.
+- **Browser cache headers** — `Cache-Control` is now set on every
+  asset: `no-cache` for index files, `max-age=1d` for icons / screen-
+  shots / banners (frontend cache-busts with `?v=updated_at`),
+  `immutable` for APKs.
+- **Reindex coalescing fix** — auto-enqueues used to dedup against
+  arq's 24h result key, so uploads after the day's first rebuild
+  were invisible until tomorrow. Default job id is now a per-minute
+  bucket; the admin "Trigger reindex" button bypasses dedup entirely.
+- **Per-app retention cap** (1.0.1) — admin sets a repo-wide default,
+  admins can tighten per-app. FIFO eviction by versionCode, never
+  touches the suggested version. Owners can't widen the cap.
+- **Security review batch** (1.0.1 → 1.0.5) — SSRF guards on forge
+  fetches, scheme allow-list on URL fields, audit on deploy-token +
+  API-key uploads, logout endpoint, signed-URL ↔ private-app gating,
+  CSP/HSTS/X-Frame-Options at the nginx layer, bootstrap advisory
+  lock, postcss XSS bump.
+- **Smaller polish** — readable Pydantic-validation toasts (no more
+  `[object Object]`), keystore error path surfaces rc + stderr,
+  GitHub repo description truncates to fit `summary`, joserfc JWS
+  header cap raised so Defguard's larger ID-token headers parse,
+  signed-URL downloads attribute to the logged-in user in the audit
+  log, en-US fallback for missing per-locale media.
+
+The docs site at `docs/` reflects the same shape.
 
 ## License
 

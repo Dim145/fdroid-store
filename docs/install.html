@@ -242,7 +242,12 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
 <span class="c-kw">S3_ACCESS_KEY</span>=AKIA...
 <span class="c-kw">S3_SECRET_KEY</span>=...
 <span class="c-kw">S3_USE_PATH_STYLE</span>=true                            <span class="c-cmt"># MinIO/B2 wants true; AWS wants false</span>
-<span class="c-kw">S3_PUBLIC_BASE_URL</span>=https://cdn.example.com         <span class="c-cmt"># optional CDN in front</span></pre>
+<span class="c-kw">S3_PUBLIC_BASE_URL</span>=                                 <span class="c-cmt"># kept for backward compat — no longer used for downloads</span></pre>
+          </div>
+
+          <div class="callout">
+            <div class="badge">NOTE</div>
+            <p>Downloads always stream through the backend regardless of <code>S3_PUBLIC_BASE_URL</code>. The historical "302 to a public S3 URL" shortcut bypassed audit, private-app gating and rate limits, and broke against S3 backends that refuse anonymous reads (Garage, private MinIO). The setting is kept in the schema only so existing <code>.env</code> files don't fail validation.</p>
           </div>
 
           <div class="callout warn">
@@ -273,9 +278,17 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
 <span class="c-kw">OIDC_CLIENT_SECRET</span>=...
 <span class="c-kw">OIDC_SCOPES</span>=openid profile email
 <span class="c-cmt"># optional: auto-promote on group membership</span>
-<span class="c-kw">OIDC_ADMIN_CLAIM</span>=groups=fdroid-admins</pre>
+<span class="c-kw">OIDC_ADMIN_CLAIM</span>=groups=fdroid-admins
+<span class="c-cmt"># default true — reject callbacks whose ``email_verified`` claim is</span>
+<span class="c-cmt"># False/missing (account-takeover defence). Set false ONLY for IdPs</span>
+<span class="c-cmt"># that don't emit the claim (Defguard, some Keycloak realms).</span>
+<span class="c-kw">OIDC_REQUIRE_EMAIL_VERIFIED</span>=true</pre>
           </div>
           <p>The redirect URI to register with your IdP is <code>$PUBLIC_API_URL/api/v1/auth/oidc/callback</code>.</p>
+          <div class="callout warn">
+            <div class="badge">NOTE</div>
+            <p>When <code>OIDC_REQUIRE_EMAIL_VERIFIED=false</code> the backend logs a <code>WARNING</code> on every startup naming the env var and the attack vector it disables, so the disabled state stays visible in your logs.</p>
+          </div>
 
           <h3>TOTP (second factor)</h3>
           <p>TOTP enrolment is per-user — no env var required. Each user goes to <code>/account → Two-factor</code>, scans the QR with any RFC&nbsp;6238 app (Aegis, Bitwarden, Google Authenticator, 1Password…) and confirms with a 6-digit code. Subsequent logins prompt for the code <em>after</em> the password.</p>
