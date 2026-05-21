@@ -659,13 +659,15 @@ function Hero({
             "radial-gradient(60% 80% at 100% 0%, rgb(var(--primary) / 0.10), transparent 65%)",
         }}
       />
-      {/* "DRAFT" watermark — rotated, very faint, in the bottom-right
-          corner. Reads as a wet-ink stamp on a fresh sheet. */}
+      {/* Watermark — rotated, very faint, in the bottom-right corner.
+          Reads as a wet-ink stamp on a fresh sheet. Localised so a
+          French operator doesn't get a stray ``DRAFT`` next to all the
+          other French chrome on the page. */}
       <div
         aria-hidden
         className="pointer-events-none absolute -right-2 -bottom-3 hidden select-none rotate-[-8deg] font-mono text-7xl font-black uppercase tracking-tighter text-outline opacity-30 md:block"
       >
-        Draft
+        {t("myApps.new.draftWatermark")}
       </div>
 
       <div className="relative">

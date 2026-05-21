@@ -244,32 +244,37 @@ function AuthShell({
   const { t } = useTranslation();
   return (
     <main className="grid min-h-screen md:grid-cols-[1fr_1.1fr]">
-      <aside className="relative hidden flex-col justify-between overflow-hidden bg-primary-container p-10 md:flex">
+      {/* Left rail — formerly ``bg-primary-container`` which in dark mode
+          reads as a saturated chartreuse slab next to the body's black.
+          Dropping the slab and letting the radial gradients do the
+          colour-blocking on a calm ``bg-surface`` base gives the same
+          editorial-vs-form split without the high-saturation flash. */}
+      <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-outline-soft bg-surface p-10 md:flex">
         <div
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(60% 50% at 100% 0%, rgb(var(--accent) / 0.18), transparent 70%), radial-gradient(40% 60% at 0% 100%, rgb(var(--primary) / 0.20), transparent 70%)",
+              "radial-gradient(60% 50% at 100% 0%, rgb(var(--accent) / 0.10), transparent 70%), radial-gradient(50% 70% at 0% 100%, rgb(var(--primary) / 0.14), transparent 70%)",
           }}
         />
-        <Link href="/" className="relative inline-flex items-center gap-2.5 text-primary-on-container">
+        <Link href="/" className="relative inline-flex items-center gap-2.5 text-ink">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-fg shadow-e1">
             <span className="text-sm font-bold tracking-tight">fS</span>
           </span>
           <span className="text-base font-bold tracking-tight">{t("header.brand")}</span>
         </Link>
         <div className="relative">
-          <p className="font-mono text-xs uppercase tracking-widest text-primary-on-container/70">
+          <p className="font-mono text-xs uppercase tracking-widest text-ink-mute">
             {t("auth.heroEyebrow")}
           </p>
-          <h1 className="mt-3 whitespace-pre-line text-5xl font-bold tracking-tight text-primary-on-container md:text-6xl">
+          <h1 className="mt-3 whitespace-pre-line text-5xl font-bold tracking-tight text-ink md:text-6xl">
             {t("auth.heroTitle")}
           </h1>
-          <p className="mt-4 max-w-md text-primary-on-container/80">
+          <p className="mt-4 max-w-md text-ink-soft">
             {t("auth.heroSubtitle")}
           </p>
         </div>
-        <div className="relative font-mono text-xs text-primary-on-container/60">v{pkg.version}</div>
+        <div className="relative font-mono text-xs text-ink-mute">v{pkg.version}</div>
       </aside>
 
       <section className="flex items-center justify-center p-6 md:p-12">

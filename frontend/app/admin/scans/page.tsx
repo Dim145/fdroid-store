@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { api, type ApkScanRow, type RepoConfigInfo } from "@/lib/api";
 import { toast } from "@/lib/toast-store";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 
 export default function AdminScansPage() {
@@ -130,11 +130,24 @@ export default function AdminScansPage() {
               />
             </label>
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-outline-soft bg-surface px-4 py-3">
-              <div>
+              <div className="min-w-0">
                 <div className="text-sm font-medium text-ink">{t("admin.scans.scanNow")}</div>
-                <div className="text-xs text-ink-mute">{t("admin.scans.scanNowBody")}</div>
+                {/* Swap the rationale when ClamAV is unreachable — the
+                    button stays disabled and the user otherwise has no
+                    explanation of why. */}
+                <div className={cn("text-xs", ping?.ok ? "text-ink-mute" : "text-danger")}>
+                  {ping?.ok
+                    ? t("admin.scans.scanNowBody")
+                    : t("admin.scans.scanNowDisabledReason")}
+                </div>
               </div>
-              <Button variant="filled" size="sm" onClick={scanNow} disabled={scanning || !ping?.ok}>
+              <Button
+                variant="filled"
+                size="sm"
+                onClick={scanNow}
+                disabled={scanning || !ping?.ok}
+                title={!ping?.ok ? t("admin.scans.scanNowDisabledReason") : undefined}
+              >
                 <PlayCircle className="h-4 w-4" />
                 {scanning ? t("admin.scans.scanNowRunning") : t("admin.scans.scanNowAction")}
               </Button>
