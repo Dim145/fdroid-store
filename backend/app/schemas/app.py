@@ -91,6 +91,13 @@ class ApkInspect(BaseModel):
     # toggle off if they're a false positive. Empty dict = no signatures
     # hit (or scanning was skipped).
     detected_anti_features: dict[str, list[str]] = {}
+    # Signed handle that lets the SPA confirm the create / add-APK step
+    # without re-uploading the file. The backend stashes the bytes under
+    # ``staging/<sha256>.apk`` during inspect; ``POST /apps/with-staged-apk``
+    # and ``POST /apks/upload-staged/{app_id}`` redeem this token to skip
+    # the second upload. NULL when staging failed (network, S3 outage) —
+    # caller falls back to the legacy double-upload flow.
+    staging_token: str | None = None
 
 
 class GithubInspectRequest(BaseModel):
@@ -174,6 +181,32 @@ class ScreenshotRead(BaseModel):
 
 
 _DESCRIPTION_MAX = 20_000
+
+
+class AppCreateFromStagedApk(BaseModel):
+    """Body for ``POST /apps/with-staged-apk``. All the listing fields
+    the operator filled in, plus the redemption token returned by
+    ``POST /apks/inspect``. The APK bytes are pulled from staging
+    server-side so the SPA doesn't re-upload the file."""
+    staging_token: str = Field(min_length=10, max_length=512)
+    # Package name is normally inferred from the manifest; allow override
+    # only when the operator typed something explicitly and the parser
+    # accepts it as a match. Same rule as ``create_app_with_apk``.
+    package_name: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=255,
+        pattern=r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$",
+    )
+    name: str = Field(min_length=1, max_length=255)
+    summary: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=20_000)
+    license: str | None = Field(default=None, max_length=128)
+    website: HttpUrl | None = None
+    source_code: HttpUrl | None = None
+    issue_tracker: HttpUrl | None = None
+    author_name: str | None = Field(default=None, max_length=255)
+    visibility: AppVisibility = AppVisibility.PUBLIC
 
 
 class AppCreate(BaseModel):

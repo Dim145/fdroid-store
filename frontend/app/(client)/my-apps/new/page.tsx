@@ -178,19 +178,37 @@ function NewAppInner() {
       }
       setSubmitting(true);
       try {
-        const created = await api.apps.createWithApk({
-          file,
-          name,
-          package_name: packageName || inspect.package_name,
-          summary: summary || undefined,
-          description: description || undefined,
-          license: license || undefined,
-          website: website || undefined,
-          source_code: sourceCode || undefined,
-          issue_tracker: issueTracker || undefined,
-          author_name: authorName || undefined,
-          visibility,
-        });
+        // When the inspect step successfully staged the APK, take the
+        // fast path: a tiny JSON post that redeems the staging token
+        // instead of re-uploading the file. Falls back to the legacy
+        // multipart create when staging failed server-side (rare).
+        const created = inspect.staging_token
+          ? await api.apps.createWithStagedApk({
+              staging_token: inspect.staging_token,
+              name,
+              package_name: packageName || inspect.package_name,
+              summary: summary || undefined,
+              description: description || undefined,
+              license: license || undefined,
+              website: website || undefined,
+              source_code: sourceCode || undefined,
+              issue_tracker: issueTracker || undefined,
+              author_name: authorName || undefined,
+              visibility,
+            })
+          : await api.apps.createWithApk({
+              file,
+              name,
+              package_name: packageName || inspect.package_name,
+              summary: summary || undefined,
+              description: description || undefined,
+              license: license || undefined,
+              website: website || undefined,
+              source_code: sourceCode || undefined,
+              issue_tracker: issueTracker || undefined,
+              author_name: authorName || undefined,
+              visibility,
+            });
         router.replace(`/my-apps/${created.id}`);
       } catch (e) {
         setError(e instanceof Error ? e.message : t("myApps.new.createFailed"));

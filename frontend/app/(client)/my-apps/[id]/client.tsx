@@ -217,7 +217,16 @@ function ManageAppInner() {
     if (!app) return;
     setUploading(true);
     try {
-      await api.apps.uploadApk(app.id, file);
+      // Inspect first — it stages the file under ``staging/<sha>.apk``
+      // and returns a token. If staging succeeded, the follow-up
+      // promotion is a tiny JSON post; otherwise we fall back to a
+      // second multipart upload (network-rare case, S3 down, etc.).
+      const info = await api.apps.inspectApk(file);
+      if (info.staging_token) {
+        await api.apps.uploadApkStaged(app.id, info.staging_token);
+      } else {
+        await api.apps.uploadApk(app.id, file);
+      }
       toast.success(t("myApps.edit.versions.uploaded"));
       await load();
     } catch (e) {

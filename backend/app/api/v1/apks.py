@@ -274,10 +274,12 @@ async def inspect_apk(
     user: Annotated[User, Depends(get_current_user)],
     file: UploadFile = File(...),
 ) -> ApkInspect:
-    """Parse an APK and return its metadata without persisting anything.
+    """Parse an APK and return its metadata. Stages the bytes for the
+    follow-up create / add-APK step so the SPA doesn't re-upload the
+    file once the user confirms — see the staging-token design note in
+    ``app/core/download_token.py``.
 
-    Intended to power the "auto-fill the new-app form when an APK is picked"
-    UX flow. Authenticated callers only — APK parsing isn't free.
+    Authenticated callers only — APK parsing isn't free.
     """
     tmp_path = await save_upload_to_temp(file, max_bytes=await _apk_size_cap_bytes(db))
     try:
@@ -291,6 +293,25 @@ async def inspect_apk(
             detected = summarise(scan_apk(tmp_path))
         except Exception:  # noqa: BLE001
             detected = {}
+        # Stage the bytes under ``staging/<sha256>.apk`` so the create
+        # flow can redeem without a second upload. SHA-256-keyed → two
+        # callers staging the same APK overwrite each other harmlessly.
+        # If staging fails (S3 outage, local disk full), the caller
+        # falls back to the legacy double-upload flow.
+        staging_token: str | None = None
+        try:
+            from app.core.download_token import sign_staging_token
+
+            storage = get_storage()
+            staging_key = f"staging/{meta.sha256}.apk"
+            with tmp_path.open("rb") as fh:
+                await storage.put(
+                    staging_key, fh,
+                    content_type="application/vnd.android.package-archive",
+                )
+            staging_token = sign_staging_token(meta.sha256, user.id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("apk staging failed; falling back to re-upload flow", error=str(exc))
         return ApkInspect(
             package_name=meta.package_name,
             app_name=meta.app_name,
@@ -305,9 +326,53 @@ async def inspect_apk(
             native_code=meta.native_code,
             has_icon=bool(meta.icon_data),
             detected_anti_features=detected,
+            staging_token=staging_token,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+async def _materialise_staged_apk(
+    staging_token: str, *, user_id: uuid.UUID,
+) -> tuple[Path, str]:
+    """Validate a staging token and stream the staged blob to a fresh tmp file.
+
+    Returns ``(tmp_path, content_hash)``. Caller MUST unlink ``tmp_path``
+    in a ``finally`` block. Raises 401/410 on invalid / expired tokens.
+    """
+    from app.core.download_token import verify_staging_token
+
+    content_hash = verify_staging_token(staging_token, user_id)
+    if content_hash is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired staging token",
+        )
+    storage = get_storage()
+    staging_key = f"staging/{content_hash}.apk"
+    if not await storage.exists(staging_key):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Staged APK is gone; please re-upload",
+        )
+    # Stream from storage to a tmp file — never load the whole APK into
+    # memory. ``open_stream`` yields chunks; we write them through.
+    tmp_file = tempfile.NamedTemporaryFile(prefix="fdroid-staged-", suffix=".apk", delete=False)
+    tmp_path = Path(tmp_file.name)
+    tmp_file.close()
+    stream = await storage.open_stream(staging_key)
+    with tmp_path.open("wb") as fh:
+        async for chunk in stream:
+            fh.write(chunk)
+    return tmp_path, content_hash
+
+
+async def _discard_staged_apk(content_hash: str) -> None:
+    """Best-effort cleanup of a redeemed staging blob."""
+    try:
+        await get_storage().delete(f"staging/{content_hash}.apk")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("staging cleanup failed", content_hash=content_hash, error=str(exc))
 
 
 @router.post("/inspect-github", response_model=GithubApkInspect)
@@ -428,6 +493,98 @@ async def inspect_github(
             repo_license_spdx=repo_meta.license_spdx if repo_meta else None,
             repo_owner_login=repo_meta.owner_login if repo_meta else None,
         )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+from pydantic import BaseModel as _BaseModel, Field as _Field
+
+
+class _StagedAttachBody(_BaseModel):
+    """Body for the ``upload-staged`` endpoint. Just the redemption
+    token — every other field is derived from the staged APK itself."""
+    staging_token: str = _Field(min_length=10, max_length=512)
+
+
+@router.post(
+    "/upload-staged/{app_id}",
+    response_model=ApkRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_apk_staged(
+    app_id: uuid.UUID,
+    body: _StagedAttachBody,
+    db: DbSession,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+) -> ApkRead:
+    """Promote a previously-staged APK (``POST /apks/inspect`` →
+    ``staging_token``) onto an existing app. Skips the second upload —
+    the bytes already live under ``staging/<sha>.apk``.
+
+    Mirrors ``upload_apk`` but reads the blob from staging instead of
+    the multipart body. Deploy-token auth isn't supported on this path:
+    deploy tokens are designed for one-shot CI pushes and have their
+    own upload endpoint that ingests bytes directly.
+    """
+    app = (
+        await db.execute(
+            select(App)
+            .options(selectinload(App.apks), selectinload(App.owner))
+            .where(App.id == app_id)
+        )
+    ).scalar_one_or_none()
+    if app is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+    from app.services.app_permissions import assert_can_manage_app
+    await assert_can_manage_app(db, user, app)
+    from app.services.quotas import ensure_can_upload_apk
+
+    tmp_path, content_hash = await _materialise_staged_apk(body.staging_token, user_id=user.id)
+    try:
+        size_bytes = tmp_path.stat().st_size
+        await ensure_can_upload_apk(db, app.owner, incoming_size_bytes=size_bytes)
+        meta = await parse_or_400(tmp_path)
+        if meta.sha256 != content_hash:
+            # Defence-in-depth: the staging key is sha-content-addressed
+            # but the parser re-derives the hash. A mismatch here would
+            # only happen with a tampered token, not a normal client.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Staged content hash does not match parsed APK",
+            )
+        await _maybe_scan_upload(db, tmp_path=tmp_path)
+        apk = await attach_apk_to_app(
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+        )
+        from app.services.apk_eviction import evict_oldest_if_needed
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        from app.services.audit import write_event
+        await write_event(
+            db,
+            action="apk.uploaded",
+            actor=user,
+            target_type="apk",
+            target_id=apk.id,
+            summary=(
+                f"uploaded (staged) {app.package_name} v{meta.version_name} "
+                f"({meta.version_code})"
+            ),
+            payload={
+                "app_id": str(app.id),
+                "package_name": app.package_name,
+                "version_code": meta.version_code,
+                "version_name": meta.version_name,
+                "size_bytes": meta.size_bytes,
+                "sha256": meta.sha256,
+                "credential": {"kind": "staging", "sha": content_hash},
+            },
+            request=request,
+        )
+        if apk.status == ApkStatus.PUBLISHED:
+            await enqueue_reindex()
+        await _discard_staged_apk(content_hash)
+        return ApkRead.model_validate(apk)
     finally:
         tmp_path.unlink(missing_ok=True)
 

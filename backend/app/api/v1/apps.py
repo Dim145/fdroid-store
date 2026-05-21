@@ -30,6 +30,7 @@ from app.models.user import User, UserRole
 from app.schemas.app import (
     AppCreate,
     AppCreateFromGithub,
+    AppCreateFromStagedApk,
     AppDetail,
     AppRead,
     AppUpdate,
@@ -315,6 +316,116 @@ async def create_app_with_apk(
         payload.owner_username = result.owner.username if result.owner else None
         _attach_media_token(payload, result, user)
         return payload
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post(
+    "/with-staged-apk",
+    response_model=AppDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_app_with_staged_apk(
+    request: Request,
+    payload: AppCreateFromStagedApk,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> AppDetail:
+    """Mirror of :func:`create_app_with_apk` that redeems a staging
+    token (from ``POST /apks/inspect``) instead of accepting a fresh
+    multipart upload. Cuts the create flow's network cost in half for
+    large APKs — the bytes are already on the server.
+    """
+    from app.api.v1.apks import (
+        _discard_staged_apk,
+        _materialise_staged_apk,
+        _maybe_scan_upload,
+        attach_apk_to_app,
+        parse_or_400,
+    )
+    from app.services.quotas import ensure_can_create_app, ensure_can_upload_apk
+
+    await ensure_can_create_app(db, user)
+    tmp_path, content_hash = await _materialise_staged_apk(
+        payload.staging_token, user_id=user.id,
+    )
+    try:
+        await ensure_can_upload_apk(db, user, incoming_size_bytes=tmp_path.stat().st_size)
+        await _maybe_scan_upload(db, tmp_path=tmp_path)
+        meta = await parse_or_400(tmp_path)
+        if meta.sha256 != content_hash:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Staged content hash does not match parsed APK",
+            )
+        pkg = (payload.package_name or meta.package_name).strip()
+        if not _PACKAGE_NAME_RE.match(pkg):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="package name must be a valid Android package id",
+            )
+        if pkg != meta.package_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"package_name {pkg!r} does not match the APK manifest "
+                    f"({meta.package_name!r})"
+                ),
+            )
+        if (
+            await db.execute(select(App).where(App.package_name == pkg))
+        ).scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Package {pkg} already exists",
+            )
+
+        app = App(
+            package_name=pkg,
+            name=payload.name,
+            summary=payload.summary,
+            description=payload.description,
+            license=payload.license,
+            website=str(payload.website) if payload.website else None,
+            source_code=str(payload.source_code) if payload.source_code else None,
+            issue_tracker=str(payload.issue_tracker) if payload.issue_tracker else None,
+            author_name=payload.author_name,
+            visibility=payload.visibility,
+            status=AppStatus.DRAFT,
+            owner_id=user.id,
+            apks=[],
+            screenshots=[],
+        )
+        db.add(app)
+        await db.flush()
+
+        apk = await attach_apk_to_app(
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user,
+        )
+        from app.services.apk_eviction import evict_oldest_if_needed
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        if apk.status == ApkStatus.PUBLISHED:
+            await enqueue_reindex()
+
+        result = (
+            await db.execute(
+                select(App)
+                .execution_options(populate_existing=True)
+                .options(
+                    selectinload(App.categories),
+                    selectinload(App.apks),
+                    selectinload(App.owner),
+                    selectinload(App.screenshots),
+                    selectinload(App.localizations),
+                )
+                .where(App.id == app.id)
+            )
+        ).scalar_one()
+        payload_out = AppDetail.model_validate(result)
+        payload_out.owner_username = result.owner.username if result.owner else None
+        _attach_media_token(payload_out, result, user)
+        await _discard_staged_apk(content_hash)
+        return payload_out
     finally:
         tmp_path.unlink(missing_ok=True)
 

@@ -384,6 +384,15 @@ export const api = {
       if (payload.visibility) fd.append("visibility", payload.visibility);
       return apiFetch<AppDetail>("/api/v1/apps/with-apk", { method: "POST", body: fd });
     },
+    /** Variant of ``createWithApk`` that redeems the staging token from
+     *  a prior ``inspectApk`` call instead of re-uploading the APK. Use
+     *  this when ``inspect`` returned a non-null ``staging_token`` —
+     *  saves a full second upload for large APKs. */
+    createWithStagedApk: (payload: AppCreateWithStagedApk) =>
+      apiFetch<AppDetail>("/api/v1/apps/with-staged-apk", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     update: (id: string, payload: AppUpdatePayload) =>
       apiFetch<AppSummary>(`/api/v1/apps/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
     remove: (id: string) => apiFetch<void>(`/api/v1/apps/${id}`, { method: "DELETE" }),
@@ -393,6 +402,14 @@ export const api = {
       fd.append("file", file);
       return apiFetch<Apk>(`/api/v1/apks/upload/${appId}`, { method: "POST", body: fd });
     },
+    /** Redeem a previously-staged APK against an existing app instead
+     *  of re-uploading the bytes — same net effect as ``uploadApk``,
+     *  but the network cost is a small JSON post. */
+    uploadApkStaged: (appId: string, stagingToken: string) =>
+      apiFetch<Apk>(`/api/v1/apks/upload-staged/${appId}`, {
+        method: "POST",
+        body: JSON.stringify({ staging_token: stagingToken }),
+      }),
     inspectApk: (file: File) => {
       const fd = new FormData();
       fd.append("file", file);
@@ -896,6 +913,14 @@ export type AppCreateWithApk = Omit<AppCreate, "package_name" | "category_ids"> 
   file: File;
 };
 
+/** Payload for ``POST /apps/with-staged-apk`` — same listing fields
+ *  as ``AppCreateWithApk`` minus the ``file``, plus the staging token
+ *  returned by a prior ``POST /apks/inspect`` call. */
+export type AppCreateWithStagedApk = Omit<AppCreate, "package_name" | "category_ids"> & {
+  package_name?: string;
+  staging_token: string;
+};
+
 /** Payload for ``POST /apps/with-github-source`` — package name is
  *  derived from the parsed APK, so the client doesn't send it. */
 export type AppCreateFromGithubPayload =
@@ -1027,6 +1052,12 @@ export type ApkInspect = {
    *  anti-feature slugs (``Tracking``, ``NonFreeNet``, …); values are
    *  human labels for the libraries that triggered each flag. */
   detected_anti_features: Record<string, string[]>;
+  /** When non-null, this APK's bytes are parked in server-side staging
+   *  for the next hour, keyed by ``sha256`` and bound to the caller.
+   *  Pass it to ``createWithStagedApk`` / ``uploadApkStaged`` to skip
+   *  the second upload entirely. NULL means staging failed (S3 outage,
+   *  etc.) — fall back to the legacy double-upload path. */
+  staging_token: string | null;
 };
 
 export type AdminCreateUser = {

@@ -132,3 +132,69 @@ def verify_media_token(package_name: str, token: str) -> str | None:
     if not hmac.compare_digest(expected, sig):
         return None
     return uid
+
+
+# --------------------------------------------------------------------------
+# Staging tokens
+# --------------------------------------------------------------------------
+# The new-app + new-APK flows used to upload the file twice: once for
+# ``/apks/inspect`` (parse metadata, throw the bytes away) and once
+# for the final ``/apps/with-apk`` (parse again, persist). For a 200 MB
+# APK over a slow link that's 5+ minutes of double upload.
+#
+# Staging tokens fix that: ``inspect_apk`` parks the bytes under
+# ``staging/<sha256>.apk`` in the storage backend, returns a token
+# bound to (sha256, user_id, exp). The follow-up "create app from
+# staging" / "add APK from staging" endpoints redeem the token,
+# fetch the bytes back from staging, and skip the upload entirely.
+#
+# Subkey ``staging`` keeps the HMAC separated from the other token
+# purposes (same CWE-1188 hygiene as the rest of this module).
+_STAGING_DEFAULT_TTL = 3600  # one hour — plenty for filling the form
+
+
+def _sign_staging(payload: bytes) -> str:
+    return hmac.new(_derived_key("staging"), payload, sha256).hexdigest()[:32]
+
+
+def _staging_payload(content_hash: str, user_id: str, exp_ts: int) -> bytes:
+    return f"{content_hash}|{user_id}|{exp_ts}".encode("utf-8")
+
+
+def sign_staging_token(
+    content_hash: str,
+    user_id: str | uuid.UUID,
+    ttl_seconds: int = _STAGING_DEFAULT_TTL,
+) -> str:
+    """Mint a token redeemable for the staged APK at ``staging/<content_hash>.apk``.
+
+    Format ``<sha>.<user>.<exp>.<sig>`` — same layout as the other tokens
+    in this module but with the content hash up front so the redemption
+    handler can derive the storage key without trusting the caller.
+    """
+    uid = str(user_id)
+    exp = int(datetime.now(UTC).timestamp()) + ttl_seconds
+    return f"{content_hash}.{uid}.{exp}.{_sign_staging(_staging_payload(content_hash, uid, exp))}"
+
+
+def verify_staging_token(token: str, user_id: str | uuid.UUID) -> str | None:
+    """Returns the bound content_hash when the token is valid for this user.
+
+    Refuses tokens that aren't bound to ``user_id`` — even if signed
+    correctly — so a leaked token can't be redeemed by anyone else.
+    """
+    if not token:
+        return None
+    try:
+        content_hash, uid, exp_str, sig = token.split(".", 3)
+        exp = int(exp_str)
+    except (ValueError, AttributeError):
+        return None
+    if uid != str(user_id):
+        return None
+    if exp < int(datetime.now(UTC).timestamp()):
+        return None
+    expected = _sign_staging(_staging_payload(content_hash, uid, exp))
+    if not hmac.compare_digest(expected, sig):
+        return None
+    return content_hash
