@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import shutil
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import pkcs12
 
 
 class KeystoreError(RuntimeError):
@@ -27,21 +29,6 @@ class KeystoreInfo:
     fingerprint_sha256: str | None = None
     not_before: datetime | None = None
     not_after: datetime | None = None
-
-
-_FINGERPRINT_RE = re.compile(r"SHA256:\s*([0-9A-Fa-f:]+)")
-# Pattern: "Valid from: Thu Jan 01 00:00:00 UTC 2026 until: ..."
-_VALIDITY_RE = re.compile(r"Valid from:\s+(.+?)\s+until:\s+(.+)$", re.MULTILINE)
-
-
-def _parse_keytool_date(raw: str) -> datetime | None:
-    # Example: "Thu Jan 01 00:00:00 UTC 2026"
-    for fmt in ("%a %b %d %H:%M:%S %Z %Y", "%a %b %d %H:%M:%S %z %Y"):
-        try:
-            return datetime.strptime(raw.strip(), fmt)
-        except ValueError:
-            continue
-    return None
 
 
 async def _run(
@@ -167,43 +154,70 @@ async def import_keystore(
     return info
 
 
-async def read_keystore_info(path: Path, keystore_password: str) -> KeystoreInfo:
-    """Return metadata for the (first) entry of the keystore."""
-    if not path.exists():
-        return KeystoreInfo(present=False, path=path)
-    rc, out, err = await _run(
-        [
-            "keytool", "-list", "-v",
-            "-keystore", str(path),
-            "-storetype", "PKCS12",
-            "-storepass:env", "FDROID_STOREPASS",
-        ],
-        env_extra={"FDROID_STOREPASS": keystore_password},
-    )
-    if rc != 0:
-        bits = [f"rc={rc}"]
-        if err.strip():
-            bits.append(f"stderr: {err.strip()}")
-        if out.strip():
-            bits.append(f"stdout: {out.strip()}")
-        raise KeystoreError("keytool -list failed — " + " | ".join(bits))
+def _read_keystore_info_sync(path: Path, keystore_password: str) -> KeystoreInfo:
+    """Parse a PKCS#12 keystore in-process via ``cryptography``.
 
-    alias_match = re.search(r"Alias name:\s*(\S+)", out)
-    fp_match = _FINGERPRINT_RE.search(out)
-    validity_match = _VALIDITY_RE.search(out)
+    Previously this used ``keytool -list -v`` and parsed the stdout with
+    regex. That works correctly but spawns a JVM per call — ~300-500 ms
+    on a warm container, several seconds on the first hit after start —
+    which made the admin "Dépôt" page noticeably laggy on every open.
 
-    not_before = _parse_keytool_date(validity_match.group(1)) if validity_match else None
-    not_after = _parse_keytool_date(validity_match.group(2)) if validity_match else None
-    fp = fp_match.group(1).replace(":", "").lower() if fp_match else None
+    PKCS#12 is a public format the ``cryptography`` package already
+    speaks fluently, so we cut out the subprocess hop entirely: read
+    bytes, decode, project the four fields the API ultimately returns.
+    Typical wall time drops to single-digit milliseconds.
+
+    Blocking work (file I/O + a touch of crypto parsing) but cheap;
+    ``read_keystore_info`` runs us in the default threadpool so the
+    event loop stays free even for unusually large keystore files.
+    """
+    try:
+        data = path.read_bytes()
+        # `load_pkcs12` returns the primary key+cert as ``.cert`` (a
+        # PKCS12Certificate wrapper carrying the friendly_name bytes
+        # alongside the X.509 cert) plus any extras under
+        # ``additional_certs``. The store may be passwordless — encode
+        # the empty string identically rather than passing ``None``.
+        pwd_bytes = (keystore_password or "").encode("utf-8")
+        pfx = pkcs12.load_pkcs12(data, pwd_bytes if pwd_bytes else None)
+    except (ValueError, TypeError) as exc:
+        raise KeystoreError(f"keystore parse failed — {exc}") from exc
+
+    entry = pfx.cert
+    if entry is None:
+        raise KeystoreError("keystore has no primary certificate entry")
+    cert = entry.certificate
+    friendly = entry.friendly_name
+    alias = friendly.decode("utf-8") if friendly else None
+
+    fp_hex = cert.fingerprint(hashes.SHA256()).hex()
+
+    # cryptography >= 42 ships ``not_valid_*_utc`` (timezone-aware).
+    # The legacy attrs are naive UTC; we paper that over so callers
+    # always get a tz-aware datetime regardless of which library
+    # version is installed at runtime.
+    try:
+        not_before = cert.not_valid_before_utc
+        not_after = cert.not_valid_after_utc
+    except AttributeError:
+        not_before = cert.not_valid_before.replace(tzinfo=UTC)
+        not_after = cert.not_valid_after.replace(tzinfo=UTC)
 
     return KeystoreInfo(
         present=True,
         path=path,
-        alias=alias_match.group(1) if alias_match else None,
-        fingerprint_sha256=fp,
+        alias=alias,
+        fingerprint_sha256=fp_hex,
         not_before=not_before,
         not_after=not_after,
     )
+
+
+async def read_keystore_info(path: Path, keystore_password: str) -> KeystoreInfo:
+    """Return metadata for the primary entry of the PKCS#12 keystore."""
+    if not path.exists():
+        return KeystoreInfo(present=False, path=path)
+    return await asyncio.to_thread(_read_keystore_info_sync, path, keystore_password)
 
 
 async def delete_keystore(path: Path) -> None:
