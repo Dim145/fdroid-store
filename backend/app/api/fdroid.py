@@ -86,16 +86,34 @@ async def _serve_storage_object(storage_key: str, *, content_type: str) -> Respo
         return FileResponse(str(path), media_type=content_type)
     if not await storage.exists(storage_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-    # Best-effort Content-Length — without it the F-Droid client shows
-    # an indeterminate progress bar on a 30 MB APK. ``storage.size``
-    # does a HEAD against S3 which is cheap.
-    headers: dict[str, str] = {}
+    # Two response shapes depending on size:
+    #
+    #   * Small object (icon, index JSON / jar)  — read fully into memory
+    #     and return a plain ``Response``. This sets Content-Length
+    #     exactly (no streaming mismatch risk) and lets the F-Droid
+    #     client show a precise progress bar on the index pull.
+    #   * Large object (APK)                    — stream chunks via
+    #     ``StreamingResponse`` with NO explicit Content-Length. Starlette
+    #     then uses chunked transfer encoding; the F-Droid client falls
+    #     back to indeterminate progress but the bytes flow correctly.
+    #
+    # The reason we don't set Content-Length on the streaming path: the
+    # SlowAPI rate-limit middleware uses ``BaseHTTPMiddleware`` which
+    # buffers responses, and the buffered re-emit can drop the final
+    # ``more_body=False`` ordering, leaving uvicorn raising
+    # ``RuntimeError: Response content shorter than Content-Length``
+    # at the tail of every download. Chunked encoding sidesteps the
+    # check entirely.
+    BUFFER_LIMIT = 5 * 1024 * 1024  # 5 MiB — icons + index files comfortably fit
     try:
-        headers["Content-Length"] = str(await storage.size(storage_key))
-    except Exception:  # noqa: BLE001 — best-effort, fall through without the header
-        pass
+        size = await storage.size(storage_key)
+    except Exception:  # noqa: BLE001 — fall through to streaming on any HEAD failure
+        size = None
+    if size is not None and size <= BUFFER_LIMIT:
+        data = await storage.get_bytes(storage_key)
+        return Response(content=data, media_type=content_type)
     stream = await storage.open_stream(storage_key)
-    return StreamingResponse(stream, media_type=content_type, headers=headers)
+    return StreamingResponse(stream, media_type=content_type)
 
 
 async def _dispatch_root(
