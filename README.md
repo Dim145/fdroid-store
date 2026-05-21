@@ -375,8 +375,22 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.1.0 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.1.1 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.1.1
+
+- **Service Worker media cache** — icons and screenshots now survive
+  page navigation. Chrome refuses to reuse responses to
+  Authorization-bearing fetches in its HTTP cache, so the SW used to
+  re-download every `<img>` on every navigation between `/apps/…`,
+  `/my-apps/…`, and `/history`. The SW now owns a dedicated
+  `fdroid-media-v1` CacheStorage bucket (purged on logout). After
+  the first visit, follow-ups serve zero bytes from the backend.
+- **/history icon cache key matches /apps** — `/me/downloads` now
+  exposes `updated_at` so the `?v=…` cache-buster is identical to
+  the one on `/apps`. Without it, the two pages stored the icon
+  under two distinct cache slots and re-fetched on every round-trip.
 
 ### 1.1.0
 
