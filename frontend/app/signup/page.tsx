@@ -77,36 +77,32 @@ function SignupInner() {
 
   return (
     <main className="grid min-h-screen md:grid-cols-[1fr_1.1fr]">
-      {/* Mirror of /login's left rail — calm ``bg-surface`` base with
-          radial gradient tints, instead of the saturated chartreuse
-          slab of ``bg-primary-container``. See login/page.tsx for the
-          rationale. */}
-      <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-outline-soft bg-surface p-10 md:flex">
+      <aside className="relative hidden flex-col justify-between overflow-hidden bg-primary-container p-10 md:flex">
         <div
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(60% 50% at 100% 0%, rgb(var(--accent) / 0.10), transparent 70%), radial-gradient(50% 70% at 0% 100%, rgb(var(--primary) / 0.14), transparent 70%)",
+              "radial-gradient(60% 50% at 100% 0%, rgb(var(--accent) / 0.18), transparent 70%), radial-gradient(40% 60% at 0% 100%, rgb(var(--primary) / 0.20), transparent 70%)",
           }}
         />
-        <Link href="/" className="relative inline-flex items-center gap-2.5 text-ink">
+        <Link href="/" className="relative inline-flex items-center gap-2.5 text-primary-on-container">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-fg shadow-e1">
             <span className="text-sm font-bold tracking-tight">fS</span>
           </span>
           <span className="text-base font-bold tracking-tight">{t("header.brand")}</span>
         </Link>
         <div className="relative">
-          <p className="font-mono text-xs uppercase tracking-widest text-ink-mute">
+          <p className="font-mono text-xs uppercase tracking-widest text-primary-on-container/70">
             {t("auth.signup.heroEyebrow")}
           </p>
-          <h1 className="mt-3 whitespace-pre-line text-5xl font-bold tracking-tight text-ink md:text-6xl">
+          <h1 className="mt-3 whitespace-pre-line text-5xl font-bold tracking-tight text-primary-on-container md:text-6xl">
             {t("auth.signup.heroTitle")}
           </h1>
-          <p className="mt-4 max-w-md text-ink-soft">
+          <p className="mt-4 max-w-md text-primary-on-container/80">
             {t("auth.signup.heroSubtitle")}
           </p>
         </div>
-        <div className="relative font-mono text-xs text-ink-mute">v{pkg.version}</div>
+        <div className="relative font-mono text-xs text-primary-on-container/60">v{pkg.version}</div>
       </aside>
 
       <section className="flex items-center justify-center p-6 md:p-12">

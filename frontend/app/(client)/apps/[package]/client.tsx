@@ -154,7 +154,7 @@ export default function AppDetailClient() {
           <ArrowLeft className="h-4 w-4" /> {t("appDetail.backToApps")}
         </Link>
 
-        <div className="grid items-start gap-6 md:grid-cols-[auto_1fr] md:gap-8">
+        <div className="grid items-start gap-6 md:grid-cols-[auto_1fr_auto] md:gap-10">
           <div className="relative w-fit">
             <AppIcon
               iconPath={app.icon_path}
@@ -184,36 +184,31 @@ export default function AppDetailClient() {
             </p>
             <p className="mt-0.5 font-mono text-xs text-ink-mute">{app.package_name}</p>
 
-            {/* Stats + primary CTA on the same row. Previously the
-                download button sat in its own ``auto`` grid column at
-                the far right of a ``[auto_1fr_auto]`` layout, leaving a
-                large dead band between the stats and the button on
-                wide screens. Folding the CTA into the stats row keeps
-                the primary action visually anchored to the data it
-                summarises and reclaims the dead band. */}
-            <div className="mt-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-5 border-t border-outline-soft pt-4">
-              <dl className="grid flex-1 min-w-[16rem] max-w-md grid-cols-3 gap-4 text-center">
-                <Stat label={t("appDetail.stats.version")} value={latest ? `v${latest.version_name}` : "—"} mono />
-                <Stat label={t("appDetail.stats.size")} value={latest ? formatBytes(latest.size_bytes) : "—"} mono />
-                <Stat
-                  label={t("appDetail.stats.downloads")}
-                  value={formatCount(app.download_count)}
-                  mono
-                  title={t("appDetail.totalDownloads", { count: app.download_count.toLocaleString() })}
-                />
-              </dl>
-              {/* Desktop CTA. The mobile equivalent below carries the
-                  F-Droid deeplink instead — the raw .apk is the right
-                  fit only on a desktop browser. */}
-              <div className="hidden md:block">
-                <InstallPill
-                  apkFileName={latest?.file_name}
-                  apkId={latest?.id}
-                  size="xl"
-                  mode="download"
-                />
-              </div>
-            </div>
+            {/* Stats row */}
+            <dl className="mt-5 grid max-w-md grid-cols-3 gap-4 border-t border-outline-soft pt-4 text-center">
+              <Stat label={t("appDetail.stats.version")} value={latest ? `v${latest.version_name}` : "—"} mono />
+              <Stat label={t("appDetail.stats.size")} value={latest ? formatBytes(latest.size_bytes) : "—"} mono />
+              <Stat
+                label={t("appDetail.stats.downloads")}
+                value={formatCount(app.download_count)}
+                mono
+                title={t("appDetail.totalDownloads", { count: app.download_count.toLocaleString() })}
+              />
+            </dl>
+          </div>
+
+          {/* Desktop: a direct ".apk" download is the only useful action since
+              the fdroidrepo:// scheme is a dead end without an Android device.
+              The column is forced to the AppIcon's 140px height + items-center
+              so the pill sits at the icon's vertical midpoint — centring on the
+              row would drop it next to the stats line instead. */}
+          <div className="hidden md:flex md:h-[140px] md:items-center">
+            <InstallPill
+              apkFileName={latest?.file_name}
+              apkId={latest?.id}
+              size="xl"
+              mode="download"
+            />
           </div>
         </div>
 
