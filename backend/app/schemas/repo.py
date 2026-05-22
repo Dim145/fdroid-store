@@ -57,6 +57,9 @@ class RepoConfigRead(BaseModel):
     # can render a "trivy server is not running" notice instead of a
     # dead toggle.
     trivy_available: bool = False
+    # Reproducible Builds verification master switch. Defaults True
+    # (matches the DDL default — see ``RepoConfig`` column doc).
+    reproducible_builds_enabled: bool = True
 
 
 class RepoConfigUpdate(BaseModel):
@@ -98,6 +101,8 @@ class RepoConfigUpdate(BaseModel):
     webauthn_required_uploader: bool | None = None
     # SBOM + CVE scanning master switch.
     cve_scanning_enabled: bool | None = None
+    # Reproducible Builds verification master switch. None = leave alone.
+    reproducible_builds_enabled: bool | None = None
 
 
 class SetupStatus(BaseModel):
@@ -126,6 +131,11 @@ class SetupStatus(BaseModel):
     # for the backend's 413 on a multi-minute upload that exceeded
     # the cap. Knowing the limit is not sensitive — it's a UX limit.
     upload_max_apk_mb: int = 200
+    # Whether the Reproducible Builds verification feature is enabled.
+    # Exposed so the public app page can hide the RB badge entirely
+    # rather than rendering a stale "verified" pill against a feature
+    # the admin just turned off. Defaults True to match the DDL.
+    reproducible_builds_enabled: bool = True
 
 
 class SetupWizardRequest(BaseModel):

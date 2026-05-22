@@ -130,6 +130,19 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
         Boolean, default=False, nullable=False
     )
 
+    # Master switch for the per-APK Reproducible Builds verification
+    # feature. ON by default: it's harmless when nobody fills in a
+    # reference (everything just stays ``unknown``) and the F-Droid
+    # ecosystem treats RB as a baseline trust signal. Admins can flip
+    # it off if they don't want the public badge / per-APK editor to
+    # render at all — when False, the API endpoints return 403 and the
+    # frontend hides both the badge on /apps/<pkg> and the editor on
+    # /my-apps/<id>. Historical data is preserved so re-enabling the
+    # feature later doesn't lose past verifications.
+    reproducible_builds_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+
     @property
     def mirrors(self) -> list[str]:
         """Decoded view of ``mirrors_json`` for serializers + the index builder."""

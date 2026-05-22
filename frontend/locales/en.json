@@ -1357,6 +1357,14 @@
         "toggleBody": "Every newly attached APK is queued for a CVE scan. Manual re-scans are also available from each APK's row in /my-apps.",
         "saved": "Saved.",
         "saveFailed": "Save failed"
+      },
+      "rb": {
+        "title": "Reproducible Builds verification",
+        "body": "Lets maintainers record that an APK has been reproduced independently (typically against verification.f-droid.org or a CI build). History stays in the database when the feature is disabled — the badge on the app page and the per-APK editor in /my-apps are just hidden.",
+        "toggleTitle": "Enable verification",
+        "toggleBody": "When off, POST /reproducibility endpoints return 403 and the matching UI disappears. Historical data is preserved.",
+        "saved": "Saved.",
+        "saveFailed": "Save failed"
       }
     },
     "scans": {

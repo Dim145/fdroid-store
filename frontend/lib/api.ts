@@ -897,6 +897,9 @@ export type SetupStatusResponse = {
   repo_icon_path: string | null;
   repo_fingerprint: string | null;
   upload_max_apk_mb: number;
+  /** Master switch for the Reproducible Builds verification feature.
+   *  Hides the public RB badge + the per-APK editor when false. */
+  reproducible_builds_enabled?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -1314,6 +1317,10 @@ export type RepoConfigInfo = {
    *  admin UI can render a "not configured" notice instead of a dead
    *  toggle when no ``TRIVY_SERVER_URL`` is set on the worker. */
   trivy_available?: boolean;
+  /** Master switch for the Reproducible Builds verification feature.
+   *  When off, the per-APK editor on /my-apps disappears and the badge
+   *  on /apps/<pkg> is hidden. Defaults true. */
+  reproducible_builds_enabled?: boolean;
 };
 
 /** Aggregate stats payload returned by ``GET /api/v1/stats``. The

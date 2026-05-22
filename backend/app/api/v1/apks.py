@@ -982,6 +982,31 @@ async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
     return hashes, url
 
 
+async def _ensure_rb_feature_enabled(db) -> None:
+    """Raise 403 when the admin master switch on the RB feature is off.
+
+    Mirrors the gate semantics of the other repo-config feature flags:
+    flipping the toggle off doesn't wipe past data, it only makes the
+    mutation endpoints refuse new writes (and the frontend hides the
+    badge + editor). Re-enabling later restores the previous state.
+    """
+    from app.models.repo_config import RepoConfig
+
+    enabled = (
+        await db.execute(select(RepoConfig.reproducible_builds_enabled).limit(1))
+    ).scalar_one_or_none()
+    # Default-True semantics: an empty table (only reachable pre-setup)
+    # behaves as if the feature were on, so the endpoint won't 403
+    # before the bootstrap row even exists.
+    if enabled is False:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Reproducible Builds verification is disabled by the admin"
+            ),
+        )
+
+
 async def _apply_reproducibility(
     db,
     apk: Apk,
@@ -1092,6 +1117,7 @@ async def set_reproducibility(
     app's owner / collaborator / admin can edit, others get 403 via
     :func:`assert_can_manage_app`.
     """
+    await _ensure_rb_feature_enabled(db)
     apk = (
         await db.execute(
             select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
@@ -1154,6 +1180,7 @@ async def verify_reproducibility_from_url(
     fetcher: HTTP(S) only, blocks RFC1918 / loopback / link-local /
     metadata-IP destinations, refuses redirects.
     """
+    await _ensure_rb_feature_enabled(db)
     apk = (
         await db.execute(
             select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)

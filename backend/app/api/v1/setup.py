@@ -40,6 +40,9 @@ async def setup_status(db: DbSession) -> SetupStatus:
         repo_fingerprint=config.keystore_fingerprint_sha256 if config else None,
         public_mode=config.public_mode if config else True,
         upload_max_apk_mb=config.upload_max_apk_mb if config else 200,
+        reproducible_builds_enabled=(
+            config.reproducible_builds_enabled if config else True
+        ),
     )
 
 

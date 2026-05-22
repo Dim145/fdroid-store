@@ -37,6 +37,7 @@ import { Label } from "@/components/ui/label";
 import { api, mediaUrl, type Apk, type AppDetail, type Category, type CveSeverity, type ReproducibilityStatus, type SbomRead, type Screenshot } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { useAuth } from "@/lib/auth-store";
+import { useRepoInfo } from "@/lib/repo-store";
 import { toast } from "@/lib/toast-store";
 import { cn, formatBytes, formatDate, pickLocalizedText } from "@/lib/utils";
 
@@ -56,6 +57,11 @@ type PendingShot = {
 function ManageAppInner() {
   const { t } = useTranslation();
   const { user: currentUser } = useAuth();
+  // Admin master switch for the Reproducible Builds feature. Comes from
+  // the public /setup/status hydrate — when off we hide the per-APK
+  // editor below; the backend mirrors the gate by returning 403 if a
+  // client somehow manages to POST anyway.
+  const repo = useRepoInfo();
   // Static export bakes ``useParams`` to the placeholder used at build time
   // (``__dynamic``), so we read the real segment from the live URL instead.
   const pathname = usePathname();
@@ -872,10 +878,12 @@ function ManageAppInner() {
                         disabled={savingApkId === apk.id}
                         onToggle={(flag) => toggleApkAntiFeature(apk, flag)}
                       />
-                      <ReproducibilityRow
-                        apk={apk}
-                        onUpdated={(updated) => updateApkInPlace(updated)}
-                      />
+                      {repo.reproducibleBuildsEnabled && (
+                        <ReproducibilityRow
+                          apk={apk}
+                          onUpdated={(updated) => updateApkInPlace(updated)}
+                        />
+                      )}
                       <CveRow apk={apk} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">

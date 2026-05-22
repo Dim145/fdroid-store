@@ -7,6 +7,7 @@ import {
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  GitCompareArrows,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -66,6 +67,23 @@ export default function AdminScanningPage() {
       toast.success(t("admin.scanning.cve.saved"));
     } catch (e) {
       toast.error(t("admin.scanning.cve.saveFailed"), e instanceof Error ? e.message : undefined);
+    }
+  }
+
+  async function toggleRb(value: boolean) {
+    if (!repo) return;
+    try {
+      const updated = await api.admin.updateRepo({ reproducible_builds_enabled: value });
+      setRepo(updated);
+      // Repo-store caches the public flag for the badge on /apps/<pkg>;
+      // nudge it so the change reflects without a full page reload.
+      try {
+        const { useRepoStore } = await import("@/lib/repo-store");
+        await useRepoStore.getState().refresh();
+      } catch { /* refresh is best-effort */ }
+      toast.success(t("admin.scanning.rb.saved"));
+    } catch (e) {
+      toast.error(t("admin.scanning.rb.saveFailed"), e instanceof Error ? e.message : undefined);
     }
   }
 
@@ -224,6 +242,35 @@ export default function AdminScanningPage() {
               />
             </label>
           </div>
+        )}
+      </section>
+
+      {/* ── Reproducible Builds verification ──────────────────────── */}
+      <section className="surface p-6">
+        <header className="mb-4 flex items-center gap-2">
+          <GitCompareArrows className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold tracking-tight text-ink">
+            {t("admin.scanning.rb.title")}
+          </h2>
+        </header>
+        <p className="mb-4 max-w-3xl text-sm text-ink-soft">
+          {t("admin.scanning.rb.body")}
+        </p>
+        {repo && (
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-outline-soft bg-surface px-4 py-3">
+            <div>
+              <div className="text-sm font-medium text-ink">
+                {t("admin.scanning.rb.toggleTitle")}
+              </div>
+              <div className="text-xs text-ink-mute">
+                {t("admin.scanning.rb.toggleBody")}
+              </div>
+            </div>
+            <Switch
+              checked={repo.reproducible_builds_enabled !== false}
+              onCheckedChange={toggleRb}
+            />
+          </label>
         )}
       </section>
 

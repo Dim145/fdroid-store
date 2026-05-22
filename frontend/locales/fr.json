@@ -1357,6 +1357,14 @@
         "toggleBody": "Chaque APK nouvellement attaché est mis en file pour scan CVE. Re-scan manuel possible depuis la ligne de l'APK dans /my-apps.",
         "saved": "Enregistré.",
         "saveFailed": "Échec de l'enregistrement"
+      },
+      "rb": {
+        "title": "Vérification Reproducible Builds",
+        "body": "Permet aux mainteneurs d'attester qu'un APK a été reproduit indépendamment (typiquement contre verification.f-droid.org ou un build CI). L'historique reste en base si la fonctionnalité est désactivée — la badge sur la fiche app et l'éditeur dans /my-apps sont juste masqués.",
+        "toggleTitle": "Activer la vérification",
+        "toggleBody": "Quand désactivé, les endpoints POST /reproducibility renvoient 403 et l'UI correspondante disparaît. Données historiques conservées.",
+        "saved": "Enregistré.",
+        "saveFailed": "Échec de l'enregistrement"
       }
     },
     "scans": {

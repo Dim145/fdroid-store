@@ -505,7 +505,7 @@ export default function AppDetailClient() {
                     <div className="flex items-center gap-2">
                       <span className="text-lg font-semibold text-ink">v{apk.version_name}</span>
                       {i === 0 && <Badge variant="primary">{t("appDetail.latest")}</Badge>}
-                      <ReproducibilityBadge apk={apk} />
+                      {repo.reproducibleBuildsEnabled && <ReproducibilityBadge apk={apk} />}
                     </div>
                     <div className="mt-0.5 text-xs text-ink-mute">
                       Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk ?? "?"}–{apk.target_sdk ?? "?"}

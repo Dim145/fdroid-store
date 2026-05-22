@@ -572,6 +572,14 @@ async def update_repo_config(
                     ),
                 )
         config.cve_scanning_enabled = payload.cve_scanning_enabled
+    if payload.reproducible_builds_enabled is not None:
+        # No env dependency — pure on/off knob. When flipped off the
+        # frontend hides the badge + per-APK editor and the
+        # /reproducibility endpoints return 403. Historical data on
+        # ``apks.reproducibility_*`` columns is preserved so re-enabling
+        # later restores the previous state. Audited via the same
+        # ``repo.config_updated`` event written below.
+        config.reproducible_builds_enabled = payload.reproducible_builds_enabled
     await write_event(
         db,
         action="repo.config_updated",

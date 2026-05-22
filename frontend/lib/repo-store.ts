@@ -32,6 +32,11 @@ type RepoInfoState = {
   setupComplete: boolean;
   /** When false, anonymous visitors must be redirected to /login. */
   publicMode: boolean;
+  /** Admin master switch for the Reproducible Builds verification
+   *  feature. Defaults true so the badge keeps showing until the very
+   *  first /setup/status answers — flipping it off then makes the badge
+   *  and per-APK editor disappear on the next render. */
+  reproducibleBuildsEnabled: boolean;
   fetchOnce: () => Promise<void>;
   /** Force re-fetch — used after the admin saves /admin/repo. */
   refresh: () => Promise<void>;
@@ -48,6 +53,7 @@ export const useRepoStore = create<RepoInfoState>((set, get) => ({
   loaded: false,
   setupComplete: false,
   publicMode: true,
+  reproducibleBuildsEnabled: true,
 
   async fetchOnce() {
     if (get().loaded) return;
@@ -63,6 +69,8 @@ export const useRepoStore = create<RepoInfoState>((set, get) => ({
           iconPath: s.repo_icon_path,
           setupComplete: s.setup_complete,
           publicMode: s.public_mode,
+          // Missing field on older backends → treat as enabled.
+          reproducibleBuildsEnabled: s.reproducible_builds_enabled !== false,
           loaded: true,
         });
       } catch {
@@ -85,6 +93,7 @@ export const useRepoStore = create<RepoInfoState>((set, get) => ({
         iconPath: s.repo_icon_path,
         setupComplete: s.setup_complete,
         publicMode: s.public_mode,
+        reproducibleBuildsEnabled: s.reproducible_builds_enabled !== false,
         loaded: true,
       });
     } catch {/* keep previous state */}
@@ -109,6 +118,7 @@ export function useRepoInfo() {
       loaded: s.loaded,
       setupComplete: s.setupComplete,
       publicMode: s.publicMode,
+      reproducibleBuildsEnabled: s.reproducibleBuildsEnabled,
       fetchOnce: s.fetchOnce,
       refresh: s.refresh,
     })),

@@ -136,6 +136,11 @@ async def _create_tables_if_needed() -> None:
             # refresh it). Results are visible to owner/collaborators
             # /admins only.
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS cve_scanning_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+            # v1.2 — admin master switch for the Reproducible Builds
+            # verification feature. Defaults TRUE so existing rows keep
+            # the badge / per-APK editor visible (matches the behaviour
+            # in 1.1.x when the feature first shipped without a toggle).
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS reproducible_builds_enabled BOOLEAN NOT NULL DEFAULT TRUE",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.
