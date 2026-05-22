@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, AppWindow, ClipboardList, LayoutDashboard, Settings2, ShieldCheck, ShieldHalf, Tags, Users, Wand2 } from "lucide-react";
+import { Activity, AppWindow, Archive, ClipboardList, LayoutDashboard, Settings2, ShieldCheck, ShieldHalf, Tags, Users, Wand2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslation } from "react-i18next";
@@ -20,6 +20,7 @@ const NAV = [
   { href: "/admin/audit", labelKey: "admin.nav.audit", icon: ClipboardList },
   { href: "/admin/jobs", labelKey: "admin.nav.jobs", icon: Activity },
   { href: "/admin/scans", labelKey: "admin.nav.scans", icon: ShieldHalf },
+  { href: "/admin/backup", labelKey: "admin.nav.backup", icon: Archive },
   { href: "/admin/setup", labelKey: "admin.nav.setupWizard", icon: Wand2 },
 ] as const;
 

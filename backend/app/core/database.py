@@ -43,13 +43,45 @@ SessionLocal = async_sessionmaker(
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency that yields an AsyncSession scoped to one request."""
-    async with SessionLocal() as session:
+    """FastAPI dependency that yields an AsyncSession scoped to one request.
+
+    The admin Backup-Restore endpoint terminates every other PG session as
+    part of its work — the dependency's bound connection is one of the
+    victims, so commit/rollback/close at *cleanup time* all raise
+    ``InterfaceError: connection is closed``. We swallow those only on the
+    no-error happy path; if the request handler itself raised, we still
+    propagate the exception (FastAPI requires it — bare-except-swallow in
+    a yield dependency breaks response handling). pool_pre_ping refreshes
+    the dead pool entries on the next acquisition.
+    """
+    session = SessionLocal()
+    try:
         try:
             yield session
+        except Exception:
+            # Request raised — rollback (best-effort) then let the exception
+            # propagate so FastAPI can render the error response.
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            raise
+        # Happy path. Commit; if the connection was killed mid-request
+        # (e.g. by the Backup-Restore feature), don't burn the response —
+        # the restore subprocess already did its work via a separate
+        # connection.
+        try:
             await session.commit()
         except Exception:
-            await session.rollback()
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+    finally:
+        try:
+            await session.close()
+        except Exception:
+            pass
             raise
         finally:
             await session.close()

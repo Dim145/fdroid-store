@@ -110,18 +110,34 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     JAVA_HOME=/opt/jre-min
 
 # Minimum runtime libs:
-#   libpq5            — psycopg2-binary runtime
-#   libjpeg62-turbo   — Pillow JPEG decoding
-#   zlib1g            — Pillow + apksigner zip handling
-#   ca-certificates   — TLS roots for any outbound call (S3, OIDC, …)
-#   tini              — proper PID 1, reaps zombies + forwards signals to
-#                       uvicorn. Tiny (~150 KB) and worth it.
+#   libpq5                — psycopg2-binary runtime
+#   libjpeg62-turbo       — Pillow JPEG decoding
+#   zlib1g                — Pillow + apksigner zip handling
+#   ca-certificates       — TLS roots for any outbound call (S3, OIDC, …)
+#   tini                  — proper PID 1, reaps zombies + forwards signals to
+#                            uvicorn. Tiny (~150 KB) and worth it.
+#   postgresql-client-16  — pg_dump / pg_restore for the admin Backup
+#                            feature, pinned to the major version that
+#                            matches our server (compose runs PG 16). A
+#                            17.x client emits SET directives that PG 16
+#                            can't parse on restore, hence the pin via the
+#                            official PostgreSQL apt repo.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         libjpeg62-turbo \
         zlib1g \
-        ca-certificates \
         tini \
+        postgresql-client-16 \
+    && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc /usr/share/man
 
 # Trimmed Python deps + minimal JDK + apksigner come from their own stages.
@@ -137,7 +153,7 @@ COPY --from=apksigner-builder /usr/lib/android-sdk/build-tools/debian/apksigner 
 # to without giving up the read-only root filesystem we want at runtime.
 RUN groupadd --system --gid 1001 fdroid && \
     useradd  --system --uid 1001 --gid fdroid --home-dir /home/fdroid --create-home --shell /usr/sbin/nologin fdroid && \
-    mkdir -p /data/storage /data/keystores && \
+    mkdir -p /data/storage /data/keystores /data/backup-tmp && \
     chown -R fdroid:fdroid /data
 
 WORKDIR /app

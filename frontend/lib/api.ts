@@ -608,6 +608,60 @@ export const api = {
       }),
   },
 
+  // ---------- Backup / restore (admin) ----------
+  backup: {
+    /** Enqueue a new backup job. ``components`` defaults to all four
+     *  on the server when an empty list is passed. */
+    create: (passphrase: string, components: BackupComponent[] = []) =>
+      apiFetch<BackupJob>("/api/v1/admin/backup", {
+        method: "POST",
+        body: JSON.stringify({ passphrase, components }),
+      }),
+    /** Enqueue a restore job. ``components`` empty means "restore
+     *  everything the manifest contains"; otherwise the worker
+     *  intersects with the manifest. */
+    restore: (file: File, passphrase: string, components: BackupComponent[] = []) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("passphrase", passphrase);
+      fd.append("confirm", "RESTORE");
+      for (const c of components) fd.append("components", c);
+      return apiFetch<BackupJob>("/api/v1/admin/backup/restore", {
+        method: "POST",
+        body: fd,
+      });
+    },
+    list: () => apiFetch<{ items: BackupJob[] }>("/api/v1/admin/backup/jobs"),
+    job: (id: string) => apiFetch<BackupJob>(`/api/v1/admin/backup/jobs/${id}`),
+    cancel: (id: string) =>
+      apiFetch<BackupJob>(`/api/v1/admin/backup/jobs/${id}/cancel`, { method: "POST" }),
+    /** Streams the encrypted backup file as a Blob. The server marks
+     *  the row consumed + nukes the file as soon as the response is
+     *  delivered, so this is single-use per job. */
+    download: async (id: string) => {
+      const token = getAccessToken();
+      if (!token) throw new ApiError(401, "Not authenticated");
+      const res = await fetch(`${API_URL}/api/v1/admin/backup/jobs/${id}/download`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (body?.detail) detail = formatApiDetail(body.detail) || detail;
+        } catch {
+          /* non-JSON body */
+        }
+        throw new ApiError(res.status, detail);
+      }
+      const dispo = res.headers.get("content-disposition") || "";
+      const match = dispo.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || `fdroid-store-backup-${id}.tar.enc`;
+      const blob = await res.blob();
+      return { filename, blob };
+    },
+  },
+
   // ---------- WebAuthn / passkeys ----------
   webauthn: {
     list: () => apiFetch<{ items: WebAuthnCredentialSummary[] }>("/api/v1/me/webauthn/credentials"),
@@ -1334,6 +1388,52 @@ export type TotpSetup = {
   secret: string;
   provisioning_uri: string;
   qr_data_uri: string;
+};
+
+export type BackupRestoreSummary = {
+  format_version: string;
+  created_at: string | null;
+  backend_version: string | null;
+  repo_id: string | null;
+};
+
+export type BackupJobStatus =
+  | "pending"
+  | "running"
+  | "ready"
+  | "downloaded"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export type BackupJobKind = "backup" | "restore";
+
+export type BackupComponent = "db" | "keystore" | "assets" | "apks";
+
+export const BACKUP_COMPONENTS: BackupComponent[] = ["db", "keystore", "assets", "apks"];
+
+export type BackupRestoreFullSummary = BackupRestoreSummary & {
+  manifest_components?: string[];
+  applied_components?: string[];
+};
+
+export type BackupJob = {
+  id: string;
+  kind: BackupJobKind;
+  status: BackupJobStatus;
+  phase: string | null;
+  progress_pct: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  expires_at: string | null;
+  error_message: string | null;
+  result_summary: BackupRestoreFullSummary | null;
+  file_size: number | null;
+  created_by_username: string | null;
+  cancellable: boolean;
+  downloadable: boolean;
+  components: string[];
 };
 
 export type WebAuthnCredentialSummary = {

@@ -128,6 +128,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     environment: Literal["development", "production", "test"] = "development"
 
+    # Directory used by the admin Backup feature for the working tarball
+    # + extraction tree. A backup can grow to 2-3× the repo's storage
+    # footprint mid-process (encrypted upload + plaintext tar + extracted
+    # tree), which overflows the small tmpfs we mount at /tmp. Pointing
+    # this at a persistent volume keeps the read-only root + tmpfs
+    # lockdown intact while giving the feature room to breathe.
+    backup_tmp_dir: str = "/tmp"
+
     # ------------------------------------------------------------------
     # Computed / helpers
     # ------------------------------------------------------------------

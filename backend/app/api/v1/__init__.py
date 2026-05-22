@@ -6,6 +6,7 @@ from app.api.v1 import (
     apks,
     apps,
     auth,
+    backup,
     categories,
     collaborators,
     deploy_tokens,
@@ -39,6 +40,7 @@ api_router.include_router(apks.router, prefix="/apks", tags=["apks"])
 api_router.include_router(categories.router, prefix="/categories", tags=["categories"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
+api_router.include_router(backup.router, prefix="/admin/backup", tags=["backup"])
 api_router.include_router(feeds.router, prefix="/feed", tags=["feeds"])
 api_router.include_router(stats.router, prefix="/stats", tags=["stats"])
 api_router.include_router(webauthn.me_router, prefix="/me/webauthn", tags=["webauthn"])

@@ -1118,7 +1118,101 @@
       "audit": "Journal d'audit",
       "jobs": "Tâches",
       "scans": "Analyse malware",
+      "backup": "Backup",
       "setupWizard": "Assistant de setup"
+    },
+    "backup": {
+      "title": "Backup & restauration",
+      "subtitle": "Le travail lourd tourne sur le worker arq — la requête retourne immédiatement avec un job_id et la progression remonte ici (et sur la page Tâches).",
+      "list": {
+        "failed": "Impossible de charger l'historique"
+      },
+      "status": {
+        "pending": "En file",
+        "running": "En cours",
+        "ready": "Prêt",
+        "downloaded": "Téléchargé",
+        "done": "Terminé",
+        "failed": "Échec",
+        "cancelled": "Annulé"
+      },
+      "components": {
+        "label": "Quoi inclure",
+        "restoreLabel": "Quoi restaurer",
+        "restoreHint": "Seuls les éléments présents dans le backup sont appliqués — les éléments décochés sont skip même s'ils sont présents.",
+        "noneSelected": "Sélectionne au moins un composant.",
+        "db": {
+          "title": "Base de données",
+          "body": "Utilisateurs, apps, métadonnées APK, journal d'audit, sessions — toutes les lignes du schéma public.",
+          "tag": "DB"
+        },
+        "keystore": {
+          "title": "Clé de signature",
+          "body": "Le keystore PKCS#12 utilisé pour signer l'index F-Droid. Le restaurer change l'empreinte du dépôt.",
+          "tag": "KEYSTORE"
+        },
+        "assets": {
+          "title": "Assets",
+          "body": "Icônes des apps + screenshots. Léger, critique visuellement pour le catalogue.",
+          "tag": "ASSETS"
+        },
+        "apks": {
+          "title": "APKs & index",
+          "body": "Les binaires APK + les fichiers d'index F-Droid générés. Le gros du stockage.",
+          "tag": "APKs"
+        }
+      },
+      "create": {
+        "title": "Créer un backup",
+        "body": "Le worker lance pg_dump + tar l'arborescence storage + bundle le keystore de signature, puis chiffre le tout en AES-256-GCM (KDF scrypt). Le .env (mot de passe DB, mot de passe clé de signature, secret OIDC) n'est PAS inclus — ils restent là où tu les mets.",
+        "passphrase": "Passphrase",
+        "passphrasePlaceholder": "≥ 12 caractères",
+        "passphraseConfirm": "Confirmer la passphrase",
+        "passphraseShort": "La passphrase doit faire au moins 12 caractères",
+        "passphraseMismatch": "Les passphrases ne correspondent pas",
+        "warn": "<b>Sauvegarde la passphrase ailleurs que dans ce backup</b> — sans elle le fichier est irrécupérable. On ne la garde pas côté serveur au-delà du run.",
+        "submit": "Mettre en file",
+        "queueing": "Mise en file…",
+        "enqueued": "Backup mis en file — progression ci-dessous.",
+        "failed": "Échec de la mise en file"
+      },
+      "restore": {
+        "title": "Restaurer depuis un backup",
+        "dangerTitle": "Opération destructive",
+        "dangerBody": "Restaurer efface toutes les tables du schéma public puis réapplique le dump. L'arborescence storage est remplacée intégralement. Les sessions actives sont coupées en cours de requête ; les utilisateurs devront se reconnecter. Pas de undo, et impossible d'annuler une restauration une fois le wipe démarré.",
+        "file": "Fichier de backup chiffré",
+        "passphrase": "Passphrase utilisée à la création",
+        "passphraseRequired": "La passphrase est requise",
+        "fileRequired": "Choisis d'abord le fichier chiffré",
+        "confirmField": "Tape RESTORE pour confirmer",
+        "confirmRequired": "Tape RESTORE dans le champ de confirmation",
+        "lastChance": "Tu es absolument sûr ? Ça écrasera la base actuelle et le storage. Aucun undo.",
+        "submit": "Mettre en file",
+        "queueing": "Upload + mise en file…",
+        "enqueued": "Restauration mise en file — progression ci-dessous.",
+        "failed": "Échec de la mise en file"
+      },
+      "history": {
+        "title": "Jobs récents",
+        "refresh": "Rafraîchir",
+        "empty": "Aucun job de backup ou restauration pour l'instant.",
+        "backupBy": "Backup par {{user}}",
+        "restoreBy": "Restauration par {{user}}",
+        "kindBackup": "backup",
+        "kindRestore": "restore",
+        "download": "Télécharger",
+        "cancel": "Annuler",
+        "cancelConfirm": "Stopper ce job de backup ?",
+        "cancelRequested": "Annulation demandée.",
+        "cancelFailed": "Impossible d'annuler",
+        "downloaded": "Téléchargement lancé.",
+        "downloadFailed": "Échec du téléchargement",
+        "created": "Créé",
+        "completed": "Terminé",
+        "size": "Taille",
+        "expires": "Expire",
+        "restoredFrom": "Restauré depuis le backup créé"
+      }
     },
     "audit": {
       "title": "Journal d'audit",

@@ -11,6 +11,7 @@ from app.models.apk import Apk
 from app.models.apk_scan import ApkScan, ApkScanStatus
 from app.models.audit import DownloadEvent
 from app.models.audit_log import AuditLog
+from app.models.backup_job import BackupJob, BackupJobKind, BackupJobStatus
 from app.models.deploy_token import DeployToken
 from app.models.github_source import GithubProvider, GithubSource, GithubSourceStatus
 from app.models.invite_code import InviteCode
@@ -32,6 +33,9 @@ __all__ = [
     "AppCollaborator",
     "AppScreenshot",
     "AuditLog",
+    "BackupJob",
+    "BackupJobKind",
+    "BackupJobStatus",
     "Category",
     "DeployToken",
     "DownloadEvent",

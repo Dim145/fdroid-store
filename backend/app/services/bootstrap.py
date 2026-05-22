@@ -16,6 +16,7 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     ApiKey,
     App,
     AppCategory,
+    BackupJob,
     Category,
     DeployToken,
     DownloadEvent,
@@ -114,6 +115,11 @@ async def _create_tables_if_needed() -> None:
             # the user to a forced enrolment screen.
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS webauthn_required_admin BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS webauthn_required_uploader BOOLEAN NOT NULL DEFAULT FALSE",
+            # v1.2 — selective backup. Backup rows can now record which
+            # components (db / keystore / assets / apks) were included.
+            # Existing rows default to "all four" so the history view
+            # doesn't render an empty chip set for old jobs.
+            'ALTER TABLE backup_jobs ADD COLUMN IF NOT EXISTS components_json VARCHAR(256) NOT NULL DEFAULT \'["apks","assets","db","keystore"]\'',
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

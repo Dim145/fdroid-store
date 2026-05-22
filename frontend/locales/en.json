@@ -1118,7 +1118,101 @@
       "audit": "Audit log",
       "jobs": "Jobs",
       "scans": "Malware scans",
+      "backup": "Backup",
       "setupWizard": "Setup wizard"
+    },
+    "backup": {
+      "title": "Backup & restore",
+      "subtitle": "Heavy work runs on the arq worker — the request returns immediately with a job id and the progress streams back to this page (and to the Jobs page).",
+      "list": {
+        "failed": "Could not load backup history"
+      },
+      "status": {
+        "pending": "Queued",
+        "running": "Running",
+        "ready": "Ready",
+        "downloaded": "Downloaded",
+        "done": "Done",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "components": {
+        "label": "What to include",
+        "restoreLabel": "What to restore",
+        "restoreHint": "Only items present in the backup are applied — unchecked items are skipped even if present.",
+        "noneSelected": "Pick at least one component.",
+        "db": {
+          "title": "Database",
+          "body": "Users, apps, APK metadata, audit log, sessions — every row in the public schema.",
+          "tag": "DB"
+        },
+        "keystore": {
+          "title": "Signing key",
+          "body": "The PKCS#12 keystore used to sign the F-Droid index. Restoring this changes the repo's fingerprint.",
+          "tag": "KEYSTORE"
+        },
+        "assets": {
+          "title": "Assets",
+          "body": "App icons + screenshots. Light, visually critical for the catalogue.",
+          "tag": "ASSETS"
+        },
+        "apks": {
+          "title": "APKs & index",
+          "body": "The APK binaries themselves plus the generated F-Droid index files. The bulk of the storage footprint.",
+          "tag": "APKs"
+        }
+      },
+      "create": {
+        "title": "Create a backup",
+        "body": "The worker runs pg_dump + tars the storage tree + bundles the signing keystore, then encrypts the whole thing with AES-256-GCM (scrypt KDF). The .env (database password, signing-key password, OIDC secret) is NOT included — those stay where you put them.",
+        "passphrase": "Passphrase",
+        "passphrasePlaceholder": "≥ 12 characters",
+        "passphraseConfirm": "Confirm passphrase",
+        "passphraseShort": "Passphrase must be at least 12 characters",
+        "passphraseMismatch": "Passphrases don't match",
+        "warn": "<b>Save the passphrase outside this backup</b> — without it the file is unrecoverable. We don't store it server-side beyond the run.",
+        "submit": "Queue backup",
+        "queueing": "Queueing…",
+        "enqueued": "Backup queued — progress below.",
+        "failed": "Could not queue backup"
+      },
+      "restore": {
+        "title": "Restore from a backup",
+        "dangerTitle": "Destructive operation",
+        "dangerBody": "Restoring wipes every table in the public schema, then replays the dump. The storage tree is replaced wholesale. Active sessions get terminated mid-request; users will need to sign back in. There's no undo and restores cannot be cancelled once the wipe has started.",
+        "file": "Encrypted backup file",
+        "passphrase": "Passphrase used at backup time",
+        "passphraseRequired": "Passphrase is required",
+        "fileRequired": "Pick the encrypted file first",
+        "confirmField": "Type RESTORE to confirm",
+        "confirmRequired": "Type RESTORE in the confirmation field",
+        "lastChance": "Are you absolutely sure? This will wipe the current database and storage. There is no undo.",
+        "submit": "Queue restore",
+        "queueing": "Uploading + queueing…",
+        "enqueued": "Restore queued — progress below.",
+        "failed": "Could not queue restore"
+      },
+      "history": {
+        "title": "Recent jobs",
+        "refresh": "Refresh",
+        "empty": "No backup or restore jobs yet.",
+        "backupBy": "Backup by {{user}}",
+        "restoreBy": "Restore by {{user}}",
+        "kindBackup": "backup",
+        "kindRestore": "restore",
+        "download": "Download",
+        "cancel": "Cancel",
+        "cancelConfirm": "Stop this backup job?",
+        "cancelRequested": "Cancel requested.",
+        "cancelFailed": "Could not cancel",
+        "downloaded": "Download started.",
+        "downloadFailed": "Download failed",
+        "created": "Created",
+        "completed": "Completed",
+        "size": "Size",
+        "expires": "Expires",
+        "restoredFrom": "Restored from backup created"
+      }
     },
     "audit": {
       "title": "Audit log",

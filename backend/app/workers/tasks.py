@@ -399,20 +399,35 @@ async def shutdown(ctx: dict) -> None:
     log.info("arq worker shutting down")
 
 
+from app.workers.backup_tasks import (
+    cleanup_expired_backups,
+    run_backup_job,
+    run_restore_job,
+)
+
+
 class WorkerSettings:
     functions = [
         rebuild_index,
         scan_apks_periodic,
         scan_github_sources_periodic,
         fetch_github_source,
+        # Admin backup feature — actual work runs out-of-band so the
+        # API stays responsive on multi-GB repos. See
+        # ``app/workers/backup_tasks.py`` for the per-task semantics.
+        run_backup_job,
+        run_restore_job,
+        cleanup_expired_backups,
     ]
     # Run the rescan at 03:00 UTC every day. The function short-circuits
     # at the top when the feature is off, so leaving the cron registered
     # is safe even on deployments that never enable it.
     # GitHub scan runs at 04:00 UTC to spread the load away from clamav.
+    # Backup cleanup runs hourly at :30 (off-peak vs. the scans above).
     cron_jobs = [
         cron(scan_apks_periodic, hour={3}, minute={0}, run_at_startup=False),
         cron(scan_github_sources_periodic, hour={4}, minute={0}, run_at_startup=False),
+        cron(cleanup_expired_backups, minute={30}, run_at_startup=False),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup
@@ -420,7 +435,10 @@ class WorkerSettings:
     # rebuild_index is dedup-coalesced by job_id at enqueue time, so we don't
     # need a high concurrency.
     max_jobs = 2
-    job_timeout = 600
+    # Backups on large repos can run for tens of minutes; bump the timeout
+    # generously so a real-world repo finishes inside one job lifetime.
+    # The cancel flag stays the operator's escape hatch for unresponsive runs.
+    job_timeout = 3600
     # Keep finished-job results in Redis for 24h so the admin "Recent runs"
     # page survives restarts and idle periods. 30s (the prior value) made
     # the history vanish almost immediately after every run.

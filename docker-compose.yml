@@ -81,6 +81,11 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
       GITEA_TOKEN: ${GITEA_TOKEN:-}
+      # Working directory for the admin Backup feature. /tmp is a 512 MB
+      # tmpfs in our lockdown profile; the backup working set can easily
+      # exceed that on real-sized repos. Point at the persistent volume
+      # mounted below so the feature has room to breathe.
+      BACKUP_TMP_DIR: /data/backup-tmp
     # Lock the image down at runtime. ``read_only`` makes the entire root
     # filesystem immutable; the few paths the app legitimately writes to
     # are explicitly enumerated below as tmpfs (ephemeral, sized) or named
@@ -102,6 +107,10 @@ services:
     volumes:
       - storage_data:/data/storage
       - keystore_data:/data/keystores
+      # Working dir for the admin Backup feature (see BACKUP_TMP_DIR
+      # above). The default /tmp is a 512 MB tmpfs, too small for the
+      # backup working set on real-sized repos.
+      - backup_tmp:/data/backup-tmp
     ports:
       - "8000:8000"
     healthcheck:
@@ -130,6 +139,10 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
       GITEA_TOKEN: ${GITEA_TOKEN:-}
+      # Mirror the backend's backup temp dir env so the worker writes
+      # produced tarballs where the backend will later stream them
+      # from. Both bind the same ``backup_tmp`` volume below.
+      BACKUP_TMP_DIR: /data/backup-tmp
     command: ["python", "-m", "arq", "app.workers.tasks.WorkerSettings"]
     read_only: true
     security_opt:
@@ -147,6 +160,9 @@ services:
     volumes:
       - storage_data:/data/storage
       - keystore_data:/data/keystores
+      # Shared with the backend so the worker can write the backup
+      # output where the streaming download endpoint can find it.
+      - backup_tmp:/data/backup-tmp
 
   # Single nginx-served frontend image: static SPA + reverse-proxy to the
   # backend + nginx-served /_protected for X-Accel-Redirect downloads. No
@@ -191,6 +207,10 @@ volumes:
   redis_data:
   storage_data:
   keystore_data:
+  # Holds the in-progress tarball / extraction tree while the admin
+  # Backup feature runs. Wiped opportunistically by the service code;
+  # nothing here survives across restore cycles intentionally.
+  backup_tmp:
   # Persisted across restarts so freshclam doesn't re-download the full
   # signature DB every time the container starts.
   clamav_db:
