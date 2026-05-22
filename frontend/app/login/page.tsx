@@ -1,5 +1,7 @@
 "use client";
 
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import { Fingerprint } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -10,7 +12,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type AuthMethodsInfo } from "@/lib/api";
+import { api, setTokens, type AuthMethodsInfo } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
 
 export default function LoginPage() {
@@ -50,10 +52,18 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  // When set, the password step succeeded and we're waiting for the user
-  // to enter their 6-digit TOTP (or 8-char recovery) code.
+  // When set, the password step succeeded and we're waiting for the
+  // second factor. ``mfaMethod`` chooses between the 6-digit TOTP
+  // prompt and the passkey assertion prompt.
   const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [mfaMethod, setMfaMethod] = useState<"totp" | "webauthn">("totp");
   const [mfaCode, setMfaCode] = useState("");
+  // Forced-passkey enrolment: when set, the password step succeeded
+  // but the user's role is under a force-passkey policy and they have
+  // no credentials yet. The screen renders an enrolment form using
+  // this token; the resulting /finish call mints the actual session.
+  const [enrollmentToken, setEnrollmentToken] = useState<string | null>(null);
+  const [enrollmentLabel, setEnrollmentLabel] = useState("");
   // Only relevant when the SSO target server is in invite mode AND the user
   // expects to create an account through it. Existing OIDC users never need it.
   const [oidcInvite, setOidcInvite] = useState("");
@@ -87,8 +97,12 @@ function LoginForm() {
     try {
       const outcome = await login(email, password);
       if (outcome.kind === "mfa") {
-        // Stash the challenge and render the code-entry step.
         setMfaToken(outcome.mfaToken);
+        setMfaMethod(outcome.method);
+        return;
+      }
+      if (outcome.kind === "enrollment") {
+        setEnrollmentToken(outcome.enrollmentToken);
         return;
       }
       const me = outcome.user;
@@ -111,6 +125,23 @@ function LoginForm() {
     if (!mfaToken) return;
     setError(null); setSubmitting(true);
     try {
+      if (mfaMethod === "webauthn") {
+        const { challenge_token, options } = await api.webauthn.mfaBegin(mfaToken);
+        const cred = await startAuthentication({
+          optionsJSON: options as unknown as Parameters<typeof startAuthentication>[0]["optionsJSON"],
+        });
+        const tokens = await api.webauthn.mfaFinish(mfaToken, challenge_token, cred);
+        setTokens(tokens.access_token, tokens.refresh_token);
+        const me = await api.me();
+        if (me.role === "admin") {
+          try {
+            const status = await api.setup.status();
+            if (!status.setup_complete) { router.replace("/admin/setup"); return; }
+          } catch { /* ignore */ }
+        }
+        router.replace(next);
+        return;
+      }
       const me = await finishMfaLogin(mfaToken, mfaCode.trim());
       if (me.role === "admin") {
         try {
@@ -121,6 +152,75 @@ function LoginForm() {
       router.replace(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invalid code");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function passwordlessLogin() {
+    const id = email.trim();
+    if (!id) {
+      setError(t("auth.login.passkeyIdentifierRequired"));
+      return;
+    }
+    setError(null); setSubmitting(true);
+    try {
+      const { challenge_token, options } = await api.webauthn.loginBegin(id);
+      const cred = await startAuthentication({
+        optionsJSON: options as unknown as Parameters<typeof startAuthentication>[0]["optionsJSON"],
+      });
+      const tokens = await api.webauthn.loginFinish(challenge_token, cred);
+      setTokens(tokens.access_token, tokens.refresh_token);
+      const me = await api.me();
+      if (me.role === "admin") {
+        try {
+          const status = await api.setup.status();
+          if (!status.setup_complete) { router.replace("/admin/setup"); return; }
+        } catch { /* ignore */ }
+      }
+      router.replace(next);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Authentication failed";
+      // Cancel from the browser prompt isn't an error worth surfacing.
+      if (!/cancel|denied|abort|NotAllowed/i.test(msg)) setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onSubmitEnrollment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!enrollmentToken) return;
+    const label = enrollmentLabel.trim() || "Passkey";
+    setError(null); setSubmitting(true);
+    try {
+      const { challenge_token, options } = await api.webauthn.enrollBegin(
+        enrollmentToken,
+        label,
+      );
+      const cred = await startRegistration({
+        optionsJSON: options as unknown as Parameters<typeof startRegistration>[0]["optionsJSON"],
+      });
+      // The backend takes the label off the credential blob too — it
+      // matches the inline UX where the user types a label here.
+      (cred as unknown as { __label__?: string }).__label__ = label;
+      const tokens = await api.webauthn.enrollFinish(
+        enrollmentToken,
+        challenge_token,
+        cred,
+      );
+      setTokens(tokens.access_token, tokens.refresh_token);
+      const me = await api.me();
+      if (me.role === "admin") {
+        try {
+          const status = await api.setup.status();
+          if (!status.setup_complete) { router.replace("/admin/setup"); return; }
+        } catch { /* ignore */ }
+      }
+      router.replace(next);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Enrolment failed";
+      if (!/cancel|denied|abort|NotAllowed/i.test(msg)) setError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -146,7 +246,7 @@ function LoginForm() {
       {error && !methods?.local && (
         <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
       )}
-      {methods?.local && !mfaToken && (
+      {methods?.local && !mfaToken && !enrollmentToken && (
         <form onSubmit={onSubmit} className="space-y-4">
           <Field label={t("auth.login.emailLabel")} htmlFor="email">
             <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -160,10 +260,19 @@ function LoginForm() {
           <Button type="submit" variant="filled" size="xl" className="w-full" disabled={submitting}>
             {submitting ? t("auth.login.submitting") : t("auth.login.submit")}
           </Button>
+          <button
+            type="button"
+            onClick={passwordlessLogin}
+            disabled={submitting}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-outline-soft bg-surface px-4 py-3 text-sm font-medium text-ink hover:bg-surface-2 disabled:opacity-50"
+          >
+            <Fingerprint className="h-4 w-4" />
+            {t("auth.login.passkeySubmit")}
+          </button>
         </form>
       )}
 
-      {mfaToken && (
+      {mfaToken && mfaMethod === "totp" && (
         <form onSubmit={onSubmitMfa} className="space-y-4">
           <p className="text-sm text-ink-soft">{t("auth.login.mfaPrompt")}</p>
           <Field label={t("auth.login.mfaCodeLabel")} htmlFor="mfa-code">
@@ -188,6 +297,69 @@ function LoginForm() {
           <button
             type="button"
             onClick={() => { setMfaToken(null); setMfaCode(""); setError(null); }}
+            className="block w-full text-center text-xs text-ink-mute hover:text-ink"
+          >
+            {t("auth.login.mfaCancel")}
+          </button>
+        </form>
+      )}
+
+      {mfaToken && mfaMethod === "webauthn" && (
+        <form onSubmit={onSubmitMfa} className="space-y-4">
+          <div className="rounded-2xl border border-outline-soft bg-surface-2 px-4 py-4">
+            <div className="mb-2 flex items-center gap-2 text-ink">
+              <Fingerprint className="h-5 w-5 text-primary" />
+              <p className="font-semibold">{t("auth.login.passkeyMfaTitle")}</p>
+            </div>
+            <p className="text-sm text-ink-soft">{t("auth.login.passkeyMfaBody")}</p>
+          </div>
+          {error && (
+            <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
+          )}
+          <Button type="submit" variant="filled" size="xl" className="w-full" disabled={submitting}>
+            <Fingerprint className="h-4 w-4" />
+            {submitting ? t("auth.login.passkeyMfaWaiting") : t("auth.login.passkeyMfaSubmit")}
+          </Button>
+          <button
+            type="button"
+            onClick={() => { setMfaToken(null); setMfaMethod("totp"); setError(null); }}
+            className="block w-full text-center text-xs text-ink-mute hover:text-ink"
+          >
+            {t("auth.login.mfaCancel")}
+          </button>
+        </form>
+      )}
+
+      {enrollmentToken && (
+        <form onSubmit={onSubmitEnrollment} className="space-y-4">
+          <div className="rounded-2xl border border-warning bg-warning-container px-4 py-4 text-sm text-warning-on-container">
+            <div className="mb-1 flex items-center gap-2 font-semibold">
+              <Fingerprint className="h-5 w-5" />
+              {t("auth.login.enrollmentTitle")}
+            </div>
+            <p>{t("auth.login.enrollmentBody")}</p>
+          </div>
+          <Field label={t("auth.login.enrollmentLabelField")} htmlFor="enroll-label">
+            <Input
+              id="enroll-label"
+              autoFocus
+              maxLength={100}
+              placeholder={t("auth.login.enrollmentLabelPlaceholder")}
+              value={enrollmentLabel}
+              onChange={(e) => setEnrollmentLabel(e.target.value)}
+              autoComplete="off"
+            />
+          </Field>
+          {error && (
+            <p className="rounded-xl border border-danger bg-danger-container px-3 py-2 text-sm text-danger-on-container">{error}</p>
+          )}
+          <Button type="submit" variant="filled" size="xl" className="w-full" disabled={submitting}>
+            <Fingerprint className="h-4 w-4" />
+            {submitting ? t("auth.login.enrollmentSubmitting") : t("auth.login.enrollmentSubmit")}
+          </Button>
+          <button
+            type="button"
+            onClick={() => { setEnrollmentToken(null); setEnrollmentLabel(""); setError(null); }}
             className="block w-full text-center text-xs text-ink-mute hover:text-ink"
           >
             {t("auth.login.mfaCancel")}

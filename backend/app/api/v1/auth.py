@@ -17,6 +17,7 @@ from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
 from app.schemas.auth import (
     AuthMethodsInfo,
+    EnrollmentRequired,
     LoginRequest,
     MfaChallenge,
     MfaVerifyRequest,
@@ -122,10 +123,26 @@ async def login(request: Request, payload: LoginRequest, db: DbSession):
         and repo.require_admin_2fa
         and user.role == UserRole.ADMIN
     )
+    # WebAuthn takes precedence over TOTP when at least one passkey is
+    # registered (modern + phishing-resistant). The same ``mfa_token``
+    # is consumable by both endpoints, so the SPA can offer a fallback
+    # link if needed.
+    from app.api.v1.webauthn import passkey_login_state
+
+    pk_state = await passkey_login_state(db, user, repo)
+    if pk_state["action"] == "enrollment_required":
+        return EnrollmentRequired(enrollment_token=pk_state["token"])
+    if pk_state["action"] == "mfa_passkey":
+        return MfaChallenge(
+            mfa_required=True,
+            mfa_token=create_mfa_challenge_token(str(user.id)),
+            method="webauthn",
+        )
     if enrolled or admin_must_mfa:
         return MfaChallenge(
             mfa_required=True,
             mfa_token=create_mfa_challenge_token(str(user.id)),
+            method="totp",
         )
 
     access, refresh = await issue_tokens_for_user(

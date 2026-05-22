@@ -305,9 +305,20 @@ export type MfaChallenge = {
   mfa_required: true;
   mfa_token: string;
   expires_in: number;
+  /** "totp" — prompt for a 6-digit code (or recovery code) against
+   *  /auth/login/mfa. "webauthn" — prompt for a passkey assertion via
+   *  /auth/webauthn/mfa/begin + /finish. Defaults to "totp" when the
+   *  field is missing (older backends). */
+  method?: "totp" | "webauthn";
 };
 
-export type LoginResponse = TokenPair | MfaChallenge;
+export type EnrollmentRequired = {
+  enrollment_required: true;
+  enrollment_token: string;
+  expires_in: number;
+};
+
+export type LoginResponse = TokenPair | MfaChallenge | EnrollmentRequired;
 
 export const api = {
   authMethods: () => apiFetch<AuthMethodsInfo>("/api/v1/auth/methods", { anonymous: true }),
@@ -594,6 +605,59 @@ export const api = {
       apiFetch<void>("/api/v1/me/totp/disable", {
         method: "POST",
         body: JSON.stringify({ password }),
+      }),
+  },
+
+  // ---------- WebAuthn / passkeys ----------
+  webauthn: {
+    list: () => apiFetch<{ items: WebAuthnCredentialSummary[] }>("/api/v1/me/webauthn/credentials"),
+    registerBegin: (label: string) =>
+      apiFetch<WebAuthnRegisterBegin>("/api/v1/me/webauthn/register/begin", {
+        method: "POST",
+        body: JSON.stringify({ label }),
+      }),
+    registerFinish: (challenge_token: string, credential: unknown) =>
+      apiFetch<WebAuthnCredentialSummary>("/api/v1/me/webauthn/register/finish", {
+        method: "POST",
+        body: JSON.stringify({ challenge_token, credential }),
+      }),
+    revoke: (id: string) =>
+      apiFetch<void>(`/api/v1/me/webauthn/credentials/${id}`, { method: "DELETE" }),
+    loginBegin: (identifier: string) =>
+      apiFetch<WebAuthnRegisterBegin>("/api/v1/auth/webauthn/login/begin", {
+        method: "POST",
+        anonymous: true,
+        body: JSON.stringify({ identifier }),
+      }),
+    loginFinish: (challenge_token: string, credential: unknown) =>
+      apiFetch<TokenPair>("/api/v1/auth/webauthn/login/finish", {
+        method: "POST",
+        anonymous: true,
+        body: JSON.stringify({ challenge_token, credential }),
+      }),
+    mfaBegin: (mfa_token: string) =>
+      apiFetch<WebAuthnRegisterBegin>("/api/v1/auth/webauthn/mfa/begin", {
+        method: "POST",
+        anonymous: true,
+        body: JSON.stringify({ mfa_token }),
+      }),
+    mfaFinish: (mfa_token: string, challenge_token: string, credential: unknown) =>
+      apiFetch<TokenPair>("/api/v1/auth/webauthn/mfa/finish", {
+        method: "POST",
+        anonymous: true,
+        body: JSON.stringify({ mfa_token, challenge_token, credential }),
+      }),
+    enrollBegin: (enrollment_token: string, label: string) =>
+      apiFetch<WebAuthnRegisterBegin>("/api/v1/auth/webauthn/enroll/begin", {
+        method: "POST",
+        anonymous: true,
+        body: JSON.stringify({ enrollment_token, label }),
+      }),
+    enrollFinish: (enrollment_token: string, challenge_token: string, credential: unknown) =>
+      apiFetch<TokenPair>("/api/v1/auth/webauthn/enroll/finish", {
+        method: "POST",
+        anonymous: true,
+        body: JSON.stringify({ enrollment_token, challenge_token, credential }),
       }),
   },
 
@@ -1122,6 +1186,12 @@ export type RepoConfigInfo = {
    *  callers. The endpoint is still auth-gated when ``public_mode``
    *  is off — a private repo always requires login. */
   public_stats?: boolean;
+  /** Force-passkey policy toggles. When ``true`` for a role, accounts
+   *  in that role MUST have at least one registered passkey to sign
+   *  in. Users without one are routed through a forced-enrolment
+   *  screen after the password step. */
+  webauthn_required_admin?: boolean;
+  webauthn_required_uploader?: boolean;
 };
 
 /** Aggregate stats payload returned by ``GET /api/v1/stats``. The
@@ -1264,6 +1334,22 @@ export type TotpSetup = {
   secret: string;
   provisioning_uri: string;
   qr_data_uri: string;
+};
+
+export type WebAuthnCredentialSummary = {
+  id: string;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+  transports: string[];
+};
+
+export type WebAuthnRegisterBegin = {
+  challenge_token: string;
+  // Mirrors the WebAuthn spec's PublicKeyCredentialCreationOptionsJSON /
+  // PublicKeyCredentialRequestOptionsJSON — opaque at the API client
+  // level; the page hands it straight to @simplewebauthn/browser.
+  options: Record<string, unknown>;
 };
 
 export type AppCollaborator = {

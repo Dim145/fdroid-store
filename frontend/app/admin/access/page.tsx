@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Check, Copy, Globe, KeyRound, Lock, Plus, ShieldCheck, Trash2, UsersRound } from "lucide-react";
+import { BarChart3, Check, Copy, Fingerprint, Globe, KeyRound, Lock, Plus, ShieldCheck, Trash2, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -33,7 +33,7 @@ export default function AdminAccessPage() {
   }
   useEffect(() => { refreshAll(); /* eslint-disable-next-line */ }, []);
 
-  async function patchRepo(patch: Partial<Pick<RepoConfigInfo, "public_mode" | "registration_policy" | "public_stats">>) {
+  async function patchRepo(patch: Partial<Pick<RepoConfigInfo, "public_mode" | "registration_policy" | "public_stats" | "webauthn_required_admin" | "webauthn_required_uploader">>) {
     if (!repo) return;
     setErr(null); setMsg(null);
     const next = { ...repo, ...patch };
@@ -178,6 +178,57 @@ export default function AdminAccessPage() {
             {t("admin.access.publicStatsNoteWhenPrivate")}
           </p>
         )}
+      </section>
+
+      {/* ── Passkey enforcement ── */}
+      <section className="surface p-6">
+        <h2 className="mb-1 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
+          <Fingerprint className="h-5 w-5" /> {t("admin.access.passkeyPolicy")}
+        </h2>
+        <p className="mb-2 text-sm text-ink-soft">
+          {t("admin.access.passkeyPolicyBody")}
+        </p>
+        <p className="mb-5 text-xs text-ink-mute">
+          {t("admin.access.passkeyPolicyOidcNote")}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <RadioCardGroup<boolean>
+            value={!!repo.webauthn_required_admin}
+            onChange={(v) => patchRepo({ webauthn_required_admin: v })}
+            options={[
+              {
+                value: false,
+                icon: <KeyRound className="h-5 w-5" />,
+                title: t("admin.access.passkeyAdminOffTitle"),
+                subtitle: t("admin.access.passkeyAdminOffSubtitle"),
+              },
+              {
+                value: true,
+                icon: <Fingerprint className="h-5 w-5" />,
+                title: t("admin.access.passkeyAdminOnTitle"),
+                subtitle: t("admin.access.passkeyAdminOnSubtitle"),
+              },
+            ]}
+          />
+          <RadioCardGroup<boolean>
+            value={!!repo.webauthn_required_uploader}
+            onChange={(v) => patchRepo({ webauthn_required_uploader: v })}
+            options={[
+              {
+                value: false,
+                icon: <KeyRound className="h-5 w-5" />,
+                title: t("admin.access.passkeyUploaderOffTitle"),
+                subtitle: t("admin.access.passkeyUploaderOffSubtitle"),
+              },
+              {
+                value: true,
+                icon: <Fingerprint className="h-5 w-5" />,
+                title: t("admin.access.passkeyUploaderOnTitle"),
+                subtitle: t("admin.access.passkeyUploaderOnSubtitle"),
+              },
+            ]}
+          />
+        </div>
       </section>
 
       {/* ── Invite codes ── */}

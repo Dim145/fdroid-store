@@ -18,6 +18,7 @@ from app.api.v1 import (
     stats,
     totp,
     users,
+    webauthn,
 )
 
 api_router = APIRouter()
@@ -40,3 +41,5 @@ api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 api_router.include_router(feeds.router, prefix="/feed", tags=["feeds"])
 api_router.include_router(stats.router, prefix="/stats", tags=["stats"])
+api_router.include_router(webauthn.me_router, prefix="/me/webauthn", tags=["webauthn"])
+api_router.include_router(webauthn.auth_router, prefix="/auth/webauthn", tags=["webauthn"])

@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   EyeOff,
+  Fingerprint,
   Globe2,
   Key,
   KeyRound,
@@ -17,7 +18,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
-import { QuotaUsageSection, SessionsSection, TotpSection } from "@/components/account-security";
+import { PasskeysSection, QuotaUsageSection, SessionsSection, TotpSection } from "@/components/account-security";
 import { AuthGuard } from "@/components/auth-guard";
 import { RepoQrCode } from "@/components/repo-qr-code";
 import { Badge } from "@/components/ui/badge";
@@ -715,6 +716,13 @@ function SecurityPane({ user }: { user: CurrentUser }) {
         title={t("account.sections.totp")}
       >
         <TotpSection />
+      </Card>
+
+      <Card
+        icon={<Fingerprint className="h-4 w-4" />}
+        title={t("account.sections.passkeys")}
+      >
+        <PasskeysSection />
       </Card>
 
       <Card

@@ -13,10 +13,16 @@ import { pushTokenToSW, registerMediaSW } from "@/lib/media-sw";
 
 /** Resolved login outcome. ``user`` is set on success; ``mfaToken`` is set
  *  when the password check passed but a second factor is required — the
- *  login page then renders a code input and calls ``finishMfaLogin``. */
+ *  login page then renders a code input and calls ``finishMfaLogin``. The
+ *  ``method`` on the MFA branch tells the page whether to prompt for a
+ *  6-digit code (TOTP) or run a passkey assertion. The ``enrollment``
+ *  branch fires when the user's role is under a force-passkey policy but
+ *  they haven't registered one yet — the page redirects to the forced
+ *  enrolment screen with the enrolment token. */
 export type LoginOutcome =
   | { kind: "ok"; user: CurrentUser }
-  | { kind: "mfa"; mfaToken: string };
+  | { kind: "mfa"; mfaToken: string; method: "totp" | "webauthn" }
+  | { kind: "enrollment"; enrollmentToken: string };
 
 type AuthState = {
   user: CurrentUser | null;
@@ -57,7 +63,17 @@ export const useAuth = create<AuthState>((set) => ({
     if ("mfa_required" in res) {
       // No tokens minted yet — the page collects the second factor and
       // calls ``finishMfaLogin``.
-      return { kind: "mfa", mfaToken: res.mfa_token };
+      return {
+        kind: "mfa",
+        mfaToken: res.mfa_token,
+        method: (res.method ?? "totp") as "totp" | "webauthn",
+      };
+    }
+    if ("enrollment_required" in res) {
+      // Role-policy demands a passkey but the account has none — the
+      // page must route to the forced-enrolment screen with this
+      // token. No tokens are minted yet; that happens after enrolment.
+      return { kind: "enrollment", enrollmentToken: res.enrollment_token };
     }
     setTokens(res.access_token, res.refresh_token);
     pushTokenToSW();

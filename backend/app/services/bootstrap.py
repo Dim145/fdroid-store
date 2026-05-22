@@ -26,6 +26,7 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     RefreshToken,
     RepoConfig,
     User,
+    WebAuthnCredential,
 )
 from app.models.user import AuthProvider, UserRole
 from app.storage import get_storage
@@ -106,6 +107,13 @@ async def _create_tables_if_needed() -> None:
             # v1.2 — admin-controlled flag exposing the /stats page to
             # anonymous callers. Off by default to stay conservative.
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS public_stats BOOLEAN NOT NULL DEFAULT FALSE",
+            # v1.2 — per-role WebAuthn enrolment requirement. Both default
+            # OFF so existing deployments keep working; admins flip them
+            # in /admin/access. The login flow consults these and either
+            # demands an assertion (when the user has passkeys) or routes
+            # the user to a forced enrolment screen.
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS webauthn_required_admin BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS webauthn_required_uploader BOOLEAN NOT NULL DEFAULT FALSE",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

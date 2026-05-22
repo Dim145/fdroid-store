@@ -45,6 +45,11 @@ class RepoConfigRead(BaseModel):
     clamav_scan_periodic: bool = False
     require_admin_2fa: bool = False
     public_stats: bool = False
+    # Per-role WebAuthn enrolment requirements. When True for a role, every
+    # account in that role MUST have a registered passkey to log in (forced
+    # enrolment is offered at first login after the toggle flips).
+    webauthn_required_admin: bool = False
+    webauthn_required_uploader: bool = False
 
 
 class RepoConfigUpdate(BaseModel):
@@ -80,6 +85,10 @@ class RepoConfigUpdate(BaseModel):
     # ``public_mode`` (which gates the catalogue); when the catalogue is
     # private, /stats is also auth-gated regardless of this flag.
     public_stats: bool | None = None
+    # Per-role passkey-mandatory toggles. None = leave alone, True/False =
+    # set explicitly.
+    webauthn_required_admin: bool | None = None
+    webauthn_required_uploader: bool | None = None
 
 
 class SetupStatus(BaseModel):

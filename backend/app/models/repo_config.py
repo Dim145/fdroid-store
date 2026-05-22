@@ -106,6 +106,19 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
         Boolean, default=False, nullable=False
     )
 
+    # WebAuthn / passkey enrolment requirements per role. When True, the
+    # corresponding role MUST have at least one registered passkey to log
+    # in. Accounts caught between the toggle flip and their first
+    # enrolment receive a short-lived ``enrollment_required`` token at
+    # the post-password step (see app/api/v1/auth.py) and are redirected
+    # to the passkey set-up screen before any session is minted.
+    webauthn_required_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    webauthn_required_uploader: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
     @property
     def mirrors(self) -> list[str]:
         """Decoded view of ``mirrors_json`` for serializers + the index builder."""

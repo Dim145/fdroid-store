@@ -551,6 +551,10 @@ async def update_repo_config(
         config.require_admin_2fa = payload.require_admin_2fa
     if payload.public_stats is not None:
         config.public_stats = payload.public_stats
+    if payload.webauthn_required_admin is not None:
+        config.webauthn_required_admin = payload.webauthn_required_admin
+    if payload.webauthn_required_uploader is not None:
+        config.webauthn_required_uploader = payload.webauthn_required_uploader
     await write_event(
         db,
         action="repo.config_updated",

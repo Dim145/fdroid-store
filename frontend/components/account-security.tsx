@@ -1,6 +1,7 @@
 "use client";
 
-import { Activity, Globe, KeyRound, Monitor, RotateCw, ShieldCheck, ShieldOff, Trash2 } from "lucide-react";
+import { Activity, Fingerprint, Globe, KeyRound, Monitor, RotateCw, ShieldCheck, ShieldOff, Trash2 } from "lucide-react";
+import { startRegistration } from "@simplewebauthn/browser";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -8,7 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type QuotaUsage, type TotpStatus, type UserSession } from "@/lib/api";
+import { api, type QuotaUsage, type TotpStatus, type UserSession, type WebAuthnCredentialSummary } from "@/lib/api";
+import { useAuth } from "@/lib/auth-store";
 import { toast } from "@/lib/toast-store";
 import { formatBytes, formatDate } from "@/lib/utils";
 
@@ -399,6 +401,151 @@ export function TotpSection() {
       <Button variant="filled" onClick={startSetup} disabled={busy}>
         <KeyRound className="h-4 w-4" /> {busy ? t("common.loading") : t("account.totp.enable")}
       </Button>
+    </div>
+  );
+}
+
+
+/* -------------------------------------------------------------------------- */
+/*  Passkeys (WebAuthn)                                                        */
+/* -------------------------------------------------------------------------- */
+
+export function PasskeysSection() {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const [rows, setRows] = useState<WebAuthnCredentialSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
+
+  async function reload() {
+    setLoading(true);
+    try {
+      const res = await api.webauthn.list();
+      setRows(res.items);
+    } catch (e) {
+      toast.error(t("account.passkeys.loadFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  async function register() {
+    const trimmed = label.trim();
+    if (!trimmed) {
+      toast.error(t("account.passkeys.labelRequired"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const { challenge_token, options } = await api.webauthn.registerBegin(trimmed);
+      // @simplewebauthn/browser parses + drives navigator.credentials.create
+      // and returns the registration response in the JSON shape py_webauthn
+      // expects on the verify side — no manual base64url plumbing needed.
+      const cred = await startRegistration({ optionsJSON: options as unknown as Parameters<typeof startRegistration>[0]["optionsJSON"] });
+      await api.webauthn.registerFinish(challenge_token, cred);
+      toast.success(t("account.passkeys.added"));
+      setLabel("");
+      await reload();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      // Cancelled the browser prompt — silent. Anything else is an error
+      // worth surfacing.
+      if (!/cancel|denied|abort|NotAllowed/i.test(msg)) {
+        toast.error(t("account.passkeys.addFailed"), msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(id: string) {
+    if (!confirm(t("account.passkeys.revokeConfirm"))) return;
+    setRevoking(id);
+    try {
+      await api.webauthn.revoke(id);
+      toast.success(t("account.passkeys.revoked"));
+      await reload();
+    } catch (e) {
+      toast.error(t("account.passkeys.revokeFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setRevoking(null);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-ink-soft">{t("account.passkeys.body")}</p>
+      {user?.auth_provider === "oidc" && (
+        <p className="rounded-2xl border border-outline-soft bg-surface-2 px-4 py-3 text-xs text-ink-soft">
+          {t("account.passkeys.oidcNote")}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div className="flex-1">
+          <Label htmlFor="passkey-label" className="text-[10px] uppercase tracking-wider text-ink-mute">
+            {t("account.passkeys.labelField")}
+          </Label>
+          <Input
+            id="passkey-label"
+            value={label}
+            placeholder={t("account.passkeys.labelPlaceholder")}
+            onChange={(e) => setLabel(e.target.value)}
+            disabled={busy}
+            maxLength={100}
+            autoComplete="off"
+          />
+        </div>
+        <Button variant="filled" size="sm" disabled={busy} onClick={register}>
+          <Fingerprint className="h-4 w-4" />
+          {busy ? t("account.passkeys.adding") : t("account.passkeys.add")}
+        </Button>
+      </div>
+
+      {loading ? (
+        <p className="text-sm italic text-ink-mute">{t("common.loading")}</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm italic text-ink-mute">{t("account.passkeys.none")}</p>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((cred) => (
+            <li
+              key={cred.id}
+              className="flex items-center justify-between gap-3 rounded-2xl border border-outline-soft bg-surface-2 px-4 py-3"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Fingerprint className="h-3.5 w-3.5 text-primary" />
+                  <p className="truncate text-sm font-medium text-ink">{cred.label}</p>
+                  {cred.transports.length > 0 && (
+                    <span className="text-[10px] uppercase tracking-wider text-ink-mute">
+                      {cred.transports.join(" · ")}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[11px] text-ink-mute">
+                  {t("account.passkeys.created", { date: formatDate(cred.created_at) })}
+                  {cred.last_used_at && (
+                    <> · {t("account.passkeys.lastUsed", { date: formatDate(cred.last_used_at) })}</>
+                  )}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => revoke(cred.id)}
+                disabled={revoking === cred.id}
+                aria-label={t("account.passkeys.revoke")}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

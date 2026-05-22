@@ -20,6 +20,7 @@ from app.models.repo_config import RepoConfig
 from app.models.user import User
 from app.models.user_session import UserSession
 from app.models.user_totp import UserTotp
+from app.models.webauthn_credential import WebAuthnCredential
 
 __all__ = [
     "Apk",
@@ -45,4 +46,5 @@ __all__ = [
     "User",
     "UserSession",
     "UserTotp",
+    "WebAuthnCredential",
 ]

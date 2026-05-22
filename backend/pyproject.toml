@@ -57,6 +57,11 @@ dependencies = [
     # QR code rendering for the TOTP enrolment screen. Tiny pure-Python
     # dep, no native bindings.
     "qrcode[pil]>=8.0",
+    # WebAuthn / FIDO2 server-side: option generation, registration +
+    # assertion verification. Maintained by Duo Labs, the FIDO Alliance
+    # reference Python implementation. Pairs with @simplewebauthn/browser
+    # on the frontend.
+    "webauthn>=2.5",
 ]
 
 [project.optional-dependencies]
