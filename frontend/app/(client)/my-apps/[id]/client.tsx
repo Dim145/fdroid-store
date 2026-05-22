@@ -1201,7 +1201,7 @@ function RetentionAdminOverride({
   return (
     <form
       onSubmit={save}
-      className="mb-4 flex flex-wrap items-end gap-3 rounded-2xl border border-dashed border-outline px-4 py-3"
+      className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-dashed border-outline px-4 py-3"
     >
       <div className="flex basis-full flex-wrap items-center gap-2">
         <span className="font-mono text-[10px] uppercase tracking-wider text-ink-mute">
@@ -1217,21 +1217,25 @@ function RetentionAdminOverride({
           </span>
         </span>
       </div>
-      <div className="min-w-[10rem] flex-1 space-y-1">
-        <Label htmlFor="ret-override" className="text-xs font-medium text-ink-soft">
-          {t("myApps.edit.versions.retentionOverrideLabel")}
-        </Label>
-        <Input
-          id="ret-override"
-          type="number"
-          min={0}
-          inputMode="numeric"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder={t("myApps.edit.versions.retentionOverridePlaceholder")}
-        />
-      </div>
-      <Button type="submit" variant="outlined" size="sm" disabled={busy}>
+      {/* Label is its own ``basis-full`` row so Input + Button stay
+          siblings of the same flex line — combined with the form's
+          ``items-center``, the button now centres against the input's
+          midline (not against the [Label + Input] column's midline,
+          which left it visually floating against the label). */}
+      <Label htmlFor="ret-override" className="block basis-full text-xs font-medium text-ink-soft">
+        {t("myApps.edit.versions.retentionOverrideLabel")}
+      </Label>
+      <Input
+        id="ret-override"
+        type="number"
+        min={0}
+        inputMode="numeric"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={t("myApps.edit.versions.retentionOverridePlaceholder")}
+        className="min-w-[10rem] flex-1"
+      />
+      <Button type="submit" variant="outlined" size="sm" disabled={busy} className="shrink-0">
         {busy ? t("common.saving") : t("common.save")}
       </Button>
       <p className="basis-full text-[11px] text-ink-mute">
