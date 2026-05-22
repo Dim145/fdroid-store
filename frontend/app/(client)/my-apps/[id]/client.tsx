@@ -20,7 +20,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { ArrowLeft, Bug, CheckCircle2, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, Upload, X, XCircle } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
@@ -123,9 +123,33 @@ function ManageAppInner() {
   const [savingApkId, setSavingApkId] = useState<string | null>(null);
 
   // Drives the editorial sidebar — the rail highlights whichever section
-  // is currently dominating the viewport, and click-scroll falls back to
-  // a smooth jump for keyboard users.
+  // is currently dominating the viewport, click-scroll falls back to a
+  // smooth jump for keyboard users, and the active section is mirrored
+  // into ``location.hash`` so a refresh (or a deep-link from a "Continue
+  // editing" toast) restores the user's scroll position.
   const [activeSection, setActiveSection] = useState<string>("listing");
+
+  // Suppress observer-driven hash updates while a programmatic smooth
+  // scroll is in flight. Without this, clicking "Versions" briefly shows
+  // ``#fiche`` → ``#captures`` → ``#versions`` in the URL bar as the
+  // intermediate sections cross the live band — distracting and noisy
+  // in the browser history (even with replaceState the visual flicker
+  // is unpleasant). 800 ms covers the smooth scroll on this page; after
+  // the lock expires the observer takes over normally.
+  const programmaticScrollRef = useRef<number>(0);
+
+  // Helper kept inline because it's used by both the click path and the
+  // initial-hash effect. ``smooth`` is on for clicks (user-driven) and
+  // off for the mount effect (we want to land at the section without an
+  // animated scroll-from-top on a fresh page load).
+  const writeHashRef = useRef<(key: string) => void>(() => {});
+  writeHashRef.current = (key: string) => {
+    const desired = `#${key}`;
+    if (typeof window !== "undefined" && window.location.hash !== desired) {
+      window.history.replaceState(null, "", desired);
+    }
+  };
+
   useEffect(() => {
     if (!app) return;
     const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-section]"));
@@ -141,13 +165,72 @@ function ManageAppInner() {
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
         if (visible[0]?.target) {
           const key = (visible[0].target as HTMLElement).dataset.section;
-          if (key) setActiveSection(key);
+          if (!key) return;
+          setActiveSection(key);
+          // Only sync the URL when we're not in the middle of a click-
+          // driven smooth scroll. See ``programmaticScrollRef`` above.
+          if (Date.now() - programmaticScrollRef.current > 800) {
+            writeHashRef.current(key);
+          }
         }
       },
       { rootMargin: "-30% 0px -55% 0px", threshold: 0 },
     );
     for (const n of nodes) observer.observe(n);
     return () => observer.disconnect();
+  }, [app?.id]);
+
+  // On first load (or when the user pastes a deep-link URL), jump to
+  // whichever section the hash names. Runs after ``app`` resolves so
+  // the section nodes are actually in the DOM.
+  //
+  // The page above the target is image-heavy (screenshots grid, banner
+  // thumbs, app icon) and the images load async — so the target section
+  // keeps shifting downward in the seconds after the initial paint.
+  // ResizeObserver isn't reliable here because most thumbnails use
+  // fixed-size containers, so their parent sections never actually
+  // resize when the image bytes arrive. We poll every 50 ms for up to
+  // 1.5 s instead: re-scrolling if the target's absolute position has
+  // moved since the last tick, stopping early once we've had three
+  // consecutive ticks at a stable position.
+  useEffect(() => {
+    if (!app) return;
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash.replace(/^#/, "");
+    if (!/^[a-z][a-z0-9_-]*$/i.test(hash)) return;
+    const el = document.querySelector<HTMLElement>(
+      `[data-section="${hash}"]`,
+    );
+    if (!el) return;
+    setActiveSection(hash);
+
+    let lastTop = -1;
+    let stable = 0;
+    const deadline = Date.now() + 1500;
+    const tick = () => {
+      const rect = el.getBoundingClientRect();
+      const absTop = rect.top + window.scrollY;
+      if (absTop !== lastTop) {
+        // Target moved (images loading above, or first run). Realign
+        // and bump the observer suppression window so the rail's URL
+        // mirror doesn't briefly latch onto an intermediate section.
+        window.scrollTo({ top: absTop - 80, behavior: "auto" });
+        programmaticScrollRef.current = Date.now();
+        lastTop = absTop;
+        stable = 0;
+      } else {
+        stable += 1;
+      }
+      // Three consecutive stable ticks (~150 ms) means images above
+      // the target have settled — stop polling.
+      if (stable >= 3 || Date.now() > deadline) {
+        window.clearInterval(intervalId);
+      }
+    };
+    const intervalId = window.setInterval(tick, 50);
+    tick(); // run once immediately so the first paint already starts in the right place
+
+    return () => window.clearInterval(intervalId);
   }, [app?.id]);
 
   function scrollToSection(key: string) {
@@ -158,6 +241,8 @@ function ManageAppInner() {
       const top = el.getBoundingClientRect().top + window.scrollY - 80;
       window.scrollTo({ top, behavior: "smooth" });
       setActiveSection(key);
+      writeHashRef.current(key);
+      programmaticScrollRef.current = Date.now();
     }
   }
 
@@ -1135,7 +1220,11 @@ function Rail({
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{s.label}</span>
                   {isActive && (
-                    <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-primary" />
+                    // ``self-center`` overrides the row's ``items-baseline``
+                    // (used to align the step number with the label). An
+                    // empty span has no text baseline, so the default lands
+                    // it on the row's bottom edge — visibly off-centre.
+                    <span aria-hidden className="h-1.5 w-1.5 shrink-0 self-center rounded-full bg-primary" />
                   )}
                 </button>
               </li>
