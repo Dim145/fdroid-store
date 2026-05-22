@@ -24,15 +24,22 @@ from __future__ import annotations
 
 import html
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession
+from app.api.deps import (
+    DbSession,
+    get_api_key_from_basic_auth,
+    get_current_user_optional,
+)
+from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, AppVisibility, Category
+from app.models.api_key import ApiKey
 from app.models.repo_config import RepoConfig
+from app.models.user import User, UserRole
 
 router = APIRouter()
 
@@ -249,6 +256,181 @@ async def feed_updates(
     else:
         entries = "".join(_atom_entry(a, base, _ts(a), "Updated: ") for a in apps)
         body = _wrap_atom("App updates", self_url, entries)
+        feed_media = "application/atom+xml; charset=utf-8"
+    media = "application/xml; charset=utf-8" if _wants_inline_xml(request) else feed_media
+    return Response(content=body, media_type=media)
+
+
+# --------------------------------------------------------------------------
+# Per-app release feed
+# --------------------------------------------------------------------------
+# Subscribes a feed reader to one specific app's release stream. Unlike the
+# catalogue-wide ``/feed/new`` and ``/feed/updates`` which list APPS, this
+# endpoint emits one entry per PUBLISHED APK of a given package — the user
+# gets a notification whenever the owner pushes a new version, with the
+# changelog body included if one was set.
+#
+# Private apps are reachable too, but only by a credential that legitimately
+# sees the underlying app:
+#   * API key in HTTP Basic — the same Basic-auth path the F-Droid client uses
+#     for private repos. Lets the user paste a URL like
+#     ``https://user:apikey@host/api/v1/feed/apps/com.foo`` into their reader.
+#   * JWT bearer — the SPA session token, for the case where the SPA
+#     surfaces a clickable "Subscribe" link from the edit page.
+# Anonymous calls to a private-app feed get the same 401 as the index path,
+# with ``WWW-Authenticate: Basic`` so the reader prompts for credentials.
+
+
+def _apk_atom_entry(app: App, apk: Apk, base: str) -> str:
+    """One ``<entry>`` per published APK. Title = ``<app> v<name> (<code>)``,
+    body = the en-US changelog if any, link = the public app detail page."""
+    title = f"{app.name} v{apk.version_name} ({apk.version_code})"
+    note = ""
+    if isinstance(apk.whats_new, dict):
+        # ``whats_new`` is the per-locale dict; pick en-US first, then any
+        # locale that happens to have content.
+        for loc in ("en-US", "en", *apk.whats_new.keys()):
+            v = apk.whats_new.get(loc)
+            if isinstance(v, str) and v.strip():
+                note = v.strip()
+                break
+    when = apk.created_at
+    link = f"{base}/apps/{app.package_name}" if base else f"/apps/{app.package_name}"
+    return (
+        "  <entry>\n"
+        f"    <title>{_xml_escape(title)}</title>\n"
+        f"    <id>urn:fdroid-store:apk:{_xml_escape(str(apk.id))}</id>\n"
+        f"    <updated>{when.strftime('%Y-%m-%dT%H:%M:%SZ')}</updated>\n"
+        f"    <link rel=\"alternate\" href=\"{_xml_escape(link)}\"/>\n"
+        f"    <summary>{_xml_escape(note)}</summary>\n"
+        "  </entry>\n"
+    )
+
+
+def _apk_rss_item(app: App, apk: Apk, base: str) -> str:
+    title = f"{app.name} v{apk.version_name} ({apk.version_code})"
+    note = ""
+    if isinstance(apk.whats_new, dict):
+        for loc in ("en-US", "en", *apk.whats_new.keys()):
+            v = apk.whats_new.get(loc)
+            if isinstance(v, str) and v.strip():
+                note = v.strip()
+                break
+    when = apk.created_at
+    link = f"{base}/apps/{app.package_name}" if base else f"/apps/{app.package_name}"
+    pub = when.strftime("%a, %d %b %Y %H:%M:%S +0000")
+    return (
+        "    <item>\n"
+        f"      <title>{_xml_escape(title)}</title>\n"
+        f"      <link>{_xml_escape(link)}</link>\n"
+        f"      <guid isPermaLink=\"false\">urn:fdroid-store:apk:{_xml_escape(str(apk.id))}</guid>\n"
+        f"      <pubDate>{pub}</pubDate>\n"
+        f"      <description>{_xml_escape(note)}</description>\n"
+        "    </item>\n"
+    )
+
+
+async def _can_see_private_app(
+    db,
+    app: App,
+    viewer: User | None,
+    api_key: ApiKey | None,
+) -> bool:
+    """The same gate as ``/fdroid/repo/*`` for private assets: admin OR
+    owner OR collaborator OR matching API key. There's no eager
+    ``App.collaborators`` relationship in the model, so we issue a
+    dedicated ``SELECT 1 FROM app_collaborators`` when needed."""
+    candidate_user_id = None
+    if viewer is not None:
+        if viewer.role == UserRole.ADMIN:
+            return True
+        candidate_user_id = viewer.id
+    elif api_key is not None and api_key.user_id is not None:
+        # ``api_key.user`` is lazy and we're in async land — load the role
+        # explicitly via a scalar query rather than the attribute access.
+        api_user = (
+            await db.execute(select(User).where(User.id == api_key.user_id))
+        ).scalar_one_or_none()
+        if api_user is None:
+            return False
+        if api_user.role == UserRole.ADMIN:
+            return True
+        candidate_user_id = api_user.id
+    if candidate_user_id is None:
+        return False
+    if app.owner_id is not None and app.owner_id == candidate_user_id:
+        return True
+    from app.models.app_collaborator import AppCollaborator
+    row = (
+        await db.execute(
+            select(AppCollaborator.id).where(
+                AppCollaborator.app_id == app.id,
+                AppCollaborator.user_id == candidate_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+@router.get("/apps/{package_name}")
+async def feed_app_releases(
+    package_name: str,
+    db: DbSession,
+    request: Request,
+    viewer: Annotated[User | None, Depends(get_current_user_optional)],
+    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)],
+    format: Literal["atom", "rss"] = Query(default="atom"),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> Response:
+    """Release feed for one app — one entry per published APK, desc by
+    version_code. Returns 404 for an unknown package so an attacker can't
+    use the endpoint to enumerate private package names."""
+    from sqlalchemy.orm import selectinload as _selectinload
+
+    app = (
+        await db.execute(
+            select(App)
+            .options(_selectinload(App.apks))
+            .where(App.package_name == package_name)
+        )
+    ).scalar_one_or_none()
+    # 404 (not 403) on unknown OR forbidden — refusing to acknowledge a
+    # private app's existence to anonymous callers (same posture as the
+    # F-Droid media route).
+    if app is None or app.status != AppStatus.PUBLISHED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+    if app.visibility != AppVisibility.PUBLIC:
+        if not await _can_see_private_app(db, app, viewer, api_key):
+            # Anonymous + private = ask for credentials; authenticated but
+            # not entitled = 404 (don't leak existence).
+            if viewer is None and api_key is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required",
+                    headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
+                )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
+
+    published = sorted(
+        (a for a in (app.apks or []) if a.status == ApkStatus.PUBLISHED),
+        key=lambda a: a.version_code,
+        reverse=True,
+    )[:limit]
+
+    base = await _repo_base(db)
+    self_url = (
+        f"{base}/api/v1/feed/apps/{package_name}" if base
+        else f"/api/v1/feed/apps/{package_name}"
+    )
+    feed_title = f"{app.name} — releases"
+
+    if format == "rss":
+        items = "".join(_apk_rss_item(app, a, base) for a in published)
+        body = _wrap_rss(feed_title, self_url, items)
+        feed_media = "application/rss+xml; charset=utf-8"
+    else:
+        entries = "".join(_apk_atom_entry(app, a, base) for a in published)
+        body = _wrap_atom(feed_title, self_url, entries)
         feed_media = "application/atom+xml; charset=utf-8"
     media = "application/xml; charset=utf-8" if _wants_inline_xml(request) else feed_media
     return Response(content=body, media_type=media)

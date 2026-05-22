@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, EyeOff, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, ShieldAlert, UserCircle2, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, EyeOff, ExternalLink, Globe, GitBranch, Bug, Calendar, HandHeart, Languages, Mail, Rss, ShieldAlert, UserCircle2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -54,6 +54,24 @@ export default function AppDetailClient() {
       .then(setApp)
       .catch((e) => setError(e instanceof Error ? e.message : t("appDetail.appNotFound")));
   }, [pkg, t]);
+
+  // Auto-discovery for feed readers — inject a ``<link rel="alternate"
+  // type="application/atom+xml">`` in <head> so RSS extensions
+  // (Feedbro, Inoreader bookmarklet, …) detect this app's release feed
+  // automatically. The element is removed when the user navigates away
+  // so it never leaks between pages on a soft Next.js transition.
+  useEffect(() => {
+    if (!app) return;
+    const link = document.createElement("link");
+    link.rel = "alternate";
+    link.type = "application/atom+xml";
+    link.title = `${app.name} — releases`;
+    link.href = `/api/v1/feed/apps/${encodeURIComponent(app.package_name)}`;
+    document.head.appendChild(link);
+    return () => {
+      try { document.head.removeChild(link); } catch { /* already gone */ }
+    };
+  }, [app]);
 
   const published = useMemo(
     () =>
@@ -423,6 +441,17 @@ export default function AppDetailClient() {
             <SpecRow icon={<Mail className="h-4 w-4" />} label={t("appDetail.fields.author")} value={app.author_email} link={app.author_email ? `mailto:${app.author_email}` : null} />
             <SpecRow label={t("appDetail.fields.license")} value={app.license} />
             <SpecRow label={t("appDetail.fields.added")} value={formatDate(app.created_at)} />
+            {/* Per-app release feed — sits inside the Info block so it
+                reads as "yet another sub-link of the app" alongside
+                Website / Source / Issues. Public apps work anonymously;
+                private apps trigger a Basic-auth prompt in the feed
+                reader (the backend sends ``WWW-Authenticate``). */}
+            <SpecRow
+              icon={<Rss className="h-4 w-4" />}
+              label={t("appDetail.fields.feed")}
+              value={t("appDetail.feedAtom")}
+              link={`/api/v1/feed/apps/${encodeURIComponent(app.package_name)}`}
+            />
           </dl>
           {(app.donate || app.liberapay || app.bitcoin || app.open_collective) && (
             <div className="surface mt-3 p-5">
@@ -551,7 +580,13 @@ function Stat({
 // are safe; everything else (javascript:, data:, vbscript:, file:…) is
 // rejected. An app owner who sets ``website="javascript:alert(1)"`` via
 // the manage page would otherwise XSS every visitor of the public fiche.
-const _SAFE_LINK_RE = /^(https?|mailto):/i;
+// Accepts ``https://...``, ``http://...``, ``mailto:...`` (the original
+// allowlist for user-provided values like ``app.website``), plus the
+// in-app ``/api/v1/feed/...`` paths the page itself builds for the
+// per-app subscribe link. The leading-slash branch is bound to that
+// exact prefix so an opportunistic ``javascript:`` or ``data:`` value
+// still fails the test.
+const _SAFE_LINK_RE = /^(https?|mailto):|^\/api\/v1\/feed\//i;
 
 function SpecRow({
   icon,

@@ -272,6 +272,8 @@
     "screenshots": "Screenshots",
     "screenshotsCount_one": "{{count}} screenshot",
     "screenshotsCount_other": "{{count}} screenshots",
+    "feedAtom": "Subscribe (Atom)",
+    "feedAtomTitle": "Subscribe to this app's release feed. Add the URL to your feed reader to get notified on every new version. Private apps require an API key (HTTP Basic auth).",
     "lightbox": {
       "openIndex": "Screenshot {{index}} of {{total}}",
       "close": "Close",
@@ -290,7 +292,8 @@
       "translate": "Translate",
       "author": "Author",
       "license": "License",
-      "added": "Added"
+      "added": "Added",
+      "feed": "Feed"
     },
     "supportDeveloper": "Support the developer",
     "funding": {

@@ -272,6 +272,8 @@
     "screenshots": "Captures",
     "screenshotsCount_one": "{{count}} capture",
     "screenshotsCount_other": "{{count}} captures",
+    "feedAtom": "S'abonner (Atom)",
+    "feedAtomTitle": "S'abonner au flux des versions de cette app. Ajoute l'URL à ton lecteur RSS pour être notifié à chaque nouvelle version. Les apps privées nécessitent une clé d'API (HTTP Basic).",
     "lightbox": {
       "openIndex": "Capture {{index}} sur {{total}}",
       "close": "Fermer",
@@ -290,7 +292,8 @@
       "translate": "Traduire",
       "author": "Auteur",
       "license": "Licence",
-      "added": "Ajoutée"
+      "added": "Ajoutée",
+      "feed": "Flux"
     },
     "supportDeveloper": "Soutenir le développeur",
     "funding": {
