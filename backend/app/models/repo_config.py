@@ -119,6 +119,17 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
         Boolean, default=False, nullable=False
     )
 
+    # Enable per-APK SBOM + CVE scanning via the ``trivy`` worker task.
+    # Off by default: trivy needs ~200 MB of vulnerability DB on first
+    # run and outbound network access to refresh it, so operators
+    # should opt in explicitly. When False the worker short-circuits
+    # to ``skipped`` rather than wasting cycles. Results are visible
+    # to the app owner / collaborators / admins only — not the public
+    # catalogue.
+    cve_scanning_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
     @property
     def mirrors(self) -> list[str]:
         """Decoded view of ``mirrors_json`` for serializers + the index builder."""

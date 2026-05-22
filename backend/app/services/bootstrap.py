@@ -14,6 +14,8 @@ from app.fdroid.default_icon import generate_default_repo_icon
 from app.models import (  # noqa: F401 — ensure all models register with Base.metadata
     Apk,
     ApiKey,
+    ApkCve,
+    ApkSbom,
     App,
     AppCategory,
     BackupJob,
@@ -129,6 +131,11 @@ async def _create_tables_if_needed() -> None:
             "ALTER TABLE apks ADD COLUMN IF NOT EXISTS reproducibility_verified_at TIMESTAMP WITH TIME ZONE",
             "ALTER TABLE apks ADD COLUMN IF NOT EXISTS reproducibility_notes VARCHAR(1000)",
             "CREATE INDEX IF NOT EXISTS ix_apks_reproducibility_status ON apks (reproducibility_status)",
+            # v1.2 — Trivy-driven SBOM + CVE scanning. Off by default
+            # (the worker needs ~200 MB of CVE DB + outbound HTTPS to
+            # refresh it). Results are visible to owner/collaborators
+            # /admins only.
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS cve_scanning_enabled BOOLEAN NOT NULL DEFAULT FALSE",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

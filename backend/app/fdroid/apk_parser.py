@@ -1,9 +1,20 @@
 """Parse an APK file: manifest metadata + signing certificate.
 
-We use ``androguard`` for the binary AndroidManifest.xml and shell out to
-``apksigner`` (Android SDK) to obtain the SHA-256 of the signing cert. Why
-both: androguard's cert extraction has historically lagged behind v2/v3/v4
-APK signature schemes; apksigner is the source of truth.
+Pure-Python parse: ``androguard`` handles the binary AndroidManifest.xml
+and also exposes the signing certificates via
+``get_certificates_v{1,2,3}()`` (asn1crypto Certificate objects). The
+SHA-256 of the leaf certificate's DER encoding matches the value
+``apksigner verify --print-certs`` emits — empirically validated against
+APKs signed under v1, v2 and v3 schemes. We hash directly instead of
+shelling out, which keeps the API image free of the JDK + apksigner
+binary (only the worker carries them, for signing the F-Droid index).
+
+NOTE on signature *validation*: this function ONLY extracts the cert
+fingerprint. It does not cryptographically validate the APK's
+signature. The downstream F-Droid client re-verifies at install time,
+and our cross-app signer-pin check catches the practical attack
+(same package name → must keep the same signer), so we accept that
+trade-off in exchange for shedding the apksigner dep on the API side.
 """
 from __future__ import annotations
 
@@ -42,8 +53,34 @@ class ApkParseError(RuntimeError):
     """Raised when an APK file cannot be parsed."""
 
 
-# Pattern: "SHA-256 digest: 49 8e af ... b3"
-_APKSIGNER_HEX = re.compile(r"SHA-256 digest:\s*([0-9a-fA-F\s]+)")
+def _signer_cert_sha256(apk: APK) -> str:
+    """SHA-256 of the leaf signing certificate, lowercase hex.
+
+    Walks the modern → legacy signature schemes (v3 → v2 → v1) and
+    returns the first one that yields a certificate. The DER bytes of
+    the first cert in that chain match what ``apksigner verify
+    --print-certs`` reports as the signer fingerprint.
+
+    Raises :class:`ApkParseError` if no scheme produced a certificate
+    — an unsigned APK has no business in an F-Droid repo.
+    """
+    # Prefer the newest scheme that signed this APK. F-Droid clients use
+    # the same precedence: an APK signed under v3 is verified by v3; the
+    # older blocks are present but the v3 leaf is what apksigner reports.
+    for getter in (apk.get_certificates_v3, apk.get_certificates_v2, apk.get_certificates_v1):
+        try:
+            certs = getter() or []
+        except Exception:  # noqa: BLE001
+            certs = []
+        if certs:
+            # asn1crypto's Certificate.dump() returns the DER-encoded
+            # bytes — what apksigner hashes.
+            try:
+                der = certs[0].dump()
+            except Exception as exc:  # noqa: BLE001
+                raise ApkParseError(f"could not extract signer DER: {exc}") from exc
+            return hashlib.sha256(der).hexdigest().lower()
+    raise ApkParseError("APK has no v1/v2/v3 signing certificate")
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
@@ -57,44 +94,6 @@ def _sha256_file(path: Path) -> tuple[str, int]:
             h.update(chunk)
             size += len(chunk)
     return h.hexdigest(), size
-
-
-async def _apksigner_cert_sha256(path: Path) -> str:
-    """Return SHA-256 of the APK signer certificate, as lowercase hex.
-
-    Defensive against:
-      * paths whose basename starts with ``-`` — we prefix with ``./`` so
-        the argument can never look like a flag, no matter what the
-        binary's parser tolerates (CWE-88).
-      * malformed APKs that make the JVM hang — ``asyncio.wait_for`` caps
-        wall-clock at 60 s and kills the process on timeout (CWE-400).
-    """
-    path_arg = str(path)
-    if not path_arg.startswith("/") and not path_arg.startswith("./"):
-        path_arg = "./" + path_arg
-    proc = await asyncio.create_subprocess_exec(
-        "apksigner", "verify", "--print-certs", path_arg,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise ApkParseError("apksigner timed out") from None
-    if proc.returncode != 0:
-        # Truncate + strip control bytes — apksigner's stderr can echo
-        # attacker-influenced bytes from the APK, and we don't want them
-        # in our error response or logs (CWE-209).
-        raw = err.decode("utf-8", "replace")[:512]
-        safe = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
-        raise ApkParseError(f"apksigner failed (rc={proc.returncode}): {safe}")
-    text = out.decode("utf-8", "replace")
-    m = _APKSIGNER_HEX.search(text)
-    if not m:
-        raise ApkParseError("apksigner output did not contain a SHA-256 digest")
-    return re.sub(r"\s+", "", m.group(1)).lower()
 
 
 def _safe_int(v) -> int | None:
@@ -272,7 +271,10 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
     except Exception:  # noqa: BLE001
         icon_data = None
 
-    signer_sha = await _apksigner_cert_sha256(p)
+    # Pure-Python — extracted from the already-parsed ``apk`` object so
+    # we don't re-open the file. See ``_signer_cert_sha256`` for the
+    # equivalence to ``apksigner verify --print-certs``.
+    signer_sha = _signer_cert_sha256(apk)
 
     try:
         locales = sorted(set(apk.get_languages_and_regions() or []))
@@ -304,25 +306,3 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
         raise ApkParseError("APK has invalid versionCode")
 
     return meta
-
-
-async def verify_apksigner_available() -> bool:
-    """Return True if the apksigner binary is on PATH.
-
-    Async to avoid blocking the event loop — sync ``subprocess.run`` here
-    would freeze every other request for the duration of the JVM start.
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "apksigner", "--version",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            proc.kill()
-            return False
-        return proc.returncode == 0
-    except FileNotFoundError:
-        return False

@@ -17,10 +17,10 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, CheckCircle2, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowLeft, Bug, CheckCircle2, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, Upload, X, XCircle } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
@@ -34,7 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, mediaUrl, type Apk, type AppDetail, type Category, type ReproducibilityStatus, type Screenshot } from "@/lib/api";
+import { api, mediaUrl, type Apk, type AppDetail, type Category, type CveSeverity, type ReproducibilityStatus, type SbomRead, type Screenshot } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { useAuth } from "@/lib/auth-store";
 import { toast } from "@/lib/toast-store";
@@ -876,6 +876,7 @@ function ManageAppInner() {
                         apk={apk}
                         onUpdated={(updated) => updateApkInPlace(updated)}
                       />
+                      <CveRow apk={apk} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {canPin && (
@@ -2320,6 +2321,233 @@ function ReproducibilityRow({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+/* -------------------------------------------------------------------------- */
+/*  CVE / SBOM row                                                             */
+/* -------------------------------------------------------------------------- */
+
+const _SEVERITY_ORDER: CveSeverity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"];
+
+function CveRow({ apk }: { apk: Apk }) {
+  const { t } = useTranslation();
+  const [sbom, setSbom] = useState<SbomRead | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [rescanning, setRescanning] = useState(false);
+
+  // Single load on mount, then refresh on rescan or when the row is
+  // currently scanning (polled at a slow cadence — Trivy can take a
+  // minute on first run while the DB downloads).
+  const reload = useCallback(async (opts: { summary?: boolean } = {}) => {
+    try {
+      const data = await api.apps.sbom(apk.id, { summary: opts.summary !== false });
+      setSbom(data);
+    } catch (e) {
+      toast.error(t("myApps.edit.cve.loadFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setLoading(false);
+    }
+  }, [apk.id, t]);
+
+  useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [apk.id]);
+  useEffect(() => {
+    if (!sbom) return;
+    if (sbom.status !== "pending" && sbom.status !== "scanning") return;
+    const id = window.setInterval(() => { void reload(); }, 4000);
+    return () => window.clearInterval(id);
+  }, [sbom?.status, reload, sbom]);
+
+  async function rescan() {
+    setRescanning(true);
+    try {
+      await api.apps.sbomRescan(apk.id);
+      toast.success(t("myApps.edit.cve.rescanEnqueued"));
+      await reload();
+    } catch (e) {
+      toast.error(t("myApps.edit.cve.rescanFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setRescanning(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-mute">
+        <Bug className="h-3.5 w-3.5" /> {t("common.loading")}
+      </div>
+    );
+  }
+
+  const status = sbom?.status || "never_scanned";
+  // Severity counts default to 0 so the badge group always renders the
+  // same width whether the scan found anything or not.
+  const counts: Record<CveSeverity, number> = {
+    CRITICAL: sbom?.cve_summary?.CRITICAL || 0,
+    HIGH: sbom?.cve_summary?.HIGH || 0,
+    MEDIUM: sbom?.cve_summary?.MEDIUM || 0,
+    LOW: sbom?.cve_summary?.LOW || 0,
+    UNKNOWN: sbom?.cve_summary?.UNKNOWN || 0,
+  };
+  const totalCves = Object.values(counts).reduce((a, b) => a + b, 0);
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Bug className="h-3.5 w-3.5 text-ink-mute" />
+        <span className="text-[10px] uppercase tracking-wider text-ink-mute">
+          {t("myApps.edit.cve.label")}
+        </span>
+        <CveStatusPill status={status} totalCves={totalCves} />
+        {totalCves > 0 && (
+          <div className="flex items-center gap-1">
+            {_SEVERITY_ORDER.map((s) => counts[s] > 0 && (
+              <SeverityChip key={s} severity={s} count={counts[s]} />
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-[11px] text-primary hover:underline"
+          disabled={totalCves === 0 && status !== "failed"}
+        >
+          {expanded ? t("common.close") : t("myApps.edit.cve.details")}
+        </button>
+        <button
+          type="button"
+          onClick={rescan}
+          disabled={rescanning || status === "pending" || status === "scanning"}
+          className="text-[11px] text-primary hover:underline disabled:text-ink-mute disabled:no-underline"
+        >
+          {rescanning ? t("common.loading") : t("myApps.edit.cve.rescan")}
+        </button>
+        {sbom?.scanned_at && (
+          <span className="text-[10px] text-ink-mute">
+            {t("myApps.edit.cve.lastScan", { date: formatDate(sbom.scanned_at) })}
+          </span>
+        )}
+      </div>
+      {sbom?.error_message && (
+        <p className="mt-2 rounded-xl border border-danger bg-danger-container px-3 py-2 text-xs text-danger-on-container">
+          {sbom.error_message}
+        </p>
+      )}
+      {expanded && sbom && (
+        <CveDetails sbom={sbom} />
+      )}
+    </div>
+  );
+}
+
+function CveStatusPill({ status, totalCves }: { status: string; totalCves: number }) {
+  const { t } = useTranslation();
+  const label = t(`myApps.edit.cve.status.${status}`);
+  let cls = "border-outline-soft text-ink-mute";
+  if (status === "done") {
+    cls = totalCves > 0
+      ? "border-danger text-danger"
+      : "border-primary text-primary";
+  } else if (status === "failed") {
+    cls = "border-danger text-danger";
+  } else if (status === "pending" || status === "scanning") {
+    cls = "border-primary text-primary";
+  }
+  return (
+    <span
+      className={cn(
+        "rounded-pill border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+        cls,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function SeverityChip({ severity, count }: { severity: CveSeverity; count: number }) {
+  const tone: Record<CveSeverity, string> = {
+    CRITICAL: "border-danger bg-danger-container text-danger-on-container",
+    HIGH: "border-danger bg-danger-container/60 text-danger-on-container",
+    MEDIUM: "border-warning bg-warning-container text-warning-on-container",
+    LOW: "border-outline-soft bg-surface text-ink-soft",
+    UNKNOWN: "border-outline-soft bg-surface text-ink-mute",
+  };
+  return (
+    <span
+      className={cn(
+        "rounded-pill border px-1.5 py-0 text-[10px] font-mono tabular-nums",
+        tone[severity],
+      )}
+      title={severity.toLowerCase()}
+    >
+      {severity.charAt(0)} {count}
+    </span>
+  );
+}
+
+function CveDetails({ sbom }: { sbom: SbomRead }) {
+  const { t } = useTranslation();
+  if (sbom.cves.length === 0) {
+    return (
+      <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2 text-xs italic text-ink-mute">
+        {t("myApps.edit.cve.noFindings")}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 overflow-hidden rounded-2xl border border-outline-soft">
+      <table className="w-full text-xs">
+        <thead className="bg-surface-2 text-[10px] uppercase tracking-wider text-ink-mute">
+          <tr>
+            <th className="px-3 py-2 text-left">{t("myApps.edit.cve.col.cve")}</th>
+            <th className="px-3 py-2 text-left">{t("myApps.edit.cve.col.severity")}</th>
+            <th className="px-3 py-2 text-left">{t("myApps.edit.cve.col.package")}</th>
+            <th className="px-3 py-2 text-left">{t("myApps.edit.cve.col.fixed")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sbom.cves.map((c) => (
+            <tr key={c.cve_id + (c.package_name || "")} className="border-t border-outline-soft">
+              <td className="px-3 py-2 font-mono">
+                <a
+                  href={`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(c.cve_id)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  {c.cve_id}
+                </a>
+              </td>
+              <td className="px-3 py-2">
+                <SeverityChip severity={c.severity} count={c.cvss_score != null ? Math.round(c.cvss_score * 10) / 10 : 0} />
+              </td>
+              <td className="px-3 py-2">
+                {c.package_name ? (
+                  <>
+                    <div className="font-mono">{c.package_name}</div>
+                    {c.installed_version && (
+                      <div className="text-[10px] text-ink-mute">{c.installed_version}</div>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-ink-mute">—</span>
+                )}
+              </td>
+              <td className="px-3 py-2">
+                {c.fixed_version ? (
+                  <span className="font-mono text-primary">{c.fixed_version}</span>
+                ) : (
+                  <span className="text-ink-mute">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

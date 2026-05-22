@@ -92,6 +92,36 @@ class ReproducibilityFromUrl(BaseModel):
     notes: str | None = Field(default=None, max_length=1000)
 
 
+# ----- CVE / SBOM ----------------------------------------------------------
+class CveFinding(BaseModel):
+    """One vulnerability row, mapped from an ``ApkCve`` row."""
+
+    cve_id: str
+    severity: str
+    cvss_score: float | None = None
+    package_name: str | None = None
+    installed_version: str | None = None
+    fixed_version: str | None = None
+    title: str | None = None
+    description: str | None = None
+    references: list[str] = Field(default_factory=list)
+
+
+class SbomRead(BaseModel):
+    """Body of ``GET /apks/{id}/sbom``. ``sbom`` itself can be quite
+    large (10s of KB for trivy output), so callers that only need the
+    summary can pass ``?summary=true`` — the handler then nulls
+    ``sbom``."""
+
+    status: str
+    scanned_at: str | None = None
+    trivy_version: str | None = None
+    error_message: str | None = None
+    cve_summary: dict[str, int] = Field(default_factory=dict)
+    cves: list[CveFinding] = Field(default_factory=list)
+    sbom: dict | None = None
+
+
 class ApkUpdate(BaseModel):
     """Fields editable on an existing APK row.
 

@@ -50,6 +50,13 @@ class RepoConfigRead(BaseModel):
     # enrolment is offered at first login after the toggle flips).
     webauthn_required_admin: bool = False
     webauthn_required_uploader: bool = False
+    # SBOM + CVE scanning via trivy. See RepoConfig column doc.
+    cve_scanning_enabled: bool = False
+    # Mirrors ``settings.trivy_available`` — same env-driven flag as
+    # ``clamav_available``. Surfaced to the admin UI so the toggle row
+    # can render a "trivy server is not running" notice instead of a
+    # dead toggle.
+    trivy_available: bool = False
 
 
 class RepoConfigUpdate(BaseModel):
@@ -89,6 +96,8 @@ class RepoConfigUpdate(BaseModel):
     # set explicitly.
     webauthn_required_admin: bool | None = None
     webauthn_required_uploader: bool | None = None
+    # SBOM + CVE scanning master switch.
+    cve_scanning_enabled: bool | None = None
 
 
 class SetupStatus(BaseModel):

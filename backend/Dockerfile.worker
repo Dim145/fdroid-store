@@ -1,0 +1,118 @@
+# syntax=docker/dockerfile:1.6
+# ============================================================================
+# Worker image — extends the API image with the heavy tools the arq
+# tasks need, that the request-handling API doesn't:
+#
+#   * apksigner + minimal JDK      — signs the F-Droid index after every
+#                                     rebuild_index job. Stays out of the
+#                                     API image because the upload flow
+#                                     extracts the signer fingerprint in
+#                                     pure Python via androguard.
+#   * postgresql-client-16         — pg_dump / psql for the Backup feature
+#   * trivy CLI (client mode)      — talks to an optional trivy server
+#                                     container (set TRIVY_SERVER_URL);
+#                                     when unset the worker task short-
+#                                     circuits to SKIPPED.
+#
+# Build-arg ``API_IMAGE`` lets CI pin to a specific tag; default tracks
+# the local ``:latest`` so ``docker compose build`` always picks up a
+# freshly-baked API image.
+# ============================================================================
+ARG API_IMAGE=ghcr.io/dim145/fdroid-store-backend:latest
+
+
+# ----------------------------------------------------------------------------
+# JDK builder — produces a stripped-down JDK that contains only the
+# modules apksigner / jarsigner / keytool need. ~70 MB instead of ~290 MB.
+#
+# IMPORTANT: jlink emits native binaries linked against the host's libc,
+# so this MUST use the same libc family as the runtime image. The Debian-
+# based eclipse-temurin:21-jdk-noble matches our python:3.13-slim-trixie
+# (both glibc).
+# ----------------------------------------------------------------------------
+FROM eclipse-temurin:21-jdk-noble AS jdk-builder
+
+# Modules required at runtime:
+#   java.base / java.logging / java.naming / jdk.crypto.cryptoki /
+#   jdk.crypto.ec / jdk.security.auth / jdk.jartool / jdk.zipfs +
+#   java.security.jgss / java.security.sasl (keytool GSS paths).
+RUN "$JAVA_HOME/bin/jlink" \
+        --add-modules java.base,java.logging,java.naming,java.security.jgss,java.security.sasl,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.security.auth,jdk.jartool,jdk.zipfs \
+        --strip-debug \
+        --no-man-pages \
+        --no-header-files \
+        --compress=zip-9 \
+        --output /opt/jre-min
+
+
+# ----------------------------------------------------------------------------
+# apksigner builder — just the JAR + wrapper script, not the whole
+# openjdk-21-jdk-headless that Debian's ``apksigner`` package depends on.
+# ----------------------------------------------------------------------------
+FROM python:3.13-slim-trixie AS apksigner-builder
+RUN apt-get update && apt-get install -y --no-install-recommends apksigner \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ----------------------------------------------------------------------------
+# Runtime: API image + system tools the worker tasks need.
+# ----------------------------------------------------------------------------
+FROM ${API_IMAGE} AS runtime
+
+USER root
+
+ENV PATH="/opt/venv/bin:/opt/jre-min/bin:$PATH" \
+    JAVA_HOME=/opt/jre-min
+
+# postgresql-client-16 pinned via the PostgreSQL apt repo (Trixie's
+# default is the 17-series client which emits SET directives that
+# PG 16 refuses on restore — hence the pin).
+#
+# Trivy is installed as a CLI binary (~80 MB) and used in CLIENT MODE
+# only: when ``TRIVY_SERVER_URL`` is set in the env, the worker calls
+# ``trivy fs --server ...``; the vulnerability DB lives on the trivy
+# server container (see docker-compose.yml ``trivy`` profile). Without
+# ``TRIVY_SERVER_URL``, the scan worker short-circuits to SKIPPED and
+# the binary is unused.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        postgresql-client-16 \
+    && TRIVY_VERSION="0.70.0" \
+    && TRIVY_ARCH="$(case "$(dpkg --print-architecture)" in \
+            amd64) echo "64bit" ;; \
+            arm64) echo "ARM64" ;; \
+            *) echo "64bit" ;; \
+        esac)" \
+    && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" -o /tmp/trivy.tgz \
+    && tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy \
+    && rm /tmp/trivy.tgz \
+    && chmod +x /usr/local/bin/trivy \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc /usr/share/man
+
+# Minimal JDK + apksigner (from builder stages above). We copy
+# apksigner.jar to where its shipped wrapper script looks for it
+# (``/usr/share/java/apksigner.jar``); the wrapper is a thin bash script
+# that only calls ``java -jar``, so this is everything we need.
+COPY --from=jdk-builder /opt/jre-min /opt/jre-min
+COPY --from=apksigner-builder /usr/share/java/apksigner.jar /usr/share/java/apksigner.jar
+COPY --from=apksigner-builder /usr/lib/android-sdk/build-tools/debian/apksigner /usr/bin/apksigner
+
+# Ensure /data carries the worker-only subdir (backup-tmp). Volumes
+# mounted later inherit ownership from this on first init.
+RUN mkdir -p /data/backup-tmp && \
+    chown -R fdroid:fdroid /data
+
+USER fdroid:fdroid
+
+# Compose overrides CMD to ``python -m arq app.workers.tasks.WorkerSettings``.
+# Tini handles signal forwarding (inherited from the API image).
+CMD ["python", "-m", "arq", "app.workers.tasks.WorkerSettings"]

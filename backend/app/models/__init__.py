@@ -8,6 +8,7 @@ from app.models.api_key import ApiKey
 from app.models.app import App, AppCategory, AppScreenshot, Category, Localization
 from app.models.app_collaborator import AppCollaborator
 from app.models.apk import Apk
+from app.models.apk_sbom import ApkCve, ApkSbom, ApkSbomStatus, ApkSeverity
 from app.models.apk_scan import ApkScan, ApkScanStatus
 from app.models.audit import DownloadEvent
 from app.models.audit_log import AuditLog
@@ -25,8 +26,12 @@ from app.models.webauthn_credential import WebAuthnCredential
 
 __all__ = [
     "Apk",
+    "ApkCve",
+    "ApkSbom",
+    "ApkSbomStatus",
     "ApkScan",
     "ApkScanStatus",
+    "ApkSeverity",
     "ApiKey",
     "App",
     "AppCategory",

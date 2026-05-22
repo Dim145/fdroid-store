@@ -4,6 +4,8 @@ Centralized here so route code doesn't need to know about arq at all.
 """
 from __future__ import annotations
 
+import uuid
+
 from arq import create_pool
 from arq.connections import RedisSettings
 
@@ -55,6 +57,30 @@ async def enqueue_reindex(*, force: bool = False) -> None:
     except Exception as exc:  # noqa: BLE001
         # We don't want a missing redis to break the request — log and move on.
         log.warning("could not enqueue reindex", error=str(exc))
+
+
+async def enqueue_cve_scan(apk_id: str | uuid.UUID) -> None:
+    """Schedule a per-APK SBOM + CVE scan.
+
+    Dedupes within a minute via a bucketed job_id (similar pattern to
+    :func:`enqueue_reindex`): rapid bursts of enqueues collapse to a
+    single scan, but a manual re-scan a few minutes later still runs.
+    Arq's 24h ``keep_result`` would otherwise swallow any second
+    enqueue with the same id.
+    """
+    import time as _time
+    import uuid as _uuid
+
+    try:
+        pool = await create_pool(_redis_settings())
+        try:
+            bucket = int(_time.time() // 60)
+            job_id = f"scan_apk_cve:{_uuid.UUID(str(apk_id))}:{bucket}"
+            await pool.enqueue_job("scan_apk_cve", str(apk_id), _job_id=job_id)
+        finally:
+            await pool.close()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not enqueue cve scan", error=str(exc), apk_id=str(apk_id))
 
 
 async def enqueue_clamav_scan() -> bool:

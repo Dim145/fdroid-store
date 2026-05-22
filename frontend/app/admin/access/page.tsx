@@ -33,7 +33,7 @@ export default function AdminAccessPage() {
   }
   useEffect(() => { refreshAll(); /* eslint-disable-next-line */ }, []);
 
-  async function patchRepo(patch: Partial<Pick<RepoConfigInfo, "public_mode" | "registration_policy" | "public_stats" | "webauthn_required_admin" | "webauthn_required_uploader">>) {
+  async function patchRepo(patch: Partial<Pick<RepoConfigInfo, "public_mode" | "registration_policy" | "public_stats" | "webauthn_required_admin" | "webauthn_required_uploader" | "cve_scanning_enabled">>) {
     if (!repo) return;
     setErr(null); setMsg(null);
     const next = { ...repo, ...patch };

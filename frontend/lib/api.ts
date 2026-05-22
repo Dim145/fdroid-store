@@ -488,6 +488,14 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    /** Per-APK SBOM + CVE summary. ``summary=true`` strips the raw
+     *  CycloneDX blob so chip-render calls stay light. */
+    sbom: (apkId: string, opts: { summary?: boolean } = {}) =>
+      apiFetch<SbomRead>(
+        `/api/v1/apks/${apkId}/sbom${opts.summary ? "?summary=true" : ""}`,
+      ),
+    sbomRescan: (apkId: string) =>
+      apiFetch<SbomRead>(`/api/v1/apks/${apkId}/sbom/rescan`, { method: "POST" }),
     myApps: () => apiFetch<Array<AppSummary>>("/api/v1/me/apps"),
     uploadIcon: (appId: string, file: File) => {
       const fd = new FormData();
@@ -979,6 +987,31 @@ export type Screenshot = {
 
 export type ReproducibilityStatus = "unknown" | "not_attempted" | "verified" | "failed";
 
+export type CveSeverity = "UNKNOWN" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+export type SbomStatus = "never_scanned" | "pending" | "scanning" | "done" | "failed" | "skipped";
+
+export type CveFinding = {
+  cve_id: string;
+  severity: CveSeverity;
+  cvss_score: number | null;
+  package_name: string | null;
+  installed_version: string | null;
+  fixed_version: string | null;
+  title: string | null;
+  description: string | null;
+  references: string[];
+};
+
+export type SbomRead = {
+  status: SbomStatus;
+  scanned_at: string | null;
+  trivy_version: string | null;
+  error_message?: string | null;
+  cve_summary: Partial<Record<CveSeverity, number>>;
+  cves: CveFinding[];
+  sbom?: unknown;
+};
+
 export type Apk = {
   id: string;
   app_id: string;
@@ -1274,6 +1307,13 @@ export type RepoConfigInfo = {
    *  screen after the password step. */
   webauthn_required_admin?: boolean;
   webauthn_required_uploader?: boolean;
+  /** Master switch for the trivy-driven SBOM + CVE scanning feature.
+   *  Off by default to keep first-boot light on disk + bandwidth. */
+  cve_scanning_enabled?: boolean;
+  /** Mirrors ``settings.trivy_available`` — exposed by the API so the
+   *  admin UI can render a "not configured" notice instead of a dead
+   *  toggle when no ``TRIVY_SERVER_URL`` is set on the worker. */
+  trivy_available?: boolean;
 };
 
 /** Aggregate stats payload returned by ``GET /api/v1/stats``. The

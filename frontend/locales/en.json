@@ -958,6 +958,30 @@
         "saveFailed": "Save failed",
         "urlRequired": "Add a Reference URL first."
       },
+      "cve": {
+        "label": "CVE",
+        "details": "Details",
+        "rescan": "Re-scan",
+        "lastScan": "scanned {{date}}",
+        "rescanEnqueued": "Re-scan enqueued.",
+        "rescanFailed": "Re-scan failed",
+        "loadFailed": "Could not load CVE status",
+        "noFindings": "No vulnerabilities reported.",
+        "status": {
+          "never_scanned": "Never scanned",
+          "pending": "Queued",
+          "scanning": "Scanning…",
+          "done": "Scanned",
+          "failed": "Scan failed",
+          "skipped": "Skipped"
+        },
+        "col": {
+          "cve": "CVE",
+          "severity": "Severity",
+          "package": "Package",
+          "fixed": "Fixed in"
+        }
+      },
       "changelog": {
         "title": "Release notes for {{version}}",
         "addLanguage": "Add language",
@@ -1149,7 +1173,7 @@
       "repoConfig": "Repo config",
       "audit": "Audit log",
       "jobs": "Jobs",
-      "scans": "Malware scans",
+      "scanning": "Scanning",
       "backup": "Backup",
       "setupWizard": "Setup wizard"
     },
@@ -1316,6 +1340,23 @@
         "finish": "finished",
         "duration": "duration",
         "result": "result"
+      }
+    },
+    "scanning": {
+      "title": "Scanning",
+      "subtitle": "Two optional scanners hook into the upload pipeline: ClamAV for malware detection and Trivy for SBOM + CVE extraction. Each runs in its own service (start with the matching compose profile), the worker dispatches the work, and results land below.",
+      "malwareTitle": "Malware scanning (ClamAV)",
+      "malwareBody": "On-upload + periodic scans of every published APK via the optional clamd service.",
+      "cve": {
+        "title": "CVE / SBOM scanning (Trivy)",
+        "body": "Per-APK SBOM extraction (CycloneDX) + vulnerability lookup via the optional Trivy server. Results are visible to owners, collaborators and admins only — never on the public catalogue.",
+        "reachable": "Trivy server reachable",
+        "notConfigured": "Not configured",
+        "envHint": "Set TRIVY_SERVER_URL in .env (e.g. ``TRIVY_SERVER_URL=http://trivy:4954``) and bring the stack up with ``docker compose --profile trivy up -d`` to start the bundled server. The server must be reachable from the worker.",
+        "toggleTitle": "Auto-scan new uploads",
+        "toggleBody": "Every newly attached APK is queued for a CVE scan. Manual re-scans are also available from each APK's row in /my-apps.",
+        "saved": "Saved.",
+        "saveFailed": "Save failed"
       }
     },
     "scans": {

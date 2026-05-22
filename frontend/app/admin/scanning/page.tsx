@@ -1,6 +1,13 @@
 "use client";
 
-import { Activity, PlayCircle, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
+import {
+  Activity,
+  Bug,
+  PlayCircle,
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -12,7 +19,7 @@ import { toast } from "@/lib/toast-store";
 import { cn, formatDate } from "@/lib/utils";
 
 
-export default function AdminScansPage() {
+export default function AdminScanningPage() {
   const { t } = useTranslation();
   const [repo, setRepo] = useState<RepoConfigInfo | null>(null);
   const [ping, setPing] = useState<{ ok: boolean; configured: boolean } | null>(null);
@@ -40,7 +47,7 @@ export default function AdminScansPage() {
   }
   useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [onlyInfected]);
 
-  async function toggle(field: "clamav_scan_on_upload" | "clamav_scan_periodic", value: boolean) {
+  async function toggleClamav(field: "clamav_scan_on_upload" | "clamav_scan_periodic", value: boolean) {
     if (!repo) return;
     try {
       const updated = await api.admin.updateRepo({ [field]: value });
@@ -48,6 +55,17 @@ export default function AdminScansPage() {
       toast.success(t("admin.scans.saved"));
     } catch (e) {
       toast.error(t("admin.scans.saveFailed"), e instanceof Error ? e.message : undefined);
+    }
+  }
+
+  async function toggleCve(value: boolean) {
+    if (!repo) return;
+    try {
+      const updated = await api.admin.updateRepo({ cve_scanning_enabled: value });
+      setRepo(updated);
+      toast.success(t("admin.scanning.cve.saved"));
+    } catch (e) {
+      toast.error(t("admin.scanning.cve.saveFailed"), e instanceof Error ? e.message : undefined);
     }
   }
 
@@ -75,13 +93,22 @@ export default function AdminScansPage() {
       <header>
         <div className="eyebrow">{t("admin.eyebrow")}</div>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">
-          {t("admin.scans.title")}
+          {t("admin.scanning.title")}
         </h1>
-        <p className="mt-1 text-ink-soft">{t("admin.scans.subtitle")}</p>
+        <p className="mt-1 max-w-3xl text-ink-soft">{t("admin.scanning.subtitle")}</p>
       </header>
 
-      {/* Connection status + toggles */}
+      {/* ── Malware scanning (ClamAV) ─────────────────────────────── */}
       <section className="surface p-6">
+        <header className="mb-4 flex items-center gap-2">
+          <ShieldCheck className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold tracking-tight text-ink">
+            {t("admin.scanning.malwareTitle")}
+          </h2>
+        </header>
+        <p className="mb-4 max-w-3xl text-sm text-ink-soft">
+          {t("admin.scanning.malwareBody")}
+        </p>
         <div className="flex flex-wrap items-center gap-3">
           {ping?.configured ? (
             ping.ok ? (
@@ -116,7 +143,7 @@ export default function AdminScansPage() {
               </div>
               <Switch
                 checked={!!repo.clamav_scan_on_upload}
-                onCheckedChange={(v) => toggle("clamav_scan_on_upload", v)}
+                onCheckedChange={(v) => toggleClamav("clamav_scan_on_upload", v)}
               />
             </label>
             <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-outline-soft bg-surface px-4 py-3">
@@ -126,15 +153,12 @@ export default function AdminScansPage() {
               </div>
               <Switch
                 checked={!!repo.clamav_scan_periodic}
-                onCheckedChange={(v) => toggle("clamav_scan_periodic", v)}
+                onCheckedChange={(v) => toggleClamav("clamav_scan_periodic", v)}
               />
             </label>
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-outline-soft bg-surface px-4 py-3">
               <div className="min-w-0">
                 <div className="text-sm font-medium text-ink">{t("admin.scans.scanNow")}</div>
-                {/* Swap the rationale when ClamAV is unreachable — the
-                    button stays disabled and the user otherwise has no
-                    explanation of why. */}
                 <div className={cn("text-xs", ping?.ok ? "text-ink-mute" : "text-danger")}>
                   {ping?.ok
                     ? t("admin.scans.scanNowBody")
@@ -156,7 +180,54 @@ export default function AdminScansPage() {
         )}
       </section>
 
-      {/* History */}
+      {/* ── CVE / SBOM scanning (Trivy) ───────────────────────────── */}
+      <section className="surface p-6">
+        <header className="mb-4 flex items-center gap-2">
+          <Bug className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold tracking-tight text-ink">
+            {t("admin.scanning.cve.title")}
+          </h2>
+        </header>
+        <p className="mb-4 max-w-3xl text-sm text-ink-soft">
+          {t("admin.scanning.cve.body")}
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          {repo?.trivy_available ? (
+            <Badge variant="primary">
+              <ShieldCheck className="h-3 w-3" /> {t("admin.scanning.cve.reachable")}
+            </Badge>
+          ) : (
+            <Badge variant="soft">{t("admin.scanning.cve.notConfigured")}</Badge>
+          )}
+        </div>
+
+        {!repo?.trivy_available && (
+          <p className="mt-3 max-w-3xl text-xs text-ink-mute">
+            {t("admin.scanning.cve.envHint")}
+          </p>
+        )}
+
+        {repo?.trivy_available && (
+          <div className="mt-4">
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-outline-soft bg-surface px-4 py-3">
+              <div>
+                <div className="text-sm font-medium text-ink">
+                  {t("admin.scanning.cve.toggleTitle")}
+                </div>
+                <div className="text-xs text-ink-mute">
+                  {t("admin.scanning.cve.toggleBody")}
+                </div>
+              </div>
+              <Switch
+                checked={!!repo.cve_scanning_enabled}
+                onCheckedChange={toggleCve}
+              />
+            </label>
+          </div>
+        )}
+      </section>
+
+      {/* ── Malware scan history ──────────────────────────────────── */}
       <section className="surface p-6">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-lg font-bold tracking-tight text-ink">{t("admin.scans.history")}</h2>

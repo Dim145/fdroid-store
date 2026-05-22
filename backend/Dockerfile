@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1.6
 # ============================================================================
-# Python builder — installs deps into a venv, then prunes the long tail of
-# optional packages that androguard pulls in for its reverse-engineering and
-# plotting features (frida, matplotlib, numpy, networkx, jedi, fontTools, …).
-# We only use ``androguard.core.apk.APK`` for manifest + icon extraction so
-# none of that surface is reachable from our code; dropping it saves ~250 MB.
+# API image — runs the FastAPI app.
+#
+# Pure-Python from end to end: ``parse_apk()`` extracts the signing
+# certificate via androguard + asn1crypto instead of shelling out to
+# ``apksigner``, so the API image carries no JVM and no Android SDK
+# tooling. The worker image FROMs this one and adds the heavy bits
+# (JDK + apksigner for index signing, postgresql-client for backups,
+# trivy CLI for CVE scans) — see Dockerfile.worker.
 # ============================================================================
 FROM python:3.13-slim-trixie AS python-builder
 
@@ -56,104 +59,37 @@ RUN find /opt/venv -name '__pycache__' -type d -exec rm -rf {} + && \
 
 
 # ============================================================================
-# JDK builder — produces a stripped-down JDK that contains only the modules
-# jarsigner / keytool / apksigner need. Full openjdk-21-jdk-headless is
-# ~290 MB; the jlinked output is ~70 MB.
-#
-# IMPORTANT: jlink emits native binaries linked against the libc of the host
-# it ran on, so this stage MUST use the same libc family as the runtime
-# image. We use the Debian-based ``eclipse-temurin:21-jdk-noble`` (Ubuntu
-# glibc) — Alpine's musl libc would produce a ``java`` binary the
-# ``python:3.13-slim-trixie`` runtime can't ``exec``.
-# ============================================================================
-FROM eclipse-temurin:21-jdk-noble AS jdk-builder
-
-# Modules required at runtime:
-#   java.base             — always
-#   java.logging          — keytool logs
-#   java.security.jgss/   — keytool's GSS/SASL paths
-#   java.security.sasl
-#   java.naming           — keytool LDAP-style DN parsing
-#   jdk.crypto.cryptoki   — PKCS#12 keystore I/O
-#   jdk.crypto.ec         — ECDSA cert support
-#   jdk.security.auth     — login modules used by keytool
-#   jdk.jartool           — the jarsigner CLI itself
-#   jdk.zipfs             — required to read .jar / .apk on the fly
-RUN "$JAVA_HOME/bin/jlink" \
-        --add-modules java.base,java.logging,java.naming,java.security.jgss,java.security.sasl,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.security.auth,jdk.jartool,jdk.zipfs \
-        --strip-debug \
-        --no-man-pages \
-        --no-header-files \
-        --compress=zip-9 \
-        --output /opt/jre-min
-
-# ============================================================================
-# apksigner builder — we only need the JAR + the wrapper script, not the
-# whole openjdk-21-jdk-headless dependency the Debian ``apksigner`` package
-# pulls in transitively.
-# ============================================================================
-FROM python:3.13-slim-trixie AS apksigner-builder
-RUN apt-get update && apt-get install -y --no-install-recommends apksigner \
-    && rm -rf /var/lib/apt/lists/*
-
-
-# ============================================================================
-# Runtime — the smallest reasonable surface that can still parse APKs and
-# sign the F-Droid index. No build toolchain, no unused JDK modules, no
-# unused Python packages. Runs as a non-root user.
+# Runtime — minimal API surface. No JDK, no apksigner, no pg_dump,
+# no trivy. The worker image extends this and layers those tools on top.
 # ============================================================================
 FROM python:3.13-slim-trixie AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:/opt/jre-min/bin:$PATH" \
-    JAVA_HOME=/opt/jre-min
+    PATH="/opt/venv/bin:$PATH"
 
 # Minimum runtime libs:
-#   libpq5                — psycopg2-binary runtime
-#   libjpeg62-turbo       — Pillow JPEG decoding
-#   zlib1g                — Pillow + apksigner zip handling
-#   ca-certificates       — TLS roots for any outbound call (S3, OIDC, …)
-#   tini                  — proper PID 1, reaps zombies + forwards signals to
-#                            uvicorn. Tiny (~150 KB) and worth it.
-#   postgresql-client-16  — pg_dump / pg_restore for the admin Backup
-#                            feature, pinned to the major version that
-#                            matches our server (compose runs PG 16). A
-#                            17.x client emits SET directives that PG 16
-#                            can't parse on restore, hence the pin via the
-#                            official PostgreSQL apt repo.
+#   libpq5            — psycopg2-binary runtime
+#   libjpeg62-turbo   — Pillow JPEG decoding
+#   zlib1g            — Pillow zip handling
+#   ca-certificates   — TLS roots for any outbound call (S3, OIDC, …)
+#   tini              — proper PID 1, reaps zombies + forwards signals to
+#                        uvicorn. Tiny (~150 KB) and worth it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        gnupg \
-    && install -d /usr/share/postgresql-common/pgdg \
-    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" \
-        > /etc/apt/sources.list.d/pgdg.list \
-    && apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         libjpeg62-turbo \
         zlib1g \
+        ca-certificates \
         tini \
-        postgresql-client-16 \
-    && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc /usr/share/man
 
-# Trimmed Python deps + minimal JDK + apksigner come from their own stages.
-# We copy apksigner.jar to where its shipped wrapper script looks for it
-# (``/usr/share/java/apksigner.jar``). The wrapper is a thin bash script that
-# only calls ``java -jar``, so this is everything we need on the runtime.
 COPY --from=python-builder /opt/venv /opt/venv
-COPY --from=jdk-builder /opt/jre-min /opt/jre-min
-COPY --from=apksigner-builder /usr/share/java/apksigner.jar /usr/share/java/apksigner.jar
-COPY --from=apksigner-builder /usr/lib/android-sdk/build-tools/debian/apksigner /usr/bin/apksigner
 
 # Non-root execution. The user owns /data so volume mounts can be written
 # to without giving up the read-only root filesystem we want at runtime.
 RUN groupadd --system --gid 1001 fdroid && \
     useradd  --system --uid 1001 --gid fdroid --home-dir /home/fdroid --create-home --shell /usr/sbin/nologin fdroid && \
-    mkdir -p /data/storage /data/keystores /data/backup-tmp && \
+    mkdir -p /data/storage /data/keystores && \
     chown -R fdroid:fdroid /data
 
 WORKDIR /app

@@ -404,6 +404,7 @@ from app.workers.backup_tasks import (
     run_backup_job,
     run_restore_job,
 )
+from app.workers.cve_tasks import scan_apk_cve
 
 
 class WorkerSettings:
@@ -418,6 +419,10 @@ class WorkerSettings:
         run_backup_job,
         run_restore_job,
         cleanup_expired_backups,
+        # Per-APK SBOM + CVE scanning via trivy. Auto-enqueued when
+        # an APK reaches PARSED; short-circuits when the feature is
+        # disabled in RepoConfig.
+        scan_apk_cve,
     ]
     # Run the rescan at 03:00 UTC every day. The function short-circuits
     # at the top when the feature is off, so leaving the cron registered

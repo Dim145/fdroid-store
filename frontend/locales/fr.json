@@ -958,6 +958,30 @@
         "saveFailed": "Échec de l'enregistrement",
         "urlRequired": "Ajoute d'abord une URL de référence."
       },
+      "cve": {
+        "label": "CVE",
+        "details": "Détails",
+        "rescan": "Re-scanner",
+        "lastScan": "scanné le {{date}}",
+        "rescanEnqueued": "Re-scan mis en file.",
+        "rescanFailed": "Échec du re-scan",
+        "loadFailed": "Impossible de charger le statut CVE",
+        "noFindings": "Aucune vulnérabilité signalée.",
+        "status": {
+          "never_scanned": "Jamais scanné",
+          "pending": "En file",
+          "scanning": "Scan en cours…",
+          "done": "Scanné",
+          "failed": "Échec du scan",
+          "skipped": "Skip"
+        },
+        "col": {
+          "cve": "CVE",
+          "severity": "Sévérité",
+          "package": "Paquet",
+          "fixed": "Fixé en"
+        }
+      },
       "changelog": {
         "title": "Notes de version pour {{version}}",
         "addLanguage": "Ajouter une langue",
@@ -1149,7 +1173,7 @@
       "repoConfig": "Config du dépôt",
       "audit": "Journal d'audit",
       "jobs": "Tâches",
-      "scans": "Analyse malware",
+      "scanning": "Analyses",
       "backup": "Backup",
       "setupWizard": "Assistant de setup"
     },
@@ -1316,6 +1340,23 @@
         "finish": "terminé",
         "duration": "durée",
         "result": "résultat"
+      }
+    },
+    "scanning": {
+      "title": "Analyses",
+      "subtitle": "Deux scanners optionnels se branchent sur le pipeline d'upload : ClamAV pour la détection malware et Trivy pour l'extraction SBOM + CVE. Chacun tourne dans son propre service (démarre avec le profile compose correspondant), le worker dispatche les jobs, et les résultats remontent ci-dessous.",
+      "malwareTitle": "Analyse malware (ClamAV)",
+      "malwareBody": "Scans à l'upload + périodiques de chaque APK publié, via le service clamd optionnel.",
+      "cve": {
+        "title": "Analyse CVE / SBOM (Trivy)",
+        "body": "Extraction SBOM (CycloneDX) par APK + lookup vulnérabilités via le serveur Trivy optionnel. Résultats visibles par owner / co-mainteneurs / admins uniquement — jamais sur le catalogue public.",
+        "reachable": "Serveur Trivy joignable",
+        "notConfigured": "Non configuré",
+        "envHint": "Mets TRIVY_SERVER_URL dans .env (ex. ``TRIVY_SERVER_URL=http://trivy:4954``) puis lance la stack avec ``docker compose --profile trivy up -d`` pour démarrer le serveur fourni. Le serveur doit être joignable depuis le worker.",
+        "toggleTitle": "Auto-scan des nouveaux uploads",
+        "toggleBody": "Chaque APK nouvellement attaché est mis en file pour scan CVE. Re-scan manuel possible depuis la ligne de l'APK dans /my-apps.",
+        "saved": "Enregistré.",
+        "saveFailed": "Échec de l'enregistrement"
       }
     },
     "scans": {

@@ -73,6 +73,11 @@ services:
       CLAMAV_HOST: ${CLAMAV_HOST:-}
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
       CLAMAV_MAX_STREAM_MB: ${CLAMAV_MAX_STREAM_MB:-100}
+      # Trivy server URL. The backend itself never scans — only the
+      # worker does — but it needs to see the env var to compute
+      # ``settings.trivy_available`` for the admin UI + reject toggle
+      # flips when no scanner is wired in.
+      TRIVY_SERVER_URL: ${TRIVY_SERVER_URL:-}
       # Optional PATs used for the release auto-fetch feature (one per
       # forge). Without them we hit each provider's anonymous limit
       # (60 req/h on GitHub). Provide a fine-grained or classic PAT
@@ -120,12 +125,22 @@ services:
       retries: 10
 
   worker:
-    image: ghcr.io/dim145/fdroid-store-backend:latest
+    image: ghcr.io/dim145/fdroid-store-worker:latest
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.worker
+      args:
+        # The worker FROMs the API image. Keep the tag in sync so a
+        # ``docker compose build`` always rebuilds against the freshly-
+        # baked API. CI can override this with a pinned version.
+        API_IMAGE: ghcr.io/dim145/fdroid-store-backend:latest
     restart: unless-stopped
     env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
       REDIS_URL: redis://redis:6379/0
@@ -143,6 +158,12 @@ services:
       # produced tarballs where the backend will later stream them
       # from. Both bind the same ``backup_tmp`` volume below.
       BACKUP_TMP_DIR: /data/backup-tmp
+      # CVE scanner: when set, the worker's trivy CLI talks to the
+      # trivy server container at this URL (in CLIENT mode — file
+      # parsing happens worker-side, DB lookups go to the server).
+      # Empty / unset → CVE scanning is disabled; the worker task
+      # marks every queued scan as SKIPPED.
+      TRIVY_SERVER_URL: ${TRIVY_SERVER_URL:-}
     command: ["python", "-m", "arq", "app.workers.tasks.WorkerSettings"]
     read_only: true
     security_opt:
@@ -152,17 +173,36 @@ services:
     tmpfs:
       - /tmp:rw,size=512m,mode=1777
       - /home/fdroid:rw,size=64m,uid=1001,gid=1001,mode=0700
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     volumes:
       - storage_data:/data/storage
       - keystore_data:/data/keystores
       # Shared with the backend so the worker can write the backup
       # output where the streaming download endpoint can find it.
       - backup_tmp:/data/backup-tmp
+
+  # Optional Trivy server — runs the official aquasec/trivy image in
+  # ``server`` mode. The worker's trivy CLI talks to it via HTTP when
+  # ``TRIVY_SERVER_URL`` is set on the worker (see env above). The server
+  # owns the vulnerability database (~200 MB on disk, refreshed daily by
+  # trivy itself) and clients only do file-side parsing — so the worker
+  # doesn't carry the DB and only one container needs to refresh it.
+  #
+  # Opt-in: this service only runs under the ``trivy`` compose profile.
+  # ``docker compose --profile trivy up -d`` brings it up; without the
+  # profile + ``TRIVY_SERVER_URL`` unset, the CVE feature is automatically
+  # disabled (the worker task short-circuits to ``skipped``).
+  trivy:
+    image: aquasec/trivy:0.70.0
+    profiles: ["trivy"]
+    restart: unless-stopped
+    command: ["server", "--listen", "0.0.0.0:4954", "--cache-dir", "/cache"]
+    volumes:
+      - trivy_cache:/cache
+    # Internal-only: the worker connects via the compose network. No
+    # host port published — Trivy server has no auth and shouldn't be
+    # exposed externally.
+    expose:
+      - "4954"
 
   # Single nginx-served frontend image: static SPA + reverse-proxy to the
   # backend + nginx-served /_protected for X-Accel-Redirect downloads. No
@@ -211,6 +251,10 @@ volumes:
   # Backup feature runs. Wiped opportunistically by the service code;
   # nothing here survives across restore cycles intentionally.
   backup_tmp:
+  # Trivy's downloaded vulnerability DB (~200 MB). Updates daily on
+  # first scan of the day. Persisting it keeps subsequent scans
+  # fast across worker restarts.
+  trivy_cache:
   # Persisted across restarts so freshclam doesn't re-download the full
   # signature DB every time the container starts.
   clamav_db:

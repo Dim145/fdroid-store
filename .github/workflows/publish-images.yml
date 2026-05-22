@@ -1,10 +1,19 @@
-# Build and publish the backend + frontend container images to GHCR every
-# time a GitHub release is created. The same image artefact is reused on
-# any host because no URL is baked in at build time (see the Dockerfiles).
+# Build and publish the backend + frontend + worker container images to
+# GHCR every time a GitHub release is created. The same image artefacts
+# are reused on any host because no URL is baked in at build time (see
+# the Dockerfiles).
 #
 # Pulling the published images:
 #   docker pull ghcr.io/<owner>/<repo>-backend:<tag>
 #   docker pull ghcr.io/<owner>/<repo>-frontend:<tag>
+#   docker pull ghcr.io/<owner>/<repo>-worker:<tag>
+#
+# Image relationship: the worker FROMs the backend image. To guarantee
+# the worker is always built against the matching backend (not yesterday's
+# ``:latest`` from the registry while the new one is still pushing), the
+# worker job DEPENDS on the backend job and consumes the **immutable
+# content digest** of what backend just pushed — not its tag. Tags can
+# race; ``@sha256:…`` cannot.
 name: Publish container images
 
 on:
@@ -21,41 +30,79 @@ permissions:
   packages: write
 
 jobs:
-  publish:
+  # --------------------------------------------------------------------
+  # Backend (API) image — must finish before the worker job starts.
+  # --------------------------------------------------------------------
+  backend:
     runs-on: ubuntu-latest
-    # Don't block the other image's publish if one fails — each is built
-    # in its own job and pushed independently.
-    strategy:
-      fail-fast: false
-      matrix:
-        component:
-          - backend
-          - frontend
-
+    outputs:
+      # The worker job FROMs ``${IMAGE}@${digest}`` to guarantee it
+      # layers on top of the SAME backend bytes that just got pushed.
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.name.outputs.image }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # GHCR rejects mixed-case repository names. ``${GITHUB_REPOSITORY,,}``
-      # downcases ``owner/Repo`` to ``owner/repo`` so the same workflow
-      # works on a fork called e.g. ``MyOrg/FDroid-Store``.
       - name: Compute image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-${{ matrix.component }}" >> "$GITHUB_ENV"
+        id: name
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}-backend"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Generates the tag list from the release ref:
-      #   v1.2.3        → 1.2.3, 1.2, 1, latest
-      #   v1.2.3-rc1    → 1.2.3-rc1            (no major/minor/latest for prereleases)
-      # workflow_dispatch runs produce only the raw ``sha-<commit>`` tag.
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !github.event.release.prerelease }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+          provenance: true
+          sbom: true
+
+  # --------------------------------------------------------------------
+  # Frontend image — independent of backend, runs in parallel.
+  # --------------------------------------------------------------------
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-frontend" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Derive image tags
         id: meta
         uses: docker/metadata-action@v5
@@ -71,14 +118,71 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.component }}
+          context: ./frontend
+          file: ./frontend/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GitHub Actions registry-backed cache: speeds up subsequent
-          # releases dramatically (the Python venv + jlink JDK layers
-          # for the backend take a while to rebuild from scratch).
-          cache-from: type=gha,scope=${{ matrix.component }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          provenance: true
+          sbom: true
+
+  # --------------------------------------------------------------------
+  # Worker image — extends the backend image. Pinned by digest so a
+  # concurrent re-run of the workflow can't accidentally make us layer
+  # on top of an older ``:latest`` that's still being pushed by the
+  # other run.
+  # --------------------------------------------------------------------
+  worker:
+    needs: backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-worker" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !github.event.release.prerelease }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      # Pinning the FROM by digest is the whole point of this job's
+      # ``needs: backend``. Tag-only would race: if a second run of
+      # this workflow (e.g. retry, or two releases minutes apart)
+      # overlaps with the first, the worker could end up FROMing a
+      # backend image that's still propagating to the registry — or
+      # worse, a NEWER backend than the one we just signed off on.
+      # The digest (sha256:…) is content-addressable and locks the
+      # worker layer to the EXACT backend bytes this workflow run
+      # produced.
+      - name: Build and push (FROMs backend@digest)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.worker
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            API_IMAGE=${{ needs.backend.outputs.image }}@${{ needs.backend.outputs.digest }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
           provenance: true
           sbom: true

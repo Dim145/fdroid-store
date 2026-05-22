@@ -124,6 +124,14 @@ class Settings(BaseSettings):
     # doesn't hang the scanner thread.
     clamav_max_stream_mb: int = 100
 
+    # ----- Trivy (optional CVE/SBOM scanning) -------------------------------
+    # Full URL of an aquasec/trivy server in ``trivy server`` mode (typically
+    # ``http://trivy:4954`` on the compose network). When set, the worker's
+    # trivy CLI calls ``trivy fs --server <url> ...`` for each APK and stores
+    # the resulting SBOM + CVE list. When empty, the worker task short-
+    # circuits to SKIPPED and the admin UI marks the feature unavailable.
+    trivy_server_url: str | None = None
+
     # ----- Misc ---------------------------------------------------------------
     log_level: str = "INFO"
     environment: Literal["development", "production", "test"] = "development"
@@ -165,6 +173,14 @@ class Settings(BaseSettings):
         """True when an operator has wired a clamd endpoint in. Drives the
         admin UI toggle and gates the scan code paths."""
         return bool(self.clamav_host)
+
+    @property
+    def trivy_available(self) -> bool:
+        """True when ``TRIVY_SERVER_URL`` is set. Same pattern as
+        ``clamav_available``: lets the admin UI show / hide the CVE
+        scanning section + makes the worker task skip cleanly when the
+        operator hasn't opted in."""
+        return bool(self.trivy_server_url)
 
     @field_validator("secret_key")
     @classmethod

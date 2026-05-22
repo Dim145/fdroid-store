@@ -17,6 +17,7 @@ from app.core.logging import get_logger
 from app.core.rate_limit import limiter
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus, ReproducibilityStatus
+from app.models.apk_sbom import ApkCve, ApkSbom, ApkSbomStatus
 from app.models.app import App, AppStatus, AppVisibility
 from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
@@ -25,13 +26,15 @@ from app.schemas.app import (
     ApkInspect,
     ApkRead,
     ApkUpdate,
+    CveFinding,
     GithubApkInspect,
     GithubInspectRequest,
     ReproducibilityFromUrl,
     ReproducibilitySet,
+    SbomRead,
 )
 from app.services.audit import write_event
-from app.services.queue import enqueue_reindex
+from app.services.queue import enqueue_cve_scan, enqueue_reindex
 from app.storage import get_storage
 
 router = APIRouter()
@@ -271,6 +274,11 @@ async def attach_apk_to_app(
         version_code=apk.version_code,
         status=apk.status.value,
     )
+    # Schedule a CVE scan for the newly-attached binary. The worker
+    # short-circuits when the feature toggle is off, so this is safe
+    # to call unconditionally — keeps the enqueue logic local to the
+    # "we just created an APK" call sites.
+    await enqueue_cve_scan(apk.id)
     return apk
 
 
@@ -1169,3 +1177,130 @@ async def verify_reproducibility_from_url(
     )
     await db.flush()
     return ApkRead.model_validate(apk)
+
+
+# --------------------------------------------------------------------------
+# CVE / SBOM (private — owner / collaborator / admin only)
+# --------------------------------------------------------------------------
+def _serialise_cve(row: ApkCve) -> CveFinding:
+    sev = row.severity.value if hasattr(row.severity, "value") else str(row.severity)
+    return CveFinding(
+        cve_id=row.cve_id,
+        severity=sev,
+        cvss_score=row.cvss_score,
+        package_name=row.package_name,
+        installed_version=row.installed_version,
+        fixed_version=row.fixed_version,
+        title=row.title,
+        description=row.description,
+        references=list(row.references_json or []),
+    )
+
+
+@router.get("/{apk_id}/sbom", response_model=SbomRead)
+async def get_sbom(
+    apk_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+    summary: bool = False,
+) -> SbomRead:
+    """Return the SBOM + CVE list for an APK.
+
+    Restricted to the app's owner, collaborators, and admins — this
+    information is operationally sensitive (e.g. a vulnerable embedded
+    library is a hint at attack surface) and the catalogue / public
+    page never shows it.
+
+    ``?summary=true`` strips the raw SBOM blob from the response so a
+    lightweight chip-render in /my-apps doesn't have to download 10s
+    of KB of CycloneDX JSON.
+    """
+    apk = (
+        await db.execute(
+            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
+    if apk is None:
+        raise HTTPException(status_code=404, detail="APK not found")
+    from app.services.app_permissions import assert_can_manage_app
+
+    await assert_can_manage_app(db, user, apk.app)
+
+    sbom = (
+        await db.execute(
+            select(ApkSbom)
+            .options(selectinload(ApkSbom.cves))
+            .where(ApkSbom.apk_id == apk_id)
+        )
+    ).scalar_one_or_none()
+    if sbom is None:
+        return SbomRead(status="never_scanned")
+    status_val = (
+        sbom.status.value if hasattr(sbom.status, "value") else str(sbom.status)
+    )
+    cves = [_serialise_cve(c) for c in sbom.cves]
+    # Sort by severity desc then CVSS desc — most-impactful first.
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNKNOWN": 4}
+    cves.sort(
+        key=lambda c: (severity_order.get(c.severity, 9), -(c.cvss_score or 0.0))
+    )
+    return SbomRead(
+        status=status_val,
+        scanned_at=sbom.scanned_at.isoformat() if sbom.scanned_at else None,
+        trivy_version=sbom.trivy_version,
+        error_message=sbom.error_message,
+        cve_summary=sbom.cve_summary or {},
+        cves=cves,
+        sbom=None if summary else sbom.sbom_json,
+    )
+
+
+@router.post("/{apk_id}/sbom/rescan", response_model=SbomRead)
+async def rescan_sbom(
+    apk_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_user)],
+) -> SbomRead:
+    """Re-enqueue a CVE scan for this APK. Returns the (possibly stale)
+    row so the caller can poll the regular GET endpoint for the new
+    result. The worker resets the row to ``scanning`` once it picks up
+    the job."""
+    apk = (
+        await db.execute(
+            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
+    if apk is None:
+        raise HTTPException(status_code=404, detail="APK not found")
+    from app.services.app_permissions import assert_can_manage_app
+
+    await assert_can_manage_app(db, user, apk.app)
+
+    # Mark the existing row pending — gives the UI an instant signal
+    # that something is happening without having to wait for the worker
+    # to pick the job up.
+    sbom = (
+        await db.execute(select(ApkSbom).where(ApkSbom.apk_id == apk_id))
+    ).scalar_one_or_none()
+    if sbom is None:
+        sbom = ApkSbom(apk_id=apk_id)
+        db.add(sbom)
+    sbom.status = ApkSbomStatus.PENDING  # type: ignore[assignment]
+    sbom.error_message = None
+    await db.commit()
+    await enqueue_cve_scan(apk_id)
+    await write_event(
+        db,
+        action="apk.cve_rescan_requested",
+        actor=user,
+        target_type="apk",
+        target_id=apk_id,
+        summary=f"manual CVE rescan for {apk.app.package_name if apk.app else apk_id} v{apk.version_name}",
+    )
+    await db.commit()
+    return SbomRead(
+        status="pending",
+        scanned_at=sbom.scanned_at.isoformat() if sbom.scanned_at else None,
+        trivy_version=sbom.trivy_version,
+        cve_summary=sbom.cve_summary or {},
+    )

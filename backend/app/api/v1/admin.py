@@ -467,12 +467,12 @@ async def admin_delete_apk(
 # --------------------------------------------------------------------------
 def _serialize_repo_config(config: RepoConfig) -> RepoConfigRead:
     """Build a RepoConfigRead off the ORM row + the static
-    ``settings.clamav_available`` flag (which comes from the env, not the
-    DB)."""
+    ``*_available`` flags (which come from the env, not the DB)."""
     from app.core.config import settings as _settings
 
     data = RepoConfigRead.model_validate(config).model_dump()
     data["clamav_available"] = _settings.clamav_available
+    data["trivy_available"] = _settings.trivy_available
     return RepoConfigRead(**data)
 
 
@@ -555,6 +555,23 @@ async def update_repo_config(
         config.webauthn_required_admin = payload.webauthn_required_admin
     if payload.webauthn_required_uploader is not None:
         config.webauthn_required_uploader = payload.webauthn_required_uploader
+    if payload.cve_scanning_enabled is not None:
+        # Same pattern as the ClamAV gate above: refuse to flip the
+        # toggle on when the env knob (``TRIVY_SERVER_URL``) isn't set,
+        # so admins don't accidentally enable a feature with nowhere to
+        # dial. Flipping it OFF is always allowed.
+        if payload.cve_scanning_enabled:
+            from app.core.config import settings as _settings
+
+            if not _settings.trivy_available:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Trivy is not configured (start the trivy compose "
+                        "profile + set TRIVY_SERVER_URL to enable)"
+                    ),
+                )
+        config.cve_scanning_enabled = payload.cve_scanning_enabled
     await write_event(
         db,
         action="repo.config_updated",
