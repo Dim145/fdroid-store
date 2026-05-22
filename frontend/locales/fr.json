@@ -477,6 +477,14 @@
       "hidden": "Le contenu NSFW est maintenant masqué.",
       "updateFailed": "Impossible de mettre à jour la préférence"
     },
+    "export": {
+      "title": "Exporter mes données",
+      "body": "Télécharge un fichier JSON unique contenant tout ce que nous conservons lié à ton compte : profil, apps que tu possèdes (avec les métadonnées APK), collaborations, historique des téléchargements et entrées d'audit où tu es l'acteur.",
+      "button": "Télécharger l'export (JSON)",
+      "busy": "Préparation…",
+      "success": "Téléchargement lancé.",
+      "failed": "Échec de l'export."
+    },
     "languagePicker": {
       "title": "Langue préférée",
       "body": "Quand une app fournit une traduction correspondant à ta langue, son nom, son résumé et sa description s'affichent dans cette langue. Sinon, on revient aux valeurs par défaut de l'éditeur.",

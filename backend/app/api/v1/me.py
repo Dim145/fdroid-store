@@ -397,3 +397,216 @@ async def my_quota_usage(
     from app.services.quotas import usage_summary
 
     return await usage_summary(db, user)
+
+
+# --------------------------------------------------------------------------
+# GDPR data export
+# --------------------------------------------------------------------------
+# Right to data portability (Art. 20 GDPR): every user can download a
+# machine-readable copy of everything we hold on them. The response is a
+# single JSON object covering profile, apps owned / collaborated, download
+# events, and the audit-log entries where the user is the actor.
+#
+# Synchronous on purpose — even a busy maintainer typically has a few
+# hundred events at most, which a single query batch + json dump finishes
+# in well under a second. For multi-million-event accounts we'd switch to
+# an async job + signed URL.
+
+def _iso(d: datetime | None) -> str | None:
+    """Match the ``Z``-suffix format Pydantic emits on the rest of the API
+    so an exported timestamp can be diffed against, say, a /apps payload
+    string-for-string."""
+    return d.isoformat().replace("+00:00", "Z") if d else None
+
+
+@router.get("/export")
+async def export_my_data(
+    user: Annotated[User, Depends(get_current_user)],
+    db: DbSession,
+) -> Response:
+    """GDPR-style data export — a single JSON file containing everything we
+    hold on the calling user. The response sets ``Content-Disposition:
+    attachment`` so a browser saves it as
+    ``fdroid-store-export-<username>-<YYYY-MM-DD>.json``.
+
+    Sections:
+      * ``profile``                 — the account row
+      * ``apps_owned``              — full metadata of every app where the
+                                      caller is ``owner_id``, with each
+                                      published APK summarised
+      * ``app_collaborations``      — apps where the caller is co-maintainer
+                                      (just references, the full payload
+                                      belongs to the owner's export)
+      * ``downloads``               — per-event log of the caller's
+                                      downloads (anonymised IP, UA classifier)
+      * ``audit_log``               — every action where the caller is the
+                                      actor (admin actions if applicable,
+                                      collaborator changes, etc.)
+    """
+    import json as _json
+
+    from app.models.app_collaborator import AppCollaborator
+    from app.models.audit_log import AuditLog
+
+    # --- profile ---------------------------------------------------------
+    profile = {
+        "id": str(user.id),
+        "email": user.email,
+        "username": user.username,
+        "full_name": user.full_name,
+        "role": user.role.value,
+        "auth_provider": user.auth_provider.value,
+        "preferred_locale": user.preferred_locale,
+        "show_nsfw": user.show_nsfw,
+        "is_active": user.is_active,
+        "created_at": _iso(user.created_at),
+        "updated_at": _iso(user.updated_at),
+        "last_login_at": _iso(user.last_login_at),
+        "password_changed_at": _iso(user.password_changed_at),
+        # Quotas the user is actually subject to (per-user override or the
+        # repo default; ``None`` = unlimited on either dimension).
+        "quotas": {
+            "max_apps": user.quota_max_apps,
+            "max_storage_bytes": user.quota_max_storage_bytes,
+            "max_apks_per_month": user.quota_max_apks_per_month,
+        },
+    }
+
+    # --- apps owned ------------------------------------------------------
+    owned_rows = (
+        await db.execute(
+            select(App)
+            .options(selectinload(App.apks), selectinload(App.categories))
+            .where(App.owner_id == user.id)
+            .order_by(App.created_at)
+        )
+    ).scalars().unique().all()
+    apps_owned = []
+    for app in owned_rows:
+        apks_list = [
+            {
+                "id": str(apk.id),
+                "version_name": apk.version_name,
+                "version_code": apk.version_code,
+                "file_name": apk.file_name,
+                "size_bytes": apk.size_bytes,
+                "sha256": apk.sha256,
+                "status": apk.status.value,
+                "anti_features": apk.anti_features or [],
+                "min_sdk": apk.min_sdk,
+                "target_sdk": apk.target_sdk,
+                "whats_new": apk.whats_new,
+                "created_at": _iso(apk.created_at),
+            }
+            for apk in (app.apks or [])
+        ]
+        apps_owned.append({
+            "id": str(app.id),
+            "package_name": app.package_name,
+            "name": app.name,
+            "summary": app.summary,
+            "description": app.description,
+            "license": app.license,
+            "website": app.website,
+            "source_code": app.source_code,
+            "issue_tracker": app.issue_tracker,
+            "author_name": app.author_name,
+            "author_email": app.author_email,
+            "visibility": app.visibility.value,
+            "status": app.status.value,
+            "categories": [c.name for c in (app.categories or [])],
+            "created_at": _iso(app.created_at),
+            "updated_at": _iso(app.updated_at),
+            "apks": apks_list,
+        })
+
+    # --- collaborations (apps owned by someone else) ---------------------
+    collab_rows = (
+        await db.execute(
+            select(AppCollaborator, App)
+            .join(App, App.id == AppCollaborator.app_id)
+            .where(AppCollaborator.user_id == user.id)
+            .order_by(AppCollaborator.granted_at)
+        )
+    ).all()
+    app_collaborations = [
+        {
+            "app_id": str(app.id),
+            "package_name": app.package_name,
+            "app_name": app.name,
+            "granted_at": _iso(c.granted_at),
+            "granted_by": str(c.granted_by) if c.granted_by else None,
+        }
+        for c, app in collab_rows
+    ]
+
+    # --- download history ------------------------------------------------
+    dl_rows = (
+        await db.execute(
+            select(DownloadEvent, App, Apk)
+            .join(App, App.id == DownloadEvent.app_id)
+            .outerjoin(Apk, Apk.id == DownloadEvent.apk_id)
+            .where(DownloadEvent.user_id == user.id)
+            .order_by(desc(DownloadEvent.created_at))
+        )
+    ).all()
+    downloads = [
+        {
+            "created_at": _iso(ev.created_at),
+            "app_id": str(app.id),
+            "package_name": app.package_name,
+            "app_name": app.name,
+            "apk_id": str(apk.id) if apk else None,
+            "version_name": apk.version_name if apk else None,
+            "version_code": apk.version_code if apk else None,
+            "bytes_served": ev.bytes_served,
+            "status_code": ev.status_code,
+            "client_family": classify_user_agent(ev.user_agent),
+        }
+        for ev, app, apk in dl_rows
+    ]
+
+    # --- audit log (filtered on actor=self) ------------------------------
+    audit_rows = (
+        await db.execute(
+            select(AuditLog)
+            .where(AuditLog.actor_id == user.id)
+            .order_by(desc(AuditLog.created_at))
+        )
+    ).scalars().all()
+    audit_log = [
+        {
+            "created_at": _iso(row.created_at),
+            "action": row.action,
+            "target_type": row.target_type,
+            "target_id": row.target_id,
+            "summary": row.summary,
+            "payload": row.payload,
+        }
+        for row in audit_rows
+    ]
+
+    payload = {
+        "format": "fdroid-store/export-v1",
+        "exported_at": _iso(datetime.now(UTC)),
+        "profile": profile,
+        "apps_owned": apps_owned,
+        "app_collaborations": app_collaborations,
+        "downloads": downloads,
+        "audit_log": audit_log,
+    }
+    body = _json.dumps(payload, indent=2, ensure_ascii=False)
+
+    date_slug = datetime.now(UTC).strftime("%Y-%m-%d")
+    # Username may contain dots that are awkward in filenames (e.g. on
+    # Windows), but anything Pydantic-validated is alphanumeric + dot + _;
+    # the worst case is a ``.`` after the username, which every modern OS
+    # handles fine.
+    filename = f"fdroid-store-export-{user.username}-{date_slug}.json"
+    return Response(
+        content=body,
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )

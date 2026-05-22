@@ -477,6 +477,14 @@
       "hidden": "NSFW content is now hidden.",
       "updateFailed": "Could not update preference"
     },
+    "export": {
+      "title": "Export my data",
+      "body": "Download a single JSON file containing everything we keep tied to your account: profile, apps you own (with APK metadata), collaborations, download history, and audit-log entries where you were the actor.",
+      "button": "Download export (JSON)",
+      "busy": "Preparing…",
+      "success": "Download started.",
+      "failed": "Export failed."
+    },
     "languagePicker": {
       "title": "Preferred language",
       "body": "When an app ships a translation matching your language, you'll see its name, summary and description in that language. Anything else falls back to the publisher's defaults.",

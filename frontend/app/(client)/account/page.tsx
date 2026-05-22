@@ -4,6 +4,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  Download,
   EyeOff,
   Globe2,
   Key,
@@ -24,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { api, type ApiKey, type CurrentUser } from "@/lib/api";
+import { api, API_URL, getAccessToken, type ApiKey, type CurrentUser } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { useAuth } from "@/lib/auth-store";
@@ -394,6 +395,9 @@ function ProfilePane({
 
       {/* NSFW toggle */}
       <NsfwCard user={user} fetchMe={fetchMe} />
+
+      {/* GDPR data export */}
+      <DataExportCard user={user} />
     </div>
   );
 }
@@ -621,6 +625,76 @@ function NsfwCard({
           {msg.text}
         </p>
       )}
+    </Card>
+  );
+}
+
+
+function DataExportCard({ user }: { user: CurrentUser }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  async function download() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const token = getAccessToken();
+      if (!token) throw new Error("Not authenticated");
+      const res = await fetch(`${API_URL}/api/v1/me/export`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      // Pull the filename from Content-Disposition; fall back to a sane
+      // default if the header is stripped by a CDN.
+      const dispo = res.headers.get("content-disposition") || "";
+      const match = dispo.match(/filename="([^"]+)"/);
+      const filename =
+        match?.[1] ||
+        `fdroid-store-export-${user.username}-${new Date().toISOString().slice(0, 10)}.json`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg({ kind: "ok", text: t("account.export.success") });
+    } catch (e) {
+      setMsg({
+        kind: "err",
+        text: e instanceof Error ? e.message : t("account.export.failed"),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card
+      icon={<Download className="h-4 w-4" />}
+      title={t("account.export.title")}
+    >
+      <p className="text-xs leading-relaxed text-ink-mute">
+        {t("account.export.body")}
+      </p>
+      <div className="mt-4 flex items-center gap-3">
+        <Button variant="filled" size="sm" disabled={busy} onClick={download}>
+          {busy ? t("account.export.busy") : t("account.export.button")}
+        </Button>
+        {msg && (
+          <span
+            className={cn(
+              "text-xs",
+              msg.kind === "ok" ? "text-primary" : "text-danger",
+            )}
+          >
+            {msg.text}
+          </span>
+        )}
+      </div>
     </Card>
   );
 }
