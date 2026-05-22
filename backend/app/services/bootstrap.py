@@ -149,16 +149,23 @@ async def _create_tables_if_needed() -> None:
     async with engine.connect() as conn:
         await conn.execution_options(isolation_level="AUTOCOMMIT")
         from sqlalchemy import text as _text  # local import to avoid shadowing the inner one above
+        # NOTE: SQLAlchemy's ``Enum`` defaults to the Python *member name*
+        # (UPPERCASE) as the PG label, so the type already contains
+        # ``USER`` and ``ADMIN`` (not their lowercase ``.value`` strings).
+        # We add ``UPLOADER`` here to match. The harmless lowercase
+        # ``'uploader'`` value that an earlier iteration added once is
+        # left in place — PG doesn't support ``DROP VALUE`` and it's
+        # unused.
         for stmt in (
-            "ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'uploader'",
-            # Auto-promote pre-existing ``user`` accounts that
-            # already own or co-maintain an app. Without this, every
-            # user with apps would lose /my-apps access at upgrade
-            # time. Idempotent on re-run — the WHERE filter on
-            # ``role = 'user'`` short-circuits once everyone is up.
+            "ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'UPLOADER'",
+            # Auto-promote pre-existing ``USER`` accounts that already
+            # own or co-maintain an app. Without this, every user with
+            # apps would lose /my-apps access at upgrade time.
+            # Idempotent on re-run — the WHERE filter on ``role =
+            # 'USER'`` short-circuits once everyone is up.
             """
-            UPDATE users SET role = 'uploader'
-            WHERE role = 'user'
+            UPDATE users SET role = 'UPLOADER'
+            WHERE role = 'USER'
               AND (
                 id IN (SELECT owner_id FROM apps WHERE owner_id IS NOT NULL)
                 OR id IN (SELECT user_id FROM app_collaborators)
