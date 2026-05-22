@@ -27,9 +27,10 @@ export function SiteFooter() {
           </div>
           <div>
             <div className="eyebrow">{t("footer.browse")}</div>
+            {/* ``/apps`` and ``/my-apps`` are already in the top navbar, so
+                keep the footer focused on entries that DON'T live there —
+                stats, account, and the RSS feeds. */}
             <ul className="mt-3 space-y-2 text-sm">
-              <li><Link href="/apps" className="text-ink-soft hover:text-ink">{t("footer.allApps")}</Link></li>
-              <li><Link href="/my-apps" className="text-ink-soft hover:text-ink">{t("footer.myApps")}</Link></li>
               <li><Link href="/stats" className="text-ink-soft hover:text-ink">{t("footer.stats")}</Link></li>
               <li><Link href="/account" className="text-ink-soft hover:text-ink">{t("footer.account")}</Link></li>
               <li>
