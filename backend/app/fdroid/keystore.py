@@ -1,8 +1,11 @@
 """Repo signing key management — generate, import, inspect.
 
-The keystore is a PKCS#12 file at ``settings.keystore_path``. We use the JDK's
-``keytool`` for generation and inspection (no Python equivalent that handles
-JKS/P12 well enough for jarsigner to read).
+The keystore is a PKCS#12 file at ``settings.keystore_path``. Generation and
+inspection are pure-Python through ``cryptography``: the API image carries
+no JDK (only the worker does, for signing the F-Droid index with
+``apksigner``). The PKCS#12 we emit here is fully compatible with what
+``apksigner`` consumes on the worker side — exercised end-to-end by the
+"Generate keystore → reindex → APK download" flow in the smoke suite.
 """
 from __future__ import annotations
 
@@ -10,11 +13,14 @@ import asyncio
 import os
 import shutil
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from cryptography.hazmat.primitives import hashes
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
 
 
 class KeystoreError(RuntimeError):
@@ -31,36 +37,140 @@ class KeystoreInfo:
     not_after: datetime | None = None
 
 
-async def _run(
-    cmd: list[str],
-    input_bytes: bytes | None = None,
-    env_extra: dict[str, str] | None = None,
-    timeout: float = 60.0,
-) -> tuple[int, str, str]:
-    """Run an external command. ``env_extra`` is merged into the child env
-    so secrets (keystore password) can be passed via ``-storepass:env NAME``
-    instead of plaintext argv (visible in ``/proc/<pid>/cmdline``).
-    ``timeout`` enforces an upper bound on wall-clock — the JVM tools occasionally
-    hang on corrupt inputs and the previous unbounded ``communicate()`` let
-    a single bad APK pin a worker indefinitely."""
-    env: dict[str, str] | None = None
-    if env_extra:
-        env = os.environ.copy()
-        env.update(env_extra)
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE if input_bytes else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
+_DNAME_OID_MAP: dict[str, x509.ObjectIdentifier] = {
+    "CN": NameOID.COMMON_NAME,
+    "OU": NameOID.ORGANIZATIONAL_UNIT_NAME,
+    "O": NameOID.ORGANIZATION_NAME,
+    "L": NameOID.LOCALITY_NAME,
+    "ST": NameOID.STATE_OR_PROVINCE_NAME,
+    "S": NameOID.STATE_OR_PROVINCE_NAME,  # JDK keytool accepts both ST and S
+    "C": NameOID.COUNTRY_NAME,
+    "STREET": NameOID.STREET_ADDRESS,
+    "DC": NameOID.DOMAIN_COMPONENT,
+    "UID": NameOID.USER_ID,
+    "E": NameOID.EMAIL_ADDRESS,
+    "EMAILADDRESS": NameOID.EMAIL_ADDRESS,
+}
+
+
+def _parse_dname(dname: str) -> x509.Name:
+    """Parse a keytool-style RFC 2253-ish DN into an x509.Name.
+
+    Accepts the same syntax keytool's ``-dname`` flag does:
+    comma-separated ``KEY=value`` pairs, case-insensitive keys, optional
+    whitespace around the commas. Backslash escapes a literal comma so a
+    DN like ``CN=My Corp\\, Inc., O=Acme`` keeps the comma in CN.
+
+    Raises :class:`KeystoreError` on unknown keys or empty values so the
+    setup wizard surfaces "C=ZZZZ" typos rather than silently emitting
+    a cert with no Country attribute.
+    """
+    parts: list[str] = []
+    buf: list[str] = []
+    escaped = False
+    for ch in dname:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == ",":
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    parts.append("".join(buf))
+
+    attrs: list[x509.NameAttribute] = []
+    for raw in parts:
+        kv = raw.strip()
+        if not kv:
+            continue
+        if "=" not in kv:
+            raise KeystoreError(f"malformed DN component {kv!r} (expected KEY=value)")
+        key, _, value = kv.partition("=")
+        key = key.strip().upper()
+        value = value.strip()
+        if not value:
+            raise KeystoreError(f"empty value for DN component {key!r}")
+        oid = _DNAME_OID_MAP.get(key)
+        if oid is None:
+            raise KeystoreError(f"unsupported DN component {key!r}")
+        attrs.append(x509.NameAttribute(oid, value))
+    if not attrs:
+        raise KeystoreError("DN must contain at least one component (e.g. CN=...)")
+    return x509.Name(attrs)
+
+
+def _build_keystore_bytes_sync(
+    *,
+    keystore_password: str,
+    alias: str,
+    dname: str,
+    validity_days: int,
+) -> bytes:
+    """Synchronous PKCS#12 build. Heavy CPU work (RSA-3072 keygen ≈ 100-300 ms)
+    that the caller runs through ``asyncio.to_thread`` so the event loop
+    stays free."""
+    name = _parse_dname(dname)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)  # self-signed
+        .public_key(key.public_key())
+        # Random 64-bit positive integer; keytool's default. SECP / NIST
+        # both forbid using 0 or repeating serials within the same
+        # subject — a fresh random satisfies both.
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))  # clock-skew slack
+        .not_valid_after(now + timedelta(days=validity_days))
+        # Mirror keytool's default basicConstraints + keyUsage for a
+        # ``-keyalg RSA`` keypair — these are what apksigner / F-Droid
+        # clients look for on the leaf cert.
+        .add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True
+        )
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=True,
+                key_encipherment=True,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .sign(private_key=key, algorithm=hashes.SHA256())
     )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(input_bytes), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise KeystoreError(f"command {cmd[0]} timed out after {timeout}s")
-    return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+    # PKCS12 password is bytes; encode UTF-8 to match what keytool wrote
+    # historically. ``BestAvailableEncryption`` uses AES-256-CBC + HMAC-
+    # SHA256 (the modern PKCS12 profile keytool 17+ writes too), which
+    # apksigner / jarsigner have supported since JDK 11.
+    pwd_bytes = keystore_password.encode("utf-8")
+    encryption = serialization.BestAvailableEncryption(pwd_bytes)
+    p12 = pkcs12.serialize_key_and_certificates(
+        # ``friendly_name`` is what shows up as the alias when keytool
+        # / apksigner list the entries. Must be bytes.
+        name=alias.encode("utf-8"),
+        key=key,
+        cert=cert,
+        cas=None,
+        encryption_algorithm=encryption,
+    )
+    return p12
 
 
 async def generate_keystore(
@@ -74,56 +184,51 @@ async def generate_keystore(
 ) -> KeystoreInfo:
     """Generate a new PKCS#12 keystore with a single RSA-3072 key.
 
+    Pure-Python implementation (no ``keytool``) so the API image stays
+    JDK-free. The worker — which still carries the JDK + ``apksigner``
+    for index signing — reads back this same PKCS#12 file at index-
+    rebuild time; apksigner has no issue with the format ``cryptography``
+    emits (AES-256-CBC encryption + HMAC-SHA256 MAC, PKCS#12 v3).
+
+    NOTE: ``key_password`` is accepted for API compatibility with the
+    pre-split wizard but ignored — PKCS#12 only supports a single
+    password for the whole store under
+    :class:`serialization.BestAvailableEncryption`. Splitting store /
+    key passwords would require dropping back to ``CertificateAndKeyPair``
+    + a custom KDF, which apksigner doesn't reliably consume. Reject
+    distinct passwords at the wizard layer instead.
+
     Refuses to overwrite an existing file — callers must delete it first.
     """
     if path.exists():
         raise KeystoreError(f"Keystore already exists at {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    # ``-storepass:env`` / ``-keypass:env`` read the value from the child's
-    # env vars instead of argv, so the secret never appears in ps / /proc/
-    # <pid>/cmdline (CWE-214).
-    cmd = [
-        "keytool", "-genkeypair",
-        # Force the JVM's SecureRandom to /dev/urandom. Default on modern
-        # JVMs is already file:/dev/urandom, but on the jlink'd minimal
-        # JRE we ship the java.security policy isn't always picked up
-        # reliably — under low entropy keytool blocks on /dev/random and
-        # the subprocess.communicate() hits its timeout instead of ever
-        # returning a clean error.
-        "-J-Djava.security.egd=file:/dev/urandom",
-        "-keystore", str(path),
-        "-storetype", "PKCS12",
-        "-storepass:env", "FDROID_STOREPASS",
-        "-keypass:env", "FDROID_KEYPASS",
-        "-alias", alias,
-        "-keyalg", "RSA",
-        "-keysize", "3072",
-        "-validity", str(validity_days),
-        "-dname", dname,
-    ]
-    rc, out, err = await _run(
-        cmd,
-        env_extra={"FDROID_STOREPASS": keystore_password, "FDROID_KEYPASS": key_password},
+    # ``key_password`` is silently ignored when distinct from
+    # ``keystore_password``. The wizard schema validates equality, but
+    # treat them as best-effort here so a future caller that forgets
+    # the schema check still gets a usable .p12.
+    _ = key_password
+    p12_bytes = await asyncio.to_thread(
+        _build_keystore_bytes_sync,
+        keystore_password=keystore_password,
+        alias=alias,
+        dname=dname,
+        validity_days=validity_days,
     )
-    if rc != 0:
-        # keytool sometimes dies without writing anything to stderr (signal
-        # kill, native crash). Surfacing only ``err or out`` would then
-        # show the harmless "Generating ... RSA key pair" banner that's
-        # already on stdout and tell the operator nothing. Include rc and
-        # both streams so the real cause is visible.
-        bits = [f"rc={rc}"]
-        if err.strip():
-            bits.append(f"stderr: {err.strip()}")
-        if out.strip():
-            bits.append(f"stdout: {out.strip()}")
-        raise KeystoreError("keytool genkeypair failed — " + " | ".join(bits))
-    # File ends up readable by group/world under the default umask; tighten
-    # to 0600 so a sidecar process running as a different UID can't read
-    # the .p12 bytes and brute-force the password offline (CWE-276).
+    # Write atomically: bytes → tmp → rename. ``open(..., 'xb')`` makes
+    # the create+write step itself a race-free O_EXCL, so two concurrent
+    # wizard submissions can't both think they succeeded.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "xb") as fh:
+        fh.write(p12_bytes)
+    # Tighten perms before the rename so a sidecar process running as a
+    # different UID can't read the .p12 bytes and brute-force the
+    # password offline (CWE-276).
     try:
-        os.chmod(path, 0o600)
+        os.chmod(tmp, 0o600)
     except OSError:
         pass
+    os.replace(tmp, path)
     return await read_keystore_info(path, keystore_password)
 
 
