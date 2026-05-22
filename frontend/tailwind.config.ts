@@ -19,6 +19,12 @@ const config: Config = {
       fontFamily: {
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
+        // Variable-serif display face used for the editorial treatment on
+        // /stats — hero numerals, section titles. Fraunces, loaded via
+        // ``next/font/google`` in app/layout.tsx with the ``opsz`` and
+        // ``SOFT`` axes wired up so larger sizes pick up the chunkier
+        // optical-size cut automatically.
+        display: ["var(--font-display)", "Georgia", "ui-serif", "serif"],
       },
       colors: {
         /* --- Material 3-ish semantic colors -----------------------------

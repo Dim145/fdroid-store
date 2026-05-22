@@ -624,6 +624,23 @@
     "subtitlePublic": "Compteurs agrégés de ce dépôt. Les apps privées sont exclues — connecte-toi en tant que propriétaire pour voir le tableau complet.",
     "subtitleAdmin": "Vue admin — les totaux incluent les apps privées et les APK non publiés.",
     "adminScope": "Vue admin",
+    "masthead": {
+      "publication": "fdroid-store almanach",
+      "edition": "Édition vivante"
+    },
+    "divider": {
+      "activity": "I · Activité",
+      "leaderboard": "II · Classement",
+      "catalogue": "III · Catalogue"
+    },
+    "lead": {
+      "label": "Téléchargements cumulés",
+      "windowAllTime": "depuis l'ouverture du dépôt"
+    },
+    "chart": {
+      "peak": "Pic",
+      "avg": "Moyenne · jour"
+    },
     "totals": {
       "apps": "Apps",
       "apks": "APK publiés",

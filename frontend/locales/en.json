@@ -624,6 +624,23 @@
     "subtitlePublic": "Aggregate counters for this repo. Private apps are excluded — sign in as an owner to see the full picture.",
     "subtitleAdmin": "Admin view — totals include private apps and unpublished APKs.",
     "adminScope": "Admin view",
+    "masthead": {
+      "publication": "fdroid-store almanac",
+      "edition": "Live edition"
+    },
+    "divider": {
+      "activity": "I · Activity",
+      "leaderboard": "II · Leaderboard",
+      "catalogue": "III · Catalogue"
+    },
+    "lead": {
+      "label": "All-time downloads",
+      "windowAllTime": "since the repo opened"
+    },
+    "chart": {
+      "peak": "Peak",
+      "avg": "Avg · day"
+    },
     "totals": {
       "apps": "Apps",
       "apks": "Published APKs",
