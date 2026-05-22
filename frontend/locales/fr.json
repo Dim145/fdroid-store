@@ -1330,6 +1330,7 @@
       },
       "role": {
         "user": "Utilisateur",
+        "uploader": "Uploader",
         "admin": "Admin"
       },
       "create": "Créer",
@@ -1382,6 +1383,7 @@
       "filter": {
         "all": "Tout le monde",
         "admins": "Admins",
+        "uploaders": "Uploaders",
         "users": "Utilisateurs",
         "disabled": "Désactivés"
       },
@@ -1397,10 +1399,12 @@
         "accountActiveBody": "L'utilisateur peut se connecter et utiliser l'API.",
         "accountDisabledBody": "Connexion bloquée. Les tokens existants sont révoqués.",
         "lastAdminHint": "dernier admin actif",
+        "role": "Rôle",
         "roleAdmin": "Administrateur",
         "roleAdminBody": "Accès complet à toutes les apps, utilisateurs et paramètres du dépôt.",
         "roleAdminBodyShort": "Accès complet au dépôt.",
-        "roleUserBody": "Gère uniquement ses propres apps.",
+        "roleUploaderBody": "Peut publier et gérer ses propres apps. Pas d'accès admin.",
+        "roleUserBody": "Navigation et téléchargement seulement. Pas d'accès à /my-apps.",
         "resetPassword": "Réinitialiser le mot de passe",
         "resetPasswordBody": "Génère un nouveau mot de passe et transmets-le. Les sessions sont révoquées à l'enregistrement.",
         "resetPasswordWarn": "Les tokens existants de cet utilisateur seront invalidés dès l'enregistrement.",

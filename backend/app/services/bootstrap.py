@@ -125,6 +125,10 @@ async def _create_tables_if_needed() -> None:
               END IF;
             END $$;
             """,
+            # v1.2 — auto-promote happens in the AUTOCOMMIT block
+            # below, AFTER ``ALTER TYPE … ADD VALUE 'uploader'``. The
+            # in-transaction UPDATE would fail here because the enum
+            # doesn't yet contain the new value.
         ):
             try:
                 await conn.execute(text(stmt))
@@ -134,6 +138,37 @@ async def _create_tables_if_needed() -> None:
         # holds it until close, which happens implicitly at engine
         # shutdown but is worth being explicit about.
         await conn.execute(text("SELECT pg_advisory_unlock(hashtext('fdroid-store:bootstrap'))"))
+
+    # ALTER TYPE … ADD VALUE cannot run inside a transaction block —
+    # PG explicitly refuses, raising
+    # ``ALTER TYPE ... ADD cannot run inside a transaction block``.
+    # Use a separate AUTOCOMMIT connection so the enum is widened
+    # outside any open transaction, then run the data-migration
+    # UPDATE in the same connection (now that the new value is
+    # available).
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        from sqlalchemy import text as _text  # local import to avoid shadowing the inner one above
+        for stmt in (
+            "ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'uploader'",
+            # Auto-promote pre-existing ``user`` accounts that
+            # already own or co-maintain an app. Without this, every
+            # user with apps would lose /my-apps access at upgrade
+            # time. Idempotent on re-run — the WHERE filter on
+            # ``role = 'user'`` short-circuits once everyone is up.
+            """
+            UPDATE users SET role = 'uploader'
+            WHERE role = 'user'
+              AND (
+                id IN (SELECT owner_id FROM apps WHERE owner_id IS NOT NULL)
+                OR id IN (SELECT user_id FROM app_collaborators)
+              )
+            """,
+        ):
+            try:
+                await conn.execute(_text(stmt))
+            except Exception as exc:  # noqa: BLE001
+                log.info("skipping enum migration step", stmt=stmt, error=str(exc))
 
 
 # Mirrors F-Droid's default category list (subset, can be edited by admin)

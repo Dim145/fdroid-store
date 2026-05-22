@@ -12,9 +12,20 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
-const PRIMARY_NAV = [
+type NavItem = {
+  href: string;
+  labelKey: string;
+  icon: typeof Sparkles;
+  authOnly: boolean;
+  /** When true, the link is shown only to ``uploader`` / ``admin``.
+   *  Plain ``user`` accounts can't push to /my-apps so we hide the
+   *  link to keep the affordance honest. */
+  uploaderOnly?: boolean;
+};
+
+const PRIMARY_NAV: readonly NavItem[] = [
   { href: "/apps", labelKey: "header.nav.apps", icon: Sparkles, authOnly: false },
-  { href: "/my-apps", labelKey: "header.nav.myApps", icon: LayoutGrid, authOnly: true },
+  { href: "/my-apps", labelKey: "header.nav.myApps", icon: LayoutGrid, authOnly: true, uploaderOnly: true },
 ] as const;
 
 /* M3 top app bar — sticky, surface-tinted, hosts brand + nav + search +
@@ -58,7 +69,11 @@ export function SiteHeader() {
 
         {/* Primary nav (desktop) */}
         <nav className="hidden items-center gap-1 md:flex">
-          {PRIMARY_NAV.filter((n) => !n.authOnly || user).map((item) => {
+          {PRIMARY_NAV.filter((n) => {
+            if (n.authOnly && !user) return false;
+            if (n.uploaderOnly && user?.role !== "uploader" && user?.role !== "admin") return false;
+            return true;
+          }).map((item) => {
             const active = isActive(item.href);
             const Icon = item.icon;
             return (
@@ -211,7 +226,11 @@ export function SiteHeader() {
               </label>
             </form>
             <nav className="grid gap-1">
-              {PRIMARY_NAV.filter((n) => !n.authOnly || user).map((item) => {
+              {PRIMARY_NAV.filter((n) => {
+            if (n.authOnly && !user) return false;
+            if (n.uploaderOnly && user?.role !== "uploader" && user?.role !== "admin") return false;
+            return true;
+          }).map((item) => {
                 const Icon = item.icon;
                 const active = isActive(item.href);
                 return (

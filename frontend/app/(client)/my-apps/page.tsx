@@ -116,7 +116,7 @@ function Spinner() {
 
 export default function MyAppsPage() {
   return (
-    <AuthGuard>
+    <AuthGuard requireUploader>
       <MyAppsInner />
     </AuthGuard>
   );

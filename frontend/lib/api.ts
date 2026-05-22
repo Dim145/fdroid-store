@@ -285,7 +285,7 @@ export type CurrentUser = {
   email: string;
   username: string;
   full_name: string | null;
-  role: "user" | "admin";
+  role: "user" | "uploader" | "admin";
   auth_provider: "local" | "oidc";
   is_active: boolean;
   last_login_at: string | null;
@@ -1065,11 +1065,11 @@ export type AdminCreateUser = {
   username: string;
   password: string;
   full_name?: string;
-  role?: "user" | "admin";
+  role?: "user" | "uploader" | "admin";
 };
 export type AdminUpdateUser = {
   full_name?: string;
-  role?: "user" | "admin";
+  role?: "user" | "uploader" | "admin";
   is_active?: boolean;
   new_password?: string;
   // Quota knobs. ``quota_*`` sets a value; ``quota_reset_*`` reverts to

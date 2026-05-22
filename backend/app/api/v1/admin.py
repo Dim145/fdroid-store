@@ -122,6 +122,42 @@ async def update_user(
             detail="Refusing change: this would leave the repo without an active admin",
         )
 
+    # Downgrading away from an upload-capable role (admin or uploader)
+    # to plain ``user`` is refused when the target still owns apps or
+    # has open collaborations. Otherwise the apps' /my-apps surface
+    # would become invisible to their own owner, and any collaborator
+    # row would point at a user who can no longer push to /my-apps.
+    # Admin must transfer / delete the apps OR remove the collab rows
+    # first.
+    if (
+        payload.role is not None
+        and payload.role == UserRole.USER
+        and target.role in (UserRole.ADMIN, UserRole.UPLOADER)
+    ):
+        from app.models.app import App
+        from app.models.app_collaborator import AppCollaborator
+
+        owned_count = (
+            await db.execute(
+                select(func.count()).select_from(App).where(App.owner_id == target.id)
+            )
+        ).scalar_one()
+        collab_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(AppCollaborator)
+                .where(AppCollaborator.user_id == target.id)
+            )
+        ).scalar_one()
+        if owned_count or collab_count:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot downgrade to user: this account still owns {owned_count} app(s) "
+                    f"and has {collab_count} collaboration(s). Transfer / delete them first."
+                ),
+            )
+
     if payload.full_name is not None:
         target.full_name = payload.full_name
     if payload.role is not None:

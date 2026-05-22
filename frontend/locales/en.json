@@ -1330,6 +1330,7 @@
       },
       "role": {
         "user": "User",
+        "uploader": "Uploader",
         "admin": "Admin"
       },
       "create": "Create",
@@ -1382,6 +1383,7 @@
       "filter": {
         "all": "Everyone",
         "admins": "Admins",
+        "uploaders": "Uploaders",
         "users": "Users",
         "disabled": "Disabled"
       },
@@ -1397,10 +1399,12 @@
         "accountActiveBody": "The user can sign in and use the API.",
         "accountDisabledBody": "Sign-in blocked. Existing tokens are revoked.",
         "lastAdminHint": "last active admin",
+        "role": "Role",
         "roleAdmin": "Administrator",
         "roleAdminBody": "Full access to every app, user, and repo setting.",
         "roleAdminBodyShort": "Full access to the repo.",
-        "roleUserBody": "Manages their own apps only.",
+        "roleUploaderBody": "Can publish and manage their own apps. No admin UI.",
+        "roleUserBody": "Browse and download only. No /my-apps access.",
         "resetPassword": "Reset password",
         "resetPasswordBody": "Mint a new password and hand it to the user. Their sessions are revoked on save.",
         "resetPasswordWarn": "Existing tokens for this user will be invalidated as soon as you save.",

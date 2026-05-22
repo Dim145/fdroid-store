@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_current_user, require_browse_access
+from app.api.deps import DbSession, get_current_user, get_current_uploader, require_browse_access
 from app.core.download_token import sign_media_token
 from app.core.rate_limit import limiter
 from app.api.v1.apks import (
@@ -177,7 +177,7 @@ async def list_apps(
 @router.post("/with-apk", response_model=AppDetail, status_code=status.HTTP_201_CREATED)
 async def create_app_with_apk(
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
     file: UploadFile = File(...),
     name: str = Form(..., min_length=1, max_length=255),
     package_name: str | None = Form(default=None, max_length=255),
@@ -330,7 +330,7 @@ async def create_app_with_staged_apk(
     request: Request,
     payload: AppCreateFromStagedApk,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> AppDetail:
     """Mirror of :func:`create_app_with_apk` that redeems a staging
     token (from ``POST /apks/inspect``) instead of accepting a fresh
@@ -440,7 +440,7 @@ async def create_app_with_github_source(
     request: Request,
     payload: AppCreateFromGithub,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> AppDetail:
     """Create an App + first APK + GithubSource in one shot.
 
@@ -642,7 +642,7 @@ async def create_app_with_github_source(
 @router.post("/import-metadata")
 async def import_metadata(
     payload: dict,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> dict:
     """Parse a pasted ``metadata.yml`` (fdroiddata upstream format) and
     return a flat dict the New App page can use to prefill its fields.
@@ -669,7 +669,7 @@ async def import_metadata(
 async def create_app(
     payload: AppCreate,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> AppRead:
     from app.services.quotas import ensure_can_create_app
 
@@ -777,7 +777,7 @@ async def update_app(
     app_id: uuid.UUID,
     payload: AppUpdate,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> AppRead:
     from app.services.app_permissions import assert_can_manage_app, is_owner_or_admin
 
@@ -884,7 +884,7 @@ async def _apply_suggested_version_override(
 async def delete_app(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     from app.services.app_permissions import assert_owner_or_admin
 
@@ -925,7 +925,7 @@ async def upsert_localization(
     locale: str,
     payload: LocalizationUpsert,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> LocalizationRead:
     """Create or replace a per-locale override row.
 
@@ -978,7 +978,7 @@ async def delete_localization(
     app_id: uuid.UUID,
     locale: str,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     if not _LOCALE_RE.match(locale):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bad locale")

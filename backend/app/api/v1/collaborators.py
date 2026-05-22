@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 
-from app.api.deps import DbSession, get_current_user
+from app.api.deps import DbSession, get_current_user, get_current_uploader
 from app.models.app import App
 from app.models.app_collaborator import AppCollaborator
 from app.models.user import User
@@ -81,7 +81,7 @@ async def add_collaborator(
     payload: AppCollaboratorAdd,
     db: DbSession,
     request: Request,
-    actor: Annotated[User, Depends(get_current_user)],
+    actor: Annotated[User, Depends(get_current_uploader)],
 ) -> AppCollaboratorRead:
     """Owner-only: add a user as co-maintainer."""
     app = await _load_app_or_404(db, app_id)
@@ -108,6 +108,18 @@ async def add_collaborator(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The owner is already implicitly granted full rights",
+        )
+    # The collaborator must be able to actually push to /my-apps —
+    # adding a plain ``user`` as collab would create the absurd state
+    # of "co-maintainer of an app I can't open the editor for". Admin
+    # must promote them to ``uploader`` first.
+    if not target.can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "User does not have the uploader role. "
+                "Ask an admin to promote them to uploader before adding them as a collaborator."
+            ),
         )
     existing = (
         await db.execute(
@@ -162,7 +174,7 @@ async def remove_collaborator(
     collaborator_id: uuid.UUID,
     db: DbSession,
     request: Request,
-    actor: Annotated[User, Depends(get_current_user)],
+    actor: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     """Owner-only: revoke a collaborator. Co-maintainers can also leave
     themselves (a user can always DELETE their own collab row)."""

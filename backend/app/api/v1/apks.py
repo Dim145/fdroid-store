@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_current_user, get_uploader_for_app
+from app.api.deps import DbSession, get_current_user, get_current_uploader, get_uploader_for_app
 from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
 from app.core.rate_limit import limiter
@@ -273,7 +273,7 @@ async def attach_apk_to_app(
 async def inspect_apk(
     request: Request,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
     file: UploadFile = File(...),
 ) -> ApkInspect:
     """Parse an APK and return its metadata. Stages the bytes for the
@@ -408,7 +408,7 @@ async def _discard_staged_apk(content_hash: str) -> None:
 async def inspect_github(
     request: Request,
     payload: GithubInspectRequest,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> GithubApkInspect:
     """Resolve the latest matching release on a GitHub repo, download
     the APK, parse it and return the metadata — no DB writes.
@@ -544,7 +544,7 @@ async def upload_apk_staged(
     body: _StagedAttachBody,
     db: DbSession,
     request: Request,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> ApkRead:
     """Promote a previously-staged APK (``POST /apks/inspect`` →
     ``staging_token``) onto an existing app. Skips the second upload —
@@ -725,7 +725,7 @@ async def update_apk(
     apk_id: uuid.UUID,
     payload: ApkUpdate,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> ApkRead:
     """Edit a previously-uploaded APK's mutable fields: the changelog and the
     anti-feature flags surfaced to F-Droid clients.
@@ -839,7 +839,7 @@ async def issue_download_url(
 async def delete_apk(
     apk_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     apk = (
         await db.execute(

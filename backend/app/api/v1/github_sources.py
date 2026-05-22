@@ -12,7 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 
-from app.api.deps import DbSession, get_current_user
+from app.api.deps import DbSession, get_current_user, get_current_uploader
 from app.core.rate_limit import limiter
 from app.models.app import App
 from app.models.github_source import GithubSource, GithubSourceStatus
@@ -69,7 +69,7 @@ async def upsert_github_source(
     request: Request,
     payload: GithubSourceUpsert,
     db: DbSession,
-    actor: Annotated[User, Depends(get_current_user)],
+    actor: Annotated[User, Depends(get_current_uploader)],
 ) -> GithubSourceUpsertResponse:
     """Create or replace the release source. Owner/admin only —
     co-maintainers are deliberately blocked from changing the upstream
@@ -249,7 +249,7 @@ async def delete_github_source(
     app_id: uuid.UUID,
     db: DbSession,
     request: Request,
-    actor: Annotated[User, Depends(get_current_user)],
+    actor: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     """Owner/admin only — same reasoning as upsert."""
     app = await _load_app_or_404(db, app_id)
@@ -284,7 +284,7 @@ async def scan_now(
     app_id: uuid.UUID,
     request: Request,
     db: DbSession,
-    actor: Annotated[User, Depends(get_current_user)],
+    actor: Annotated[User, Depends(get_current_uploader)],
 ) -> dict:
     """Trigger a one-shot scan of this app's GitHub source.
 

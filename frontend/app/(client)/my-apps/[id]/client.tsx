@@ -2130,7 +2130,7 @@ function AntiFeatureChips({
 
 export default function ManageAppClient() {
   return (
-    <AuthGuard>
+    <AuthGuard requireUploader>
       <ManageAppInner />
     </AuthGuard>
   );

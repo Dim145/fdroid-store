@@ -11,8 +11,9 @@ from app.models.mixins import IdMixin, TimestampMixin
 
 
 class UserRole(str, enum.Enum):
-    USER = "user"      # can manage their own apps + browse public ones
-    ADMIN = "admin"    # full access
+    USER = "user"          # browse + download only — no upload, no /my-apps
+    UPLOADER = "uploader"  # can manage own apps + browse, no admin UI
+    ADMIN = "admin"        # full access (admin UI inclus)
 
 
 class AuthProvider(str, enum.Enum):
@@ -76,3 +77,10 @@ class User(Base, IdMixin, TimestampMixin):
     @property
     def is_admin(self) -> bool:
         return self.role == UserRole.ADMIN
+
+    @property
+    def can_upload(self) -> bool:
+        """True for ``uploader`` or ``admin``. Gates every endpoint that
+        creates, edits, or attaches an APK / metadata / asset to an app
+        — and the /my-apps surface that wraps them in the SPA."""
+        return self.role in (UserRole.UPLOADER, UserRole.ADMIN)

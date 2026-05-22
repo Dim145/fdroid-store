@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_current_user, get_current_user_optional, is_public_mode
+from app.api.deps import DbSession, get_current_user, get_current_user_optional, get_current_uploader, is_public_mode
 from app.core.logging import get_logger
 from app.core.uploads import normalize_image, read_capped
 from app.models.app import App, AppScreenshot, AppStatus, AppVisibility
@@ -79,7 +79,7 @@ async def _load_owned_app(db, app_id: uuid.UUID, user: User) -> App:
 async def upload_custom_icon(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
     file: UploadFile = File(...),
 ) -> dict:
     """Override the auto-extracted icon with an admin-supplied one.
@@ -106,7 +106,7 @@ async def upload_custom_icon(
 async def upload_feature_graphic(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
     file: UploadFile = File(...),
 ) -> dict:
     """Set the app's featured graphic (the wide banner the F-Droid client
@@ -137,7 +137,7 @@ async def upload_feature_graphic(
 async def delete_feature_graphic(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     app = await _load_owned_app(db, app_id, user)
     if not app.feature_graphic_path:
@@ -167,7 +167,7 @@ _MAX_TV_BANNER_BYTES = 12 * 1024 * 1024      # 12 MiB — TV banner is the bigge
 async def upload_promo_graphic(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
     file: UploadFile = File(...),
 ) -> dict:
     """A smaller promo tile (Play Store style ~320×180). F-Droid v2 clients
@@ -196,7 +196,7 @@ async def upload_promo_graphic(
 async def delete_promo_graphic(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     app = await _load_owned_app(db, app_id, user)
     if not app.promo_graphic_path:
@@ -215,7 +215,7 @@ async def delete_promo_graphic(
 async def upload_tv_banner(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
     file: UploadFile = File(...),
 ) -> dict:
     """Android TV banner — 16:9 wide. Capped at 1280×720 which is what the
@@ -244,7 +244,7 @@ async def upload_tv_banner(
 async def delete_tv_banner(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     app = await _load_owned_app(db, app_id, user)
     if not app.tv_banner_path:
@@ -268,7 +268,7 @@ async def delete_tv_banner(
 async def revert_to_auto_icon(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     """Clear the custom flag. The icon falls back to the one extracted from
     the latest published APK (which already sits at ``icons/<pkg>.png``).
@@ -301,7 +301,7 @@ async def revert_to_auto_icon(
 async def upload_screenshots(
     app_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
     files: list[UploadFile] = File(...),
     locale: str = "en-US",
 ) -> list[dict]:
@@ -419,7 +419,7 @@ async def delete_screenshot(
     app_id: uuid.UUID,
     screenshot_id: uuid.UUID,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     app = await _load_owned_app(db, app_id, user)
     target = next((s for s in app.screenshots if s.id == screenshot_id), None)
@@ -450,7 +450,7 @@ async def reorder_screenshots(
     app_id: uuid.UUID,
     payload: ScreenshotReorderRequest,
     db: DbSession,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_uploader)],
 ) -> list[dict]:
     """Apply the order from a UI drag-and-drop. Missing or unknown ids are
     ignored — IDs not in the input keep their current relative order at the

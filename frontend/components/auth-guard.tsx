@@ -8,10 +8,29 @@ import { useAuth } from "@/lib/auth-store";
 
 type Props = {
   children: React.ReactNode;
+  /** Page is admin-only — anyone else gets bounced to /apps. */
   requireAdmin?: boolean;
+  /** Page needs upload privileges (``uploader`` or ``admin``).
+   *  Plain ``user`` accounts get bounced to /apps. Used by /my-apps
+   *  and everything under it (edit, new). */
+  requireUploader?: boolean;
 };
 
-export function AuthGuard({ children, requireAdmin = false }: Props) {
+function canAccess(
+  role: string,
+  requireAdmin: boolean,
+  requireUploader: boolean,
+): boolean {
+  if (requireAdmin) return role === "admin";
+  if (requireUploader) return role === "admin" || role === "uploader";
+  return true;
+}
+
+export function AuthGuard({
+  children,
+  requireAdmin = false,
+  requireUploader = false,
+}: Props) {
   const router = useRouter();
   const { user, loading } = useAuth();
 
@@ -22,10 +41,10 @@ export function AuthGuard({ children, requireAdmin = false }: Props) {
       router.replace(`/login?next=${here}`);
       return;
     }
-    if (requireAdmin && user.role !== "admin") {
+    if (!canAccess(user.role, requireAdmin, requireUploader)) {
       router.replace("/apps");
     }
-  }, [user, loading, requireAdmin, router]);
+  }, [user, loading, requireAdmin, requireUploader, router]);
 
   if (loading || !user) {
     return (
@@ -34,7 +53,7 @@ export function AuthGuard({ children, requireAdmin = false }: Props) {
       </div>
     );
   }
-  if (requireAdmin && user.role !== "admin") return null;
+  if (!canAccess(user.role, requireAdmin, requireUploader)) return null;
   return <>{children}</>;
 }
 

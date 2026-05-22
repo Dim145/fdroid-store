@@ -33,7 +33,7 @@ import { cn, formatDate } from "@/lib/utils";
 /*  Page                                                                       */
 /* -------------------------------------------------------------------------- */
 
-type FilterKey = "all" | "admin" | "user" | "disabled";
+type FilterKey = "all" | "admin" | "uploader" | "user" | "disabled";
 
 export default function AdminUsersPage() {
   const { t } = useTranslation();
@@ -65,6 +65,8 @@ export default function AdminUsersPage() {
     return {
       total: rows.length,
       admins: rows.filter((u) => u.role === "admin").length,
+      uploaders: rows.filter((u) => u.role === "uploader").length,
+      users: rows.filter((u) => u.role === "user").length,
       active: rows.filter((u) => u.is_active).length,
       disabled: rows.filter((u) => !u.is_active).length,
     };
@@ -75,6 +77,8 @@ export default function AdminUsersPage() {
     switch (filter) {
       case "admin":
         return users.filter((u) => u.role === "admin");
+      case "uploader":
+        return users.filter((u) => u.role === "uploader");
       case "user":
         return users.filter((u) => u.role === "user");
       case "disabled":
@@ -166,8 +170,14 @@ export default function AdminUsersPage() {
             onClick={() => setFilter("admin")}
           />
           <FilterChip
+            label={t("admin.users.filter.uploaders")}
+            count={stats.uploaders}
+            active={filter === "uploader"}
+            onClick={() => setFilter("uploader")}
+          />
+          <FilterChip
             label={t("admin.users.filter.users")}
-            count={stats.total - stats.admins}
+            count={stats.users}
             active={filter === "user"}
             onClick={() => setFilter("user")}
           />
@@ -548,8 +558,16 @@ function UserDrawer({
             </Field2>
             <Field2 label={t("admin.users.drawer.created")}>{formatDate(user.created_at)}</Field2>
             <Field2 label={t("admin.users.fields.role")}>
-              <Badge variant={user.role === "admin" ? "primary" : "outline"}>
-                {t(user.role === "admin" ? "admin.users.role.admin" : "admin.users.role.user")}
+              <Badge
+                variant={
+                  user.role === "admin"
+                    ? "primary"
+                    : user.role === "uploader"
+                      ? "accent"
+                      : "outline"
+                }
+              >
+                {t(`admin.users.role.${user.role}`)}
               </Badge>
             </Field2>
             <Field2 label={t("admin.users.columns2.provider")}>
@@ -731,18 +749,48 @@ function AccessSection({
           </div>
         </label>
 
-        {/* Role toggle — admins vs users */}
-        <label className="flex items-center justify-between gap-3 rounded-xl border border-outline-soft bg-surface px-4 py-3">
-          <div>
-            <div className="text-sm font-medium text-ink">{t("admin.users.drawer.roleAdmin")}</div>
-            <div className="text-xs text-ink-mute">{t("admin.users.drawer.roleAdminBody")}</div>
+        {/* Role picker — three-tier segmented control. Browse-only
+            ``user`` < upload-capable ``uploader`` < full-access
+            ``admin``. The downgrade-to-``user`` button is disabled
+            for the last active admin (already prevented server-side
+            but we don't want to round-trip just to see the 400). */}
+        <div className="rounded-xl border border-outline-soft bg-surface px-4 py-3">
+          <div className="mb-2 text-sm font-medium text-ink">{t("admin.users.drawer.role")}</div>
+          <div className="grid grid-cols-3 gap-1.5 rounded-pill bg-surface-2 p-1">
+            {([
+              { value: "user", label: t("admin.users.role.user") },
+              { value: "uploader", label: t("admin.users.role.uploader") },
+              { value: "admin", label: t("admin.users.role.admin") },
+            ] as const).map((opt) => {
+              const isCurrent = user.role === opt.value;
+              const wouldOrphanAdmin = lastAdmin && user.role === "admin" && opt.value !== "admin";
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={busy === "role" || isCurrent || wouldOrphanAdmin}
+                  onClick={() => patch({ role: opt.value }, "role")}
+                  className={cn(
+                    "rounded-pill px-3 py-1.5 text-xs font-semibold transition-colors",
+                    isCurrent
+                      ? "bg-primary text-primary-fg shadow-e1"
+                      : "text-ink-soft hover:bg-surface hover:text-ink disabled:opacity-50 disabled:hover:bg-transparent",
+                  )}
+                  title={wouldOrphanAdmin ? t("admin.users.drawer.lastAdminHint") : undefined}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
           </div>
-          <Switch
-            checked={user.role === "admin"}
-            disabled={busy === "role" || (lastAdmin && user.role === "admin")}
-            onCheckedChange={(v) => patch({ role: v ? "admin" : "user" }, "role")}
-          />
-        </label>
+          <div className="mt-2 text-xs text-ink-mute">
+            {user.role === "admin"
+              ? t("admin.users.drawer.roleAdminBody")
+              : user.role === "uploader"
+                ? t("admin.users.drawer.roleUploaderBody")
+                : t("admin.users.drawer.roleUserBody")}
+          </div>
+        </div>
 
         {/* Reset password */}
         {!showReset ? (
@@ -1025,7 +1073,7 @@ function InviteDrawer({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState(generatePassword());
   const [reveal, setReveal] = useState(false);
-  const [role, setRole] = useState<"user" | "admin">("user");
+  const [role, setRole] = useState<"user" | "uploader" | "admin">("user");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -1143,12 +1191,18 @@ function InviteDrawer({
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs font-medium text-ink-soft">{t("admin.users.fields.role")}</Label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <RoleCard
               active={role === "user"}
               onClick={() => setRole("user")}
               title={t("admin.users.role.user")}
               body={t("admin.users.drawer.roleUserBody")}
+            />
+            <RoleCard
+              active={role === "uploader"}
+              onClick={() => setRole("uploader")}
+              title={t("admin.users.role.uploader")}
+              body={t("admin.users.drawer.roleUploaderBody")}
             />
             <RoleCard
               active={role === "admin"}

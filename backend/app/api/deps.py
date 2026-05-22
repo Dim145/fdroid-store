@@ -92,6 +92,26 @@ async def get_current_admin(
     return user
 
 
+async def get_current_uploader(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Gate every endpoint that creates / edits / attaches metadata to
+    an app on the ``uploader`` or ``admin`` role.
+
+    Plain ``user`` accounts can browse and download but cannot reach
+    the SPA's /my-apps surface or any of the underlying mutation
+    endpoints (upload APK, create app, set metadata, manage
+    collaborators, …). Use this dependency on every such endpoint;
+    ``get_current_admin`` is still its own thing for admin-only routes.
+    """
+    if not user.can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Uploader role required",
+        )
+    return user
+
+
 # --------------------------------------------------------------------------
 # API-key auth (used by the F-Droid client over HTTP Basic)
 # --------------------------------------------------------------------------
@@ -250,9 +270,20 @@ async def get_uploader_for_app(
             "kind": "deploy_token",
             "prefix": parts[0] if parts else None,
         }
-        return user
-    request.state.upload_credential = {"kind": "jwt"}
-    return await _user_from_jwt(token, db)
+    else:
+        request.state.upload_credential = {"kind": "jwt"}
+        user = await _user_from_jwt(token, db)
+    # Whether the caller arrived via JWT or deploy token, the actual
+    # principal is a user — and they need the uploader role. A
+    # ``user`` whose role was downgraded after issuing a deploy
+    # token (or right after a successful JWT login) is no longer
+    # entitled to push APKs, regardless of credential type.
+    if not user.can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Uploader role required",
+        )
+    return user
 
 
 async def require_browse_access(

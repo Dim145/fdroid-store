@@ -20,7 +20,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 
-from app.api.deps import DbSession, get_current_user
+from app.api.deps import DbSession, get_current_user, get_current_uploader
 from app.core.security import generate_deploy_token
 from app.models.app import App
 from app.models.deploy_token import DeployToken
@@ -73,7 +73,7 @@ async def create_deploy_token(
     payload: DeployTokenCreate,
     db: DbSession,
     request: Request,
-    actor: Annotated[User, Depends(get_current_user)],
+    actor: Annotated[User, Depends(get_current_uploader)],
 ) -> DeployTokenCreated:
     """Mint a new deploy token. Any user with manage rights (owner,
     co-maintainer, admin) can create — the token only grants the
@@ -148,7 +148,7 @@ async def revoke_deploy_token(
     token_id: uuid.UUID,
     db: DbSession,
     request: Request,
-    actor: Annotated[User, Depends(get_current_user)],
+    actor: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
     """Anyone with manage rights can revoke — same reasoning as
     minting. Co-maintainers leaving the team should also be able to

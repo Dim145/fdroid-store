@@ -1012,7 +1012,7 @@ function GithubInspectCard({ inspect }: { inspect: GithubApkInspect }) {
 
 export default function NewAppPage() {
   return (
-    <AuthGuard>
+    <AuthGuard requireUploader>
       <NewAppInner />
     </AuthGuard>
   );
