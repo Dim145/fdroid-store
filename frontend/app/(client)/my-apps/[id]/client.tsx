@@ -34,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Sheet } from "@/components/ui/sheet";
 import { api, mediaUrl, type Apk, type AppDetail, type Category, type CveSeverity, type ReproducibilityStatus, type SbomRead, type Screenshot } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { useAuth } from "@/lib/auth-store";
@@ -922,7 +923,7 @@ function ManageAppInner() {
                           });
                         }}
                       >
-                        {isEditing ? t("common.close") : apk.whats_new ? t("myApps.edit.versions.editNotes") : t("myApps.edit.versions.addNotes")}
+                        {apk.whats_new ? t("myApps.edit.versions.editNotes") : t("myApps.edit.versions.addNotes")}
                       </Button>
                       <Button size="sm" variant="danger" onClick={() => deleteApk(apk)}>
                         <Trash2 className="h-3.5 w-3.5" /> {t("common.delete")}
@@ -930,24 +931,50 @@ function ManageAppInner() {
                     </div>
                   </li>
                   {isEditing && editingChangelog && (
-                    <li className="rounded-2xl bg-surface-2 p-4">
+                    <Sheet
+                      open={true}
+                      onClose={() => setEditingChangelog(null)}
+                      title={
+                        apk.whats_new
+                          ? t("myApps.edit.versions.editNotes")
+                          : t("myApps.edit.versions.addNotes")
+                      }
+                      eyebrow={
+                        <>
+                          <span className="rounded-pill border border-outline-soft bg-surface-2 px-2 py-0.5 text-ink">
+                            v{apk.version_name}
+                          </span>
+                          <span className="opacity-60">·</span>
+                          <span>code {apk.version_code}</span>
+                        </>
+                      }
+                      footer={
+                        <>
+                          {apk.whats_new && Object.keys(apk.whats_new).length > 0 && (
+                            <Button
+                              size="md"
+                              variant="text"
+                              className="mr-auto text-danger"
+                              onClick={() => clearChangelog(apk.id)}
+                            >
+                              {t("myApps.edit.versions.clearAllLocales")}
+                            </Button>
+                          )}
+                          <Button size="md" variant="ghost" onClick={() => setEditingChangelog(null)}>
+                            {t("common.cancel")}
+                          </Button>
+                          <Button size="md" variant="filled" onClick={saveChangelog} disabled={savingChangelog}>
+                            {savingChangelog ? t("common.saving") : t("common.save")}
+                          </Button>
+                        </>
+                      }
+                    >
                       <ChangelogEditor
                         version={`v${apk.version_name} (${apk.version_code})`}
                         draft={editingChangelog}
                         onChange={setEditingChangelog}
                       />
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button size="md" variant="filled" onClick={saveChangelog} disabled={savingChangelog}>
-                          {savingChangelog ? t("common.saving") : t("common.save")}
-                        </Button>
-                        <Button size="md" variant="ghost" onClick={() => setEditingChangelog(null)}>{t("common.cancel")}</Button>
-                        {apk.whats_new && Object.keys(apk.whats_new).length > 0 && (
-                          <Button size="md" variant="text" className="ml-auto text-danger" onClick={() => clearChangelog(apk.id)}>
-                            {t("myApps.edit.versions.clearAllLocales")}
-                          </Button>
-                        )}
-                      </div>
-                    </li>
+                    </Sheet>
                   )}
                 </Fragment>
               );
@@ -2262,15 +2289,45 @@ function ReproducibilityRow({
         </span>
         <button
           type="button"
-          onClick={() => setEditing((v) => !v)}
+          onClick={() => setEditing(true)}
           className="text-[11px] text-primary hover:underline"
         >
-          {editing ? t("common.close") : t("myApps.edit.reproducibility.edit")}
+          {t("myApps.edit.reproducibility.edit")}
         </button>
       </div>
-      {editing && (
-        <div className="mt-2 grid gap-2 rounded-2xl bg-surface-2 p-3 sm:grid-cols-2">
-          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+      <Sheet
+        open={editing}
+        onClose={() => setEditing(false)}
+        title={t("myApps.edit.reproducibility.sheetTitle")}
+        eyebrow={
+          <>
+            <span className="rounded-pill border border-outline-soft bg-surface-2 px-2 py-0.5 text-ink">
+              v{apk.version_name}
+            </span>
+            <span className="opacity-60">·</span>
+            <span>{t(`reproducibility.status.${status}`)}</span>
+          </>
+        }
+        footer={
+          <>
+            <Button
+              size="md"
+              variant="outlined"
+              onClick={verifyFromUrl}
+              disabled={busy !== null || !refUrl.trim()}
+            >
+              {busy === "verify"
+                ? t("myApps.edit.reproducibility.verifying")
+                : t("myApps.edit.reproducibility.verifyFromUrl")}
+            </Button>
+            <Button size="md" variant="filled" onClick={save} disabled={busy !== null}>
+              {busy === "save" ? t("common.saving") : t("common.save")}
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4">
+          <label className="block text-[10px] uppercase tracking-[0.22em] text-ink-mute">
             {t("myApps.edit.reproducibility.refHash")}
             <input
               type="text"
@@ -2279,10 +2336,10 @@ function ReproducibilityRow({
               placeholder="64-hex SHA-256"
               maxLength={64}
               spellCheck={false}
-              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 font-mono text-xs text-ink"
+              className="mt-1.5 block w-full rounded-xl border border-outline-soft bg-surface-2 px-3 py-2 font-mono text-sm text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
             />
           </label>
-          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+          <label className="block text-[10px] uppercase tracking-[0.22em] text-ink-mute">
             {t("myApps.edit.reproducibility.refUrl")}
             <input
               type="url"
@@ -2290,15 +2347,15 @@ function ReproducibilityRow({
               onChange={(e) => setRefUrl(e.target.value)}
               placeholder="https://verification.f-droid.org/<pkg>_<vcode>.apk.json"
               maxLength={512}
-              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 text-xs text-ink"
+              className="mt-1.5 block w-full rounded-xl border border-outline-soft bg-surface-2 px-3 py-2 text-sm text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
             />
           </label>
-          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+          <label className="block text-[10px] uppercase tracking-[0.22em] text-ink-mute">
             {t("myApps.edit.reproducibility.statusOverride")}
             <select
               value={statusOverride}
               onChange={(e) => setStatusOverride(e.target.value as ReproducibilityStatus | "")}
-              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 text-xs text-ink"
+              className="mt-1.5 block w-full rounded-xl border border-outline-soft bg-surface-2 px-3 py-2 text-sm text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
             >
               <option value="">{t("myApps.edit.reproducibility.statusKeep")}</option>
               <option value="unknown">{t("reproducibility.status.unknown")}</option>
@@ -2307,28 +2364,21 @@ function ReproducibilityRow({
               <option value="failed">{t("reproducibility.status.failed")}</option>
             </select>
           </label>
-          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+          <label className="block text-[10px] uppercase tracking-[0.22em] text-ink-mute">
             {t("myApps.edit.reproducibility.notes")}
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               maxLength={1000}
-              rows={2}
-              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 text-xs text-ink"
+              rows={4}
+              className="mt-1.5 block w-full rounded-xl border border-outline-soft bg-surface-2 px-3 py-2 text-sm text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
             />
           </label>
-          <div className="sm:col-span-2 flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="filled" onClick={save} disabled={busy !== null}>
-              {busy === "save" ? t("common.saving") : t("common.save")}
-            </Button>
-            <Button size="sm" variant="outlined" onClick={verifyFromUrl} disabled={busy !== null || !refUrl.trim()}>
-              {busy === "verify"
-                ? t("myApps.edit.reproducibility.verifying")
-                : t("myApps.edit.reproducibility.verifyFromUrl")}
-            </Button>
-          </div>
+          <p className="text-xs leading-relaxed text-ink-mute">
+            {t("myApps.edit.reproducibility.help")}
+          </p>
         </div>
-      )}
+      </Sheet>
     </div>
   );
 }
@@ -2402,6 +2452,9 @@ function CveRow({ apk }: { apk: Apk }) {
   };
   const totalCves = Object.values(counts).reduce((a, b) => a + b, 0);
 
+  const sheetDisabled =
+    !sbom || status === "pending" || status === "scanning" || status === "skipped" || status === "never_scanned";
+
   return (
     <div className="mt-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -2419,16 +2472,16 @@ function CveRow({ apk }: { apk: Apk }) {
         )}
         <button
           type="button"
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(true)}
           className="text-[11px] text-primary hover:underline disabled:text-ink-mute disabled:no-underline"
           // Anything terminal has something worth showing — either the CVE
           // table or the "no findings" notice (which is itself useful info:
           // "we scanned and found nothing"). Disable only while the worker
           // hasn't produced a result yet, or when there's no SBOM at all
           // (skipped / never scanned).
-          disabled={!sbom || status === "pending" || status === "scanning" || status === "skipped" || status === "never_scanned"}
+          disabled={sheetDisabled}
         >
-          {expanded ? t("common.close") : t("myApps.edit.cve.details")}
+          {t("myApps.edit.cve.details")}
         </button>
         <button
           type="button"
@@ -2449,9 +2502,37 @@ function CveRow({ apk }: { apk: Apk }) {
           {sbom.error_message}
         </p>
       )}
-      {expanded && sbom && (
-        <CveDetails sbom={sbom} />
-      )}
+      <Sheet
+        open={expanded}
+        onClose={() => setExpanded(false)}
+        size="wide"
+        title={t("myApps.edit.cve.sheetTitle")}
+        eyebrow={
+          <>
+            <span className="rounded-pill border border-outline-soft bg-surface-2 px-2 py-0.5 text-ink">
+              v{apk.version_name}
+            </span>
+            <span className="opacity-60">·</span>
+            <span>
+              {totalCves > 0
+                ? t("myApps.edit.cve.sheetFindings", { count: totalCves })
+                : t("myApps.edit.cve.sheetClean")}
+            </span>
+          </>
+        }
+        footer={
+          <Button
+            size="md"
+            variant="outlined"
+            onClick={rescan}
+            disabled={rescanning || status === "pending" || status === "scanning"}
+          >
+            {rescanning ? t("common.loading") : t("myApps.edit.cve.rescan")}
+          </Button>
+        }
+      >
+        {sbom ? <CveDetails sbom={sbom} /> : null}
+      </Sheet>
     </div>
   );
 }
@@ -2506,13 +2587,13 @@ function CveDetails({ sbom }: { sbom: SbomRead }) {
   const { t } = useTranslation();
   if (sbom.cves.length === 0) {
     return (
-      <p className="mt-3 rounded-xl bg-surface-2 px-3 py-2 text-xs italic text-ink-mute">
+      <p className="rounded-xl bg-surface-2 px-3 py-3 text-sm italic text-ink-mute">
         {t("myApps.edit.cve.noFindings")}
       </p>
     );
   }
   return (
-    <div className="mt-3 overflow-hidden rounded-2xl border border-outline-soft">
+    <div className="overflow-hidden rounded-2xl border border-outline-soft">
       <table className="w-full text-xs">
         <thead className="bg-surface-2 text-[10px] uppercase tracking-wider text-ink-mute">
           <tr>

@@ -945,6 +945,8 @@
       "reproducibility": {
         "label": "Reproducibility",
         "edit": "Edit",
+        "sheetTitle": "Reproducibility verification",
+        "help": "Provide a reference SHA-256 and the comparison auto-decides Verified/Failed. Or use \"Verify from URL\" — the backend fetches the document, extracts hashes (with SSRF guards) and compares against this APK. Every write lands in the audit log.",
         "refHash": "Reference SHA-256",
         "refUrl": "Reference URL (optional)",
         "statusOverride": "Status",
@@ -961,6 +963,9 @@
       "cve": {
         "label": "CVE",
         "details": "Details",
+        "sheetTitle": "Detected vulnerabilities",
+        "sheetFindings": "{{count}} known vulnerability/ies",
+        "sheetClean": "No known vulnerabilities",
         "rescan": "Re-scan",
         "lastScan": "scanned {{date}}",
         "rescanEnqueued": "Re-scan enqueued.",
