@@ -17,7 +17,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, CheckCircle2, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, Upload, X, XCircle } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -34,7 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, mediaUrl, type Apk, type AppDetail, type Category, type Screenshot } from "@/lib/api";
+import { api, mediaUrl, type Apk, type AppDetail, type Category, type ReproducibilityStatus, type Screenshot } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { useAuth } from "@/lib/auth-store";
 import { toast } from "@/lib/toast-store";
@@ -371,6 +371,18 @@ function ManageAppInner() {
     } finally {
       setSavingApkId(null);
     }
+  }
+  function updateApkInPlace(updated: Apk) {
+    // Local-only merge — the reproducibility endpoints don't touch the
+    // F-Droid index so a full reload would be wasteful. We just swap the
+    // matching row in the existing app.apks array.
+    setApp((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        apks: prev.apks.map((a) => (a.id === updated.id ? updated : a)),
+      };
+    });
   }
   async function revertIcon() {
     if (!app) return;
@@ -859,6 +871,10 @@ function ManageAppInner() {
                         apk={apk}
                         disabled={savingApkId === apk.id}
                         onToggle={(flag) => toggleApkAntiFeature(apk, flag)}
+                      />
+                      <ReproducibilityRow
+                        apk={apk}
+                        onUpdated={(updated) => updateApkInPlace(updated)}
                       />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -2127,6 +2143,187 @@ function AntiFeatureChips({
     </div>
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Reproducibility editor                                                     */
+/* -------------------------------------------------------------------------- */
+
+function ReproducibilityRow({
+  apk,
+  onUpdated,
+}: {
+  apk: Apk;
+  onUpdated: (next: Apk) => void;
+}) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [refHash, setRefHash] = useState(apk.reproducibility_reference_sha256 || "");
+  const [refUrl, setRefUrl] = useState(apk.reproducibility_reference_url || "");
+  const [notes, setNotes] = useState(apk.reproducibility_notes || "");
+  const [statusOverride, setStatusOverride] = useState<ReproducibilityStatus | "">("");
+  const [busy, setBusy] = useState<"save" | "verify" | null>(null);
+
+  // Reset draft whenever the row is rehydrated (e.g. after a save).
+  useEffect(() => {
+    setRefHash(apk.reproducibility_reference_sha256 || "");
+    setRefUrl(apk.reproducibility_reference_url || "");
+    setNotes(apk.reproducibility_notes || "");
+    setStatusOverride("");
+  }, [
+    apk.reproducibility_reference_sha256,
+    apk.reproducibility_reference_url,
+    apk.reproducibility_notes,
+  ]);
+
+  const status = apk.reproducibility_status;
+  const statusColour: Record<ReproducibilityStatus, string> = {
+    unknown: "border-outline-soft text-ink-mute",
+    not_attempted: "border-outline-soft text-ink-soft",
+    verified: "border-primary text-primary",
+    failed: "border-danger text-danger",
+  };
+
+  async function save() {
+    setBusy("save");
+    try {
+      const payload: {
+        status?: ReproducibilityStatus;
+        reference_sha256?: string;
+        reference_url?: string | null;
+        notes?: string | null;
+      } = {};
+      if (statusOverride) payload.status = statusOverride;
+      const cleanedHash = refHash.trim().toLowerCase();
+      if (cleanedHash) payload.reference_sha256 = cleanedHash;
+      // ``null`` clears the field server-side; "" is treated as null.
+      payload.reference_url = refUrl.trim() || null;
+      payload.notes = notes.trim() || null;
+      const next = await api.apps.setReproducibility(apk.id, payload);
+      onUpdated(next);
+      toast.success(t("myApps.edit.reproducibility.saved"));
+      setEditing(false);
+    } catch (e) {
+      toast.error(
+        t("myApps.edit.reproducibility.saveFailed"),
+        e instanceof Error ? e.message : undefined,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function verifyFromUrl() {
+    const cleanedUrl = refUrl.trim();
+    if (!cleanedUrl) {
+      toast.error(t("myApps.edit.reproducibility.urlRequired"));
+      return;
+    }
+    setBusy("verify");
+    try {
+      const next = await api.apps.verifyReproducibilityFromUrl(apk.id, {
+        reference_url: cleanedUrl,
+        notes: notes.trim() || null,
+      });
+      onUpdated(next);
+      toast.success(t("myApps.edit.reproducibility.verified"));
+    } catch (e) {
+      toast.error(
+        t("myApps.edit.reproducibility.verifyFailed"),
+        e instanceof Error ? e.message : undefined,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <ShieldCheck className="h-3.5 w-3.5 text-ink-mute" />
+        <span className="text-[10px] uppercase tracking-wider text-ink-mute">
+          {t("myApps.edit.reproducibility.label")}
+        </span>
+        <span
+          className={cn(
+            "rounded-pill border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+            statusColour[status],
+          )}
+        >
+          {t(`reproducibility.status.${status}`)}
+        </span>
+        <button
+          type="button"
+          onClick={() => setEditing((v) => !v)}
+          className="text-[11px] text-primary hover:underline"
+        >
+          {editing ? t("common.close") : t("myApps.edit.reproducibility.edit")}
+        </button>
+      </div>
+      {editing && (
+        <div className="mt-2 grid gap-2 rounded-2xl bg-surface-2 p-3 sm:grid-cols-2">
+          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+            {t("myApps.edit.reproducibility.refHash")}
+            <input
+              type="text"
+              value={refHash}
+              onChange={(e) => setRefHash(e.target.value)}
+              placeholder="64-hex SHA-256"
+              maxLength={64}
+              spellCheck={false}
+              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 font-mono text-xs text-ink"
+            />
+          </label>
+          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+            {t("myApps.edit.reproducibility.refUrl")}
+            <input
+              type="url"
+              value={refUrl}
+              onChange={(e) => setRefUrl(e.target.value)}
+              placeholder="https://verification.f-droid.org/<pkg>_<vcode>.apk.json"
+              maxLength={512}
+              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 text-xs text-ink"
+            />
+          </label>
+          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+            {t("myApps.edit.reproducibility.statusOverride")}
+            <select
+              value={statusOverride}
+              onChange={(e) => setStatusOverride(e.target.value as ReproducibilityStatus | "")}
+              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 text-xs text-ink"
+            >
+              <option value="">{t("myApps.edit.reproducibility.statusKeep")}</option>
+              <option value="unknown">{t("reproducibility.status.unknown")}</option>
+              <option value="not_attempted">{t("reproducibility.status.not_attempted")}</option>
+              <option value="verified">{t("reproducibility.status.verified")}</option>
+              <option value="failed">{t("reproducibility.status.failed")}</option>
+            </select>
+          </label>
+          <label className="sm:col-span-2 text-[10px] uppercase tracking-wider text-ink-mute">
+            {t("myApps.edit.reproducibility.notes")}
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={1000}
+              rows={2}
+              className="mt-1 block w-full rounded-xl border border-outline-soft bg-surface px-2 py-1.5 text-xs text-ink"
+            />
+          </label>
+          <div className="sm:col-span-2 flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="filled" onClick={save} disabled={busy !== null}>
+              {busy === "save" ? t("common.saving") : t("common.save")}
+            </Button>
+            <Button size="sm" variant="outlined" onClick={verifyFromUrl} disabled={busy !== null || !refUrl.trim()}>
+              {busy === "verify"
+                ? t("myApps.edit.reproducibility.verifying")
+                : t("myApps.edit.reproducibility.verifyFromUrl")}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 export default function ManageAppClient() {
   return (

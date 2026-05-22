@@ -56,6 +56,40 @@ class ApkRead(BaseModel):
     whats_new: dict[str, str] | None = None
     published_at: datetime | None
     created_at: datetime
+    # Reproducible Builds tracking — see ``ReproducibilityStatus``.
+    reproducibility_status: str = "unknown"
+    reproducibility_reference_sha256: str | None = None
+    reproducibility_reference_url: str | None = None
+    reproducibility_verified_at: datetime | None = None
+    reproducibility_notes: str | None = None
+
+
+class ReproducibilitySet(BaseModel):
+    """Body for ``POST /apks/{id}/reproducibility``.
+
+    Either ``status`` is provided directly (declarative path), or
+    ``reference_sha256`` is provided (auto-decide path — match against
+    ``Apk.sha256``). Setting both is allowed: the auto-decide wins so
+    a typo in ``status`` can't override a hash mismatch.
+    """
+
+    status: str | None = Field(default=None, max_length=16)
+    reference_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    reference_url: str | None = Field(default=None, max_length=512)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class ReproducibilityFromUrl(BaseModel):
+    """Body for ``POST /apks/{id}/reproducibility/verify-from-url``.
+
+    ``reference_url`` MUST be http/https. The handler fetches the URL,
+    extracts a 64-char hex SHA-256 from the response body (either raw
+    or a sha256sum-style line ``<hash>  <filename>``), compares to the
+    APK's own hash and persists the verdict.
+    """
+
+    reference_url: str = Field(min_length=10, max_length=512)
+    notes: str | None = Field(default=None, max_length=1000)
 
 
 class ApkUpdate(BaseModel):

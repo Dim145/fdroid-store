@@ -505,6 +505,7 @@ export default function AppDetailClient() {
                     <div className="flex items-center gap-2">
                       <span className="text-lg font-semibold text-ink">v{apk.version_name}</span>
                       {i === 0 && <Badge variant="primary">{t("appDetail.latest")}</Badge>}
+                      <ReproducibilityBadge apk={apk} />
                     </div>
                     <div className="mt-0.5 text-xs text-ink-mute">
                       Code {apk.version_code} · {formatBytes(apk.size_bytes)} · SDK {apk.min_sdk ?? "?"}–{apk.target_sdk ?? "?"}
@@ -574,6 +575,70 @@ function Stat({
       </div>
     </div>
   );
+}
+
+
+/* Reproducibility badge for the per-APK row on the public app page.
+ * Renders nothing when the status is ``unknown`` so unverified builds
+ * stay quiet rather than parading a "we don't know" pill. The other
+ * three states each pick a distinct semantic colour (green / amber /
+ * red) and surface the reference link + last-checked timestamp in a
+ * ``title`` tooltip — no popover needed for v1.
+ */
+function ReproducibilityBadge({ apk }: { apk: Apk }) {
+  const { t } = useTranslation();
+  const status = apk.reproducibility_status;
+  if (!status || status === "unknown") return null;
+
+  const label = t(`reproducibility.status.${status}`);
+  // Narrowed: "unknown" was filtered out above. Keeping the lookup
+  // record explicit makes future additions to the enum surface as
+  // compile errors instead of silent fallthroughs.
+  const variants: Record<Exclude<typeof status, "unknown">, "primary" | "destructive" | "outline"> = {
+    not_attempted: "outline",
+    verified: "primary",
+    failed: "destructive",
+  };
+  const variant = variants[status as Exclude<typeof status, "unknown">] || "outline";
+
+  const tooltipBits: string[] = [t(`reproducibility.tooltip.${status}`, "")];
+  if (apk.reproducibility_reference_url) {
+    tooltipBits.push(t("reproducibility.referenceLine", { url: apk.reproducibility_reference_url }));
+  }
+  if (apk.reproducibility_verified_at) {
+    tooltipBits.push(
+      t("reproducibility.checkedLine", { date: formatDate(apk.reproducibility_verified_at) }),
+    );
+  }
+  const tooltip = tooltipBits.filter(Boolean).join("\n");
+
+  // Use mailto: as a safety stand-in for an https-only check; we only
+  // render a link when the URL passes the SAFE allow-list above.
+  const refHref =
+    apk.reproducibility_reference_url &&
+    _SAFE_LINK_RE.test(apk.reproducibility_reference_url)
+      ? apk.reproducibility_reference_url
+      : null;
+
+  const inner = (
+    <Badge variant={variant} title={tooltip}>
+      {label}
+    </Badge>
+  );
+  if (refHref) {
+    return (
+      <a
+        href={refHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex"
+        aria-label={tooltip}
+      >
+        {inner}
+      </a>
+    );
+  }
+  return inner;
 }
 
 // Same allow-list used by ``FundingChip`` below — http(s) and mailto

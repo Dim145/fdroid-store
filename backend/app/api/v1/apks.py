@@ -16,12 +16,21 @@ from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
 from app.core.rate_limit import limiter
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
-from app.models.apk import Apk, ApkStatus
+from app.models.apk import Apk, ApkStatus, ReproducibilityStatus
 from app.models.app import App, AppStatus, AppVisibility
 from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
-from app.schemas.app import ApkInspect, ApkRead, ApkUpdate, GithubApkInspect, GithubInspectRequest
+from app.schemas.app import (
+    ApkInspect,
+    ApkRead,
+    ApkUpdate,
+    GithubApkInspect,
+    GithubInspectRequest,
+    ReproducibilityFromUrl,
+    ReproducibilitySet,
+)
+from app.services.audit import write_event
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
 
@@ -859,3 +868,304 @@ async def delete_apk(
     await db.delete(apk)
     await db.flush()
     await enqueue_reindex()
+
+
+# --------------------------------------------------------------------------
+# Reproducible Builds verification
+# --------------------------------------------------------------------------
+_SHA256_RE = re.compile(r"\b([0-9a-fA-F]{64})\b")
+
+
+def _normalise_status(value: str | None) -> ReproducibilityStatus | None:
+    """Map a free-form status string to the enum or return ``None`` if
+    the value isn't a known label."""
+    if not value:
+        return None
+    cleaned = value.strip().lower()
+    for member in ReproducibilityStatus:
+        if member.value == cleaned:
+            return member
+    return None
+
+
+def _extract_sha256_candidates(text: str) -> list[str]:
+    """Pull every 64-char hex SHA-256 out of a fetched response body.
+
+    Handles four common shapes:
+      * raw hash (``abcd…`` on its own)
+      * ``sha256sum`` output (``<hash>  <filename>``)
+      * developer-published ``*.sha256`` siblings (the body is just the
+        hash + optional filename)
+      * F-Droid's verification-server JSON
+        (``https://verification.f-droid.org/<pkg>_<vcode>.apk.json``):
+        the per-timestamp dict contains both ``local.sha256`` (the build
+        server's bytes) and ``remote.sha256`` (the upstream developer's
+        bytes). Either is a legitimate reference depending on where the
+        APK on disk originated, so we expose both.
+
+    Returns the matches in source order, deduplicated, lowercase.
+    """
+    if not text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _SHA256_RE.finditer(text):
+        h = m.group(1).lower()
+        if h not in seen:
+            seen.add(h)
+            out.append(h)
+    return out
+
+
+async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
+    """Fetch ``url`` and return ``(all_extracted_hashes, source_url)``. Reuses
+    the SSRF guard from :mod:`github_releases` so an admin can't pivot
+    through the backend into the host's private network."""
+    import httpx
+    from urllib.parse import urlsplit
+
+    from app.services.github_releases import _is_private_ip, _resolves_to_blocked
+    import ipaddress
+
+    parsed = urlsplit(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="reference_url must be http(s)://")
+    host = (parsed.hostname or "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="reference_url is missing a hostname")
+    try:
+        as_ip = ipaddress.ip_address(host)
+        if _is_private_ip(str(as_ip)):
+            raise HTTPException(status_code=400, detail="reference_url resolves to a blocked range")
+    except ValueError:
+        if _resolves_to_blocked(host):
+            raise HTTPException(
+                status_code=400, detail="reference_url resolves to a blocked range"
+            )
+
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        try:
+            res = await client.get(
+                url,
+                headers={"accept": "application/json, text/plain, */*;q=0.5"},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"could not fetch reference_url: {exc}",
+            ) from exc
+    if res.status_code >= 400:
+        raise HTTPException(
+            status_code=400,
+            detail=f"reference_url returned HTTP {res.status_code}",
+        )
+    # F-Droid verification JSONs are sub-kB; even with multiple
+    # timestamps embedded they don't exceed a few KB. 32 KiB is plenty
+    # while still capping a hostile redirect into a giant body.
+    text = res.text[:32_768]
+    hashes = _extract_sha256_candidates(text)
+    if not hashes:
+        raise HTTPException(
+            status_code=400,
+            detail="reference_url body did not contain a SHA-256 hash",
+        )
+    return hashes, url
+
+
+async def _apply_reproducibility(
+    db,
+    apk: Apk,
+    actor: User,
+    *,
+    status_override: ReproducibilityStatus | None,
+    reference_sha256: str | None = None,
+    reference_candidates: list[str] | None = None,
+    reference_url: str | None,
+    notes: str | None,
+) -> Apk:
+    """Shared write path used by both endpoints. Auto-decides the status
+    from a hash comparison when a reference is present; falls back to
+    the caller-supplied ``status_override`` for declarative paths.
+
+    ``reference_sha256`` is the single-hash path used by the manual
+    ``POST /reproducibility`` endpoint. ``reference_candidates`` is the
+    multi-hash path used by ``POST /reproducibility/verify-from-url``
+    where the fetched document (e.g. F-Droid's verification JSON which
+    bundles ``local.sha256`` + ``remote.sha256``) yields several
+    plausible references — any match counts as VERIFIED, and the
+    stored ``reproducibility_reference_sha256`` is whichever one
+    matched (or the first candidate if none did, so the admin can see
+    what they compared against).
+    """
+    candidates: list[str] = []
+    if reference_candidates:
+        for raw in reference_candidates:
+            cleaned = raw.strip().lower()
+            if len(cleaned) == 64 and all(c in "0123456789abcdef" for c in cleaned):
+                candidates.append(cleaned)
+    if reference_sha256:
+        cleaned = reference_sha256.strip().lower()
+        if len(cleaned) != 64 or not all(c in "0123456789abcdef" for c in cleaned):
+            raise HTTPException(
+                status_code=400, detail="reference_sha256 must be a 64-char hex string"
+            )
+        candidates.append(cleaned)
+
+    if candidates:
+        own = apk.sha256.lower()
+        match = next((c for c in candidates if c == own), None)
+        if match is not None:
+            apk.reproducibility_reference_sha256 = match
+            apk.reproducibility_status = ReproducibilityStatus.VERIFIED
+        else:
+            # No match — store the first candidate so the admin can see
+            # the reference value that was compared (failing the
+            # comparison is itself useful audit info).
+            apk.reproducibility_reference_sha256 = candidates[0]
+            apk.reproducibility_status = ReproducibilityStatus.FAILED
+    elif status_override is not None:
+        apk.reproducibility_status = status_override
+
+    if reference_url is not None:
+        cleaned = reference_url.strip() or None
+        if cleaned and not cleaned.lower().startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=400, detail="reference_url must be http(s)://"
+            )
+        apk.reproducibility_reference_url = cleaned
+
+    if notes is not None:
+        apk.reproducibility_notes = (notes.strip() or None)
+
+    apk.reproducibility_verified_at = datetime.now(UTC)
+
+    await write_event(
+        db,
+        action="apk.reproducibility_updated",
+        actor=actor,
+        target_type="apk",
+        target_id=apk.id,
+        summary=(
+            f"reproducibility {apk.reproducibility_status.value} for "
+            f"{apk.app.package_name if apk.app else apk.app_id} v{apk.version_name}"
+        ),
+        payload={
+            "status": apk.reproducibility_status.value,
+            "reference_sha256": apk.reproducibility_reference_sha256,
+            "reference_url": apk.reproducibility_reference_url,
+        },
+    )
+    return apk
+
+
+@router.post("/{apk_id}/reproducibility", response_model=ApkRead)
+async def set_reproducibility(
+    apk_id: uuid.UUID,
+    payload: ReproducibilitySet,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_uploader)],
+) -> ApkRead:
+    """Declare an APK's reproducibility status or compare it to a
+    supplied reference hash.
+
+    Body shape:
+      * ``status`` — one of ``unknown``, ``not_attempted``, ``verified``,
+        ``failed``. Optional when ``reference_sha256`` is provided
+        (auto-decide wins).
+      * ``reference_sha256`` — 64-char hex. When present, the handler
+        compares it to ``Apk.sha256`` and sets ``verified`` / ``failed``
+        accordingly.
+      * ``reference_url`` — optional pointer to the hash's origin.
+      * ``notes`` — free-form admin/uploader note.
+
+    Permissions match the rest of the per-APK mutation endpoints: the
+    app's owner / collaborator / admin can edit, others get 403 via
+    :func:`assert_can_manage_app`.
+    """
+    apk = (
+        await db.execute(
+            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
+    if apk is None:
+        raise HTTPException(status_code=404, detail="APK not found")
+    from app.services.app_permissions import assert_can_manage_app
+
+    await assert_can_manage_app(db, user, apk.app)
+
+    status_override = _normalise_status(payload.status)
+    if (
+        status_override is None
+        and not payload.reference_sha256
+        and payload.notes is None
+        and payload.reference_url is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provide at least one of: status, reference_sha256, "
+                "reference_url, notes."
+            ),
+        )
+    if payload.status and status_override is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown status {payload.status!r}. Valid: "
+                f"{', '.join(m.value for m in ReproducibilityStatus)}."
+            ),
+        )
+
+    apk = await _apply_reproducibility(
+        db,
+        apk,
+        user,
+        status_override=status_override,
+        reference_sha256=payload.reference_sha256,
+        reference_url=payload.reference_url,
+        notes=payload.notes,
+    )
+    await db.flush()
+    return ApkRead.model_validate(apk)
+
+
+@router.post("/{apk_id}/reproducibility/verify-from-url", response_model=ApkRead)
+async def verify_reproducibility_from_url(
+    apk_id: uuid.UUID,
+    payload: ReproducibilityFromUrl,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_uploader)],
+) -> ApkRead:
+    """Fetch a SHA-256 published by an authoritative third party
+    (typically the F-Droid build server's ``.sha256`` artifact, or a
+    CI build output), then compare against this APK's actual hash.
+
+    The fetch goes through the same SSRF guard as the multi-forge release
+    fetcher: HTTP(S) only, blocks RFC1918 / loopback / link-local /
+    metadata-IP destinations, refuses redirects.
+    """
+    apk = (
+        await db.execute(
+            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
+    if apk is None:
+        raise HTTPException(status_code=404, detail="APK not found")
+    from app.services.app_permissions import assert_can_manage_app
+
+    await assert_can_manage_app(db, user, apk.app)
+
+    ref_hashes, ref_url = await _fetch_reference_hashes(payload.reference_url)
+    apk = await _apply_reproducibility(
+        db,
+        apk,
+        user,
+        status_override=None,
+        reference_candidates=ref_hashes,
+        reference_url=ref_url,
+        notes=payload.notes,
+    )
+    await db.flush()
+    return ApkRead.model_validate(apk)

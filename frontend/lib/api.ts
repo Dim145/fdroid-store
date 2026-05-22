@@ -467,6 +467,27 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(payload),
       }),
+    setReproducibility: (
+      apkId: string,
+      payload: {
+        status?: ReproducibilityStatus;
+        reference_sha256?: string;
+        reference_url?: string | null;
+        notes?: string | null;
+      },
+    ) =>
+      apiFetch<Apk>(`/api/v1/apks/${apkId}/reproducibility`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    verifyReproducibilityFromUrl: (
+      apkId: string,
+      payload: { reference_url: string; notes?: string | null },
+    ) =>
+      apiFetch<Apk>(`/api/v1/apks/${apkId}/reproducibility/verify-from-url`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     myApps: () => apiFetch<Array<AppSummary>>("/api/v1/me/apps"),
     uploadIcon: (appId: string, file: File) => {
       const fd = new FormData();
@@ -956,6 +977,8 @@ export type Screenshot = {
   display_order: number;
 };
 
+export type ReproducibilityStatus = "unknown" | "not_attempted" | "verified" | "failed";
+
 export type Apk = {
   id: string;
   app_id: string;
@@ -975,6 +998,11 @@ export type Apk = {
   whats_new: Record<string, string> | null;
   published_at: string | null;
   created_at: string;
+  reproducibility_status: ReproducibilityStatus;
+  reproducibility_reference_sha256: string | null;
+  reproducibility_reference_url: string | null;
+  reproducibility_verified_at: string | null;
+  reproducibility_notes: string | null;
 };
 
 export type Localization = {

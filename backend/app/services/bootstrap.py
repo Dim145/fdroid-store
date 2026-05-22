@@ -120,6 +120,15 @@ async def _create_tables_if_needed() -> None:
             # Existing rows default to "all four" so the history view
             # doesn't render an empty chip set for old jobs.
             'ALTER TABLE backup_jobs ADD COLUMN IF NOT EXISTS components_json VARCHAR(256) NOT NULL DEFAULT \'["apks","assets","db","keystore"]\'',
+            # v1.2 — Reproducible Builds verification per APK. Default
+            # ``unknown`` for legacy rows so they show up as "not yet
+            # checked" rather than implying any positive claim.
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS reproducibility_status VARCHAR(16) NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS reproducibility_reference_sha256 VARCHAR(64)",
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS reproducibility_reference_url VARCHAR(512)",
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS reproducibility_verified_at TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS reproducibility_notes VARCHAR(1000)",
+            "CREATE INDEX IF NOT EXISTS ix_apks_reproducibility_status ON apks (reproducibility_status)",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

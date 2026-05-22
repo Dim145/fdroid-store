@@ -257,6 +257,22 @@
     "resetFilters": "Réinitialiser",
     "loadFailed": "Échec"
   },
+  "reproducibility": {
+    "status": {
+      "unknown": "Reproductibilité inconnue",
+      "not_attempted": "Reproductibilité N/A",
+      "verified": "Build reproductible vérifié",
+      "failed": "Échec du contrôle de reproductibilité"
+    },
+    "tooltip": {
+      "unknown": "Personne n'a encore comparé ce build à une référence.",
+      "not_attempted": "L'uploader a marqué ce build comme ne cherchant pas la reproductibilité (ex. ABI splits, toolchain non-déterministe).",
+      "verified": "Le SHA-256 de cet APK correspond au hash de référence enregistré pour cette version.",
+      "failed": "Le SHA-256 de cet APK NE correspond PAS à la référence enregistrée. Méfiance vis-à-vis des claims de source."
+    },
+    "referenceLine": "Référence : {{url}}",
+    "checkedLine": "Vérifié le {{date}}"
+  },
   "appDetail": {
     "backToApps": "Retour aux apps",
     "selfHostedRelease": "Sortie auto-hébergée",
@@ -925,6 +941,22 @@
         "changelogCleared": "Changelog effacé.",
         "changelogClearFailed": "Échec",
         "clearAllLocales": "Effacer toutes les locales"
+      },
+      "reproducibility": {
+        "label": "Reproductibilité",
+        "edit": "Éditer",
+        "refHash": "SHA-256 de référence",
+        "refUrl": "URL de référence (optionnel)",
+        "statusOverride": "Statut",
+        "statusKeep": "Garder l'actuel (auto-décide depuis le hash)",
+        "notes": "Notes",
+        "verifyFromUrl": "Vérifier depuis l'URL",
+        "verifying": "Récupération + comparaison…",
+        "verified": "Statut mis à jour.",
+        "verifyFailed": "Échec de la vérification",
+        "saved": "Reproductibilité enregistrée.",
+        "saveFailed": "Échec de l'enregistrement",
+        "urlRequired": "Ajoute d'abord une URL de référence."
       },
       "changelog": {
         "title": "Notes de version pour {{version}}",
