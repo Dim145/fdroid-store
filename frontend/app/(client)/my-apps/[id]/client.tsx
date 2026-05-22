@@ -2420,8 +2420,13 @@ function CveRow({ apk }: { apk: Apk }) {
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="text-[11px] text-primary hover:underline"
-          disabled={totalCves === 0 && status !== "failed"}
+          className="text-[11px] text-primary hover:underline disabled:text-ink-mute disabled:no-underline"
+          // Anything terminal has something worth showing — either the CVE
+          // table or the "no findings" notice (which is itself useful info:
+          // "we scanned and found nothing"). Disable only while the worker
+          // hasn't produced a result yet, or when there's no SBOM at all
+          // (skipped / never scanned).
+          disabled={!sbom || status === "pending" || status === "scanning" || status === "skipped" || status === "never_scanned"}
         >
           {expanded ? t("common.close") : t("myApps.edit.cve.details")}
         </button>
