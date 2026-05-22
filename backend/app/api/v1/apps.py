@@ -708,8 +708,37 @@ async def create_app(
     )
     db.add(app)
     await db.flush()
-    payload = AppRead.model_validate(app)
-    _attach_media_token(payload, app, user)
+    # Re-query with ``selectinload(App.categories)`` before Pydantic
+    # walks the instance. ``AppRead.categories`` is a list of
+    # CategoryRead; without the eager load the sync attribute access
+    # triggers SQLAlchemy's async lazy-loader, which raises
+    # ``MissingGreenlet`` from the FastAPI response thread. The two
+    # ``create_app_with_*`` siblings already do this — this single-
+    # APK-free create path was the outlier.
+    # ``populate_existing=True`` forces SQLAlchemy to overwrite the
+    # identity-map cache for this row. Without it the re-query returns
+    # the SAME ORM instance we just inserted — still without
+    # ``categories`` / ``apks`` eagerly loaded — and Pydantic walks
+    # straight into the lazy load.
+    #
+    # ``apks`` matters because ``App.is_nsfw`` (rendered as
+    # ``AppRead.is_nsfw``) is a ``@property`` that iterates over
+    # ``self.apks``. Without the eager load the @property triggers a
+    # lazy load in the Pydantic sync walker — the visible attribute
+    # is scalar but the path to it is async I/O.
+    result = (
+        await db.execute(
+            select(App)
+            .execution_options(populate_existing=True)
+            .options(
+                selectinload(App.categories),
+                selectinload(App.apks),
+            )
+            .where(App.id == app.id)
+        )
+    ).scalar_one()
+    payload = AppRead.model_validate(result)
+    _attach_media_token(payload, result, user)
     return payload
 
 
