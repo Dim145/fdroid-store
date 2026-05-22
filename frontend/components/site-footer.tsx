@@ -30,6 +30,7 @@ export function SiteFooter() {
             <ul className="mt-3 space-y-2 text-sm">
               <li><Link href="/apps" className="text-ink-soft hover:text-ink">{t("footer.allApps")}</Link></li>
               <li><Link href="/my-apps" className="text-ink-soft hover:text-ink">{t("footer.myApps")}</Link></li>
+              <li><Link href="/stats" className="text-ink-soft hover:text-ink">{t("footer.stats")}</Link></li>
               <li><Link href="/account" className="text-ink-soft hover:text-ink">{t("footer.account")}</Link></li>
               <li>
                 <a

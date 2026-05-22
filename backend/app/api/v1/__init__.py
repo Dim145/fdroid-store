@@ -15,6 +15,7 @@ from app.api.v1 import (
     me,
     media,
     setup,
+    stats,
     totp,
     users,
 )
@@ -38,3 +39,4 @@ api_router.include_router(categories.router, prefix="/categories", tags=["catego
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 api_router.include_router(feeds.router, prefix="/feed", tags=["feeds"])
+api_router.include_router(stats.router, prefix="/stats", tags=["stats"])

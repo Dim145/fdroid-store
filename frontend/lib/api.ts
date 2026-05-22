@@ -349,6 +349,10 @@ export const api = {
   downloadHistory: () =>
     apiFetch<{ items: DownloadHistoryItem[] }>("/api/v1/me/downloads"),
 
+  /** Public-or-auth stats. Returns 401 when the repo is private +
+   *  the caller is anonymous; the caller decides what to render. */
+  stats: () => apiFetch<StatsPayload>("/api/v1/stats"),
+
   apiKeys: {
     list: () => apiFetch<Array<ApiKey>>("/api/v1/me/api-keys"),
     create: (payload: ApiKeyCreate) =>
@@ -1114,6 +1118,35 @@ export type RepoConfigInfo = {
   clamav_scan_on_upload?: boolean;
   clamav_scan_periodic?: boolean;
   require_admin_2fa?: boolean;
+  /** Admin-controlled flag exposing the /stats page to anonymous
+   *  callers. The endpoint is still auth-gated when ``public_mode``
+   *  is off — a private repo always requires login. */
+  public_stats?: boolean;
+};
+
+/** Aggregate stats payload returned by ``GET /api/v1/stats``. The
+ *  ``scope`` field tells us whether the server returned the public
+ *  view (private apps excluded) or the admin view (everything). */
+export type StatsPayload = {
+  totals: {
+    apps: number;
+    apks_published: number;
+    downloads: number;
+    bytes_published: number;
+    active_users: number;
+  };
+  top_apps: {
+    id: string;
+    package_name: string;
+    name: string;
+    icon_path: string | null;
+    updated_at: string | null;
+    download_count: number;
+  }[];
+  downloads_by_day: { date: string; count: number }[];
+  categories: { id: string; name: string; app_count: number }[];
+  scope: "public" | "admin";
+  public_stats_enabled: boolean;
 };
 
 export type InviteCode = {

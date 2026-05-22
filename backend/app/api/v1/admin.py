@@ -549,6 +549,8 @@ async def update_repo_config(
             config.clamav_scan_periodic = payload.clamav_scan_periodic
     if payload.require_admin_2fa is not None:
         config.require_admin_2fa = payload.require_admin_2fa
+    if payload.public_stats is not None:
+        config.public_stats = payload.public_stats
     await write_event(
         db,
         action="repo.config_updated",

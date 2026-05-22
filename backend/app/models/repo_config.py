@@ -97,6 +97,15 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
         Boolean, default=False, nullable=False
     )
 
+    # When True, anonymous callers can read /api/v1/stats — a public
+    # health-of-the-repo page (totals, top apps, downloads/day graph).
+    # Defaults False to stay conservative on first boot. The /stats
+    # endpoint is still gated by ``public_mode`` — a private repo
+    # always requires auth even if ``public_stats`` is True.
+    public_stats: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
     @property
     def mirrors(self) -> list[str]:
         """Decoded view of ``mirrors_json`` for serializers + the index builder."""

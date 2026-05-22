@@ -103,6 +103,9 @@ async def _create_tables_if_needed() -> None:
             # on RepoConfig, optional per-app override on App.
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS default_max_versions_per_app INTEGER",
             "ALTER TABLE apps ADD COLUMN IF NOT EXISTS max_versions_override INTEGER",
+            # v1.2 — admin-controlled flag exposing the /stats page to
+            # anonymous callers. Off by default to stay conservative.
+            "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS public_stats BOOLEAN NOT NULL DEFAULT FALSE",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.

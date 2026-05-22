@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Globe, KeyRound, Lock, Plus, ShieldCheck, Trash2, UsersRound } from "lucide-react";
+import { BarChart3, Check, Copy, Globe, KeyRound, Lock, Plus, ShieldCheck, Trash2, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -33,7 +33,7 @@ export default function AdminAccessPage() {
   }
   useEffect(() => { refreshAll(); /* eslint-disable-next-line */ }, []);
 
-  async function patchRepo(patch: Partial<Pick<RepoConfigInfo, "public_mode" | "registration_policy">>) {
+  async function patchRepo(patch: Partial<Pick<RepoConfigInfo, "public_mode" | "registration_policy" | "public_stats">>) {
     if (!repo) return;
     setErr(null); setMsg(null);
     const next = { ...repo, ...patch };
@@ -142,6 +142,42 @@ export default function AdminAccessPage() {
           setErr={setErr}
           setMsg={setMsg}
         />
+      </section>
+
+      {/* ── Public stats ── */}
+      <section className="surface p-6">
+        <h2 className="mb-1 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
+          <BarChart3 className="h-5 w-5" /> {t("admin.access.publicStats")}
+        </h2>
+        <p className="mb-5 text-sm text-ink-soft">
+          {t("admin.access.publicStatsBody")}
+        </p>
+        <RadioCardGroup<boolean>
+          value={!!repo.public_stats}
+          onChange={(v) => patchRepo({ public_stats: v })}
+          options={[
+            {
+              value: false,
+              icon: <Lock className="h-5 w-5" />,
+              title: t("admin.access.publicStatsOffTitle"),
+              subtitle: t("admin.access.publicStatsOffSubtitle"),
+            },
+            {
+              value: true,
+              icon: <BarChart3 className="h-5 w-5" />,
+              title: t("admin.access.publicStatsOnTitle"),
+              subtitle: t("admin.access.publicStatsOnSubtitle"),
+            },
+          ]}
+        />
+        {/* When the repo is private overall, /stats is auth-gated
+            regardless of this flag. Surface that explicitly so the
+            admin doesn't think the toggle is broken. */}
+        {!repo.public_mode && repo.public_stats && (
+          <p className="mt-3 text-xs text-ink-mute">
+            {t("admin.access.publicStatsNoteWhenPrivate")}
+          </p>
+        )}
       </section>
 
       {/* ── Invite codes ── */}

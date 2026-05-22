@@ -44,6 +44,7 @@ class RepoConfigRead(BaseModel):
     clamav_scan_on_upload: bool = False
     clamav_scan_periodic: bool = False
     require_admin_2fa: bool = False
+    public_stats: bool = False
 
 
 class RepoConfigUpdate(BaseModel):
@@ -75,6 +76,10 @@ class RepoConfigUpdate(BaseModel):
     clamav_scan_on_upload: bool | None = None
     clamav_scan_periodic: bool | None = None
     require_admin_2fa: bool | None = None
+    # Admin toggle for /stats public-vs-auth visibility. Independent of
+    # ``public_mode`` (which gates the catalogue); when the catalogue is
+    # private, /stats is also auth-gated regardless of this flag.
+    public_stats: bool | None = None
 
 
 class SetupStatus(BaseModel):
