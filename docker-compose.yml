@@ -179,6 +179,16 @@ services:
       # Shared with the backend so the worker can write the backup
       # output where the streaming download endpoint can find it.
       - backup_tmp:/data/backup-tmp
+    # arq publishes a heartbeat key in Redis on every cycle (default
+    # interval 60 s, TTL 90 s); ``--check`` reads it and returns 0
+    # iff fresh. If Redis is unreachable or the worker stopped pumping,
+    # exit is non-zero and compose flips the container to unhealthy.
+    healthcheck:
+      test: ["CMD", "python", "-m", "arq", "app.workers.tasks.WorkerSettings", "--check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # Optional Trivy server — runs the official aquasec/trivy image in
   # ``server`` mode. The worker's trivy CLI talks to it via HTTP when
