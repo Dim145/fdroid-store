@@ -204,6 +204,48 @@ services:
     expose:
       - "4954"
 
+  # Reference APK source proxy speaking the v1 source-proxy protocol
+  # (see docs/proxy-protocol.md) against any F-Droid-compatible repo
+  # — official f-droid.org, IzzyOnDroid, Guardian Project, another
+  # fdroid-store instance, …. ~350 lines of FastAPI + httpx, no
+  # persistent state, no JDK / native deps.
+  #
+  # Opt-in via the ``proxy-fdroid`` compose profile. After ``docker
+  # compose --profile proxy-fdroid up -d``, register the proxy in
+  # fdroid-store's /admin/sources/proxies UI with:
+  #   * Base URL: http://proxy-fdroid:8000
+  #   * Shared secret: same as ``PROXY_FDROID_SECRET`` below
+  #
+  # Without the profile + ``PROXY_FDROID_SECRET`` unset, this service
+  # stays down and fdroid-store simply doesn't see the F-Droid provider
+  # in any catalogue.
+  proxy-fdroid:
+    profiles: ["proxy-fdroid"]
+    image: ghcr.io/dim145/fdroid-store-proxy-fdroid:latest
+    build:
+      context: ./proxy/fdroid
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Shared bearer secret the fdroid-store backend will use to
+      # authenticate every /sources + /resolve call. Empty = open
+      # mode (deployments on isolated networks may prefer that).
+      PROXY_SHARED_SECRET: ${PROXY_FDROID_SECRET:-}
+    # Same lockdown shape as the other services. The proxy is stateless
+    # — no volume, no writable surface beyond /tmp.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,size=32m,mode=1777
+    # Internal-only: the worker dials it via the compose network. No
+    # host port published — admins should never expose proxies to the
+    # public internet directly.
+    expose:
+      - "8000"
+
   # Single nginx-served frontend image: static SPA + reverse-proxy to the
   # backend + nginx-served /_protected for X-Accel-Redirect downloads. No
   # URL is baked in at build time, so this image can be pushed to a registry
