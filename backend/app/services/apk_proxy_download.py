@@ -81,7 +81,7 @@ async def download_apk(
     once they're done parsing / attaching the APK.
     """
     assert_apk_url_safe(apk_url)
-    req_headers: dict[str, str] = {"User-Agent": "fdroid-store/1.2"}
+    req_headers: dict[str, str] = {"User-Agent": "fdroid-store/1.3"}
     if headers:
         # Forward only string values; refuse anything else so a hostile
         # proxy can't smuggle bytes / control characters through the

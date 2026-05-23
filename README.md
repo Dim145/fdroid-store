@@ -421,8 +421,54 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.2.0 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.3.0 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.3.0
+
+- **APK source proxy v1** — admins can register external "proxy"
+  sidecars (`/admin/proxies`) that resolve release URLs on the
+  backend's behalf for sources the platform doesn't speak natively
+  (Patreon, GitHub-Releases assets behind auth, custom drops, …).
+  The protocol is small and documented (`docs/proxy-protocol.md`):
+  `GET /healthz`, `GET /sources`, `POST /resolve`, and a streaming
+  `GET <apk_url>` download. The backend treats proxies as untrusted:
+  every URL they hand back is run through the SSRF guard (RFC1918 +
+  loopback + link-local + cloud-metadata blocklist, with IPv4 weird-
+  form normalisation) before any byte leaves the worker. A reference
+  F-Droid proxy ships under `proxy/fdroid/` for self-hosters to
+  fork. The per-app wizard (`/my-apps/new`) and the per-source
+  picker on `/my-apps/[id]` pick proxy-backed sources up
+  transparently and surface OAuth popups when a source needs them.
+- **F-Droid-compatible Markdown editor + rendering** — `apps.description`
+  and per-locale overrides are now edited in a Tiptap WYSIWYG bound
+  to a Markdown string, restricted to the F-Droid v1/v2 subset
+  (bold / italic / inline code / bullet + ordered lists / block
+  quotes / links — headings, images, tables and inline HTML are
+  stripped on paste). Public pages render the same Markdown through
+  `marked` + DOMPurify with a deny-everything-then-allowlist sanitize
+  config, so what the owner sees in the editor is exactly what every
+  F-Droid client will display.
+- **CodeQL security hardening** — fixed two GitHub code-scanning
+  alerts: a reflective-XSS sink on the OAuth proxy callback (now
+  emits the payload as an `html.escape`d `data-payload` attribute
+  parsed at runtime, with a strict opaque-ID regex on the popup
+  message), and a stack-trace exposure on `/apks` fetch errors
+  (replaced free-form exception messages with a static lookup keyed
+  by exception code so internal traces never leak to the client).
+- **Audit-driven hardening pass** — single sweep covering the
+  surfaces the proxy work touched. Proxy `base_url` validator
+  refuses userinfo and normalises IPv4 weird forms (decimal,
+  hex, trailing dot) via `ipaddress.ip_address(int(_, 0))` so the
+  cloud-metadata blocklist can't be bypassed with `2852039166` or
+  `0xa9fea9fe`. Reference proxy walks redirects with
+  `client.send(stream=True)` (single-RTT happy path), checks the
+  shared bearer with `hmac.compare_digest`, resolves DNS through
+  `loop.getaddrinfo` so the event loop isn't blocked, and validates
+  caller-supplied SHA-256 hints with a fullmatch regex. Frontend
+  popup `setInterval`s are now tracked in refs and cleaned up on
+  unmount / before re-trigger to stop leaks across the
+  `/my-apps/new` and proxy-section flows.
 
 ### 1.2.0
 
