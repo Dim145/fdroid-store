@@ -891,6 +891,7 @@
         "visibilityPrivate": "Privée",
         "summary": "Résumé",
         "description": "Description",
+        "descriptionPlaceholder": "Que fait-elle ? Points forts, contexte des captures, etc.",
         "categories": "Catégories",
         "author": "Auteur",
         "license": "Licence",

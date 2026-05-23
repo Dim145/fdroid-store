@@ -891,6 +891,7 @@
         "visibilityPrivate": "Private",
         "summary": "Summary",
         "description": "Description",
+        "descriptionPlaceholder": "What does it do? Highlights, screenshots context, etc.",
         "categories": "Categories",
         "author": "Author",
         "license": "License",
