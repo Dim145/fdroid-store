@@ -16,6 +16,7 @@ emits an ``proxy.*`` event with payload, actor, and target ids.
 from __future__ import annotations
 
 import hmac
+import html
 import json
 import secrets as _secrets
 import uuid
@@ -778,10 +779,17 @@ async def proxy_oauth_callback(
                 "Close this window and start over.</p></body></html>"
             ),
         )
-    # Build the message payload. ``credential_id`` and ``state`` already
-    # passed the opaque-ID regex; ``payload`` came from our own
-    # HMAC-signed token so its fields are trusted. The remaining hardening
-    # below is purely belt-and-suspenders.
+    # Build the message payload. The state HMAC already authenticated
+    # the inputs (any tampering returns 400 above), and the opaque-ID
+    # regex on the query params rejects HTML-meaningful characters at
+    # the FastAPI validator layer.
+    #
+    # XSS hardening: the payload is serialised to JSON then written into
+    # an HTML attribute via ``html.escape(..., quote=True)`` — the
+    # canonical Python sanitiser for HTML-attribute contexts. The
+    # executable ``<script>`` block then reads it back via
+    # ``element.dataset.payload``. Static analysers (CodeQL py/reflective-
+    # xss) recognise ``html.escape`` as a barrier on this taint path.
     msg_data = json.dumps({
         "type": "proxy_oauth_done",
         "credential_id": credential_id,
@@ -790,48 +798,51 @@ async def proxy_oauth_callback(
         "provider": payload["provider"],
         "app_id": str(payload["app_id"]) if payload["app_id"] else None,
     })
-    # Defence in depth: escape ``</`` so a hypothetical future change
-    # that loosens the regex above can't break out of the <script> tag.
-    msg_safe = msg_data.replace("</", "<\\/")
     # The exact origin we postMessage to is the SPA's. We pull it from
     # ``settings.public_app_url`` so a multi-tenant frontend can't be
     # tricked into receiving messages bound for someone else's tab.
     target_origin = settings.public_app_url.rstrip("/") or "*"
-    origin_safe = json.dumps(target_origin).replace("</", "<\\/")
-    # Strict CSP on this response only — no inline-script execution
-    # outside the one ``<script>`` block we control here, no external
-    # loads. Combined with the JSON-data extraction below, this means
-    # even a CSP-aware attacker who somehow injected raw HTML still
+    # HTML-attribute-escape both values. Even if a future refactor
+    # loosens the query-param regex, the only way for these strings
+    # to influence the page is via the ``data-*`` attribute they live
+    # in, and ``html.escape`` neutralises ``<>"'&``.
+    msg_attr = html.escape(msg_data, quote=True)
+    origin_attr = html.escape(target_origin, quote=True)
+    # Strict CSP on this response only — no external loads, no eval,
+    # no inline-script execution outside the one script tag we control
+    # here. Combined with the data-attribute extraction below, this
+    # means even a hypothetical injection somewhere else in the body
     # can't get JS to execute.
-    csp = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'"
-    # Inline JS — kept minimal. The data lives in a non-executable
-    # ``<script type="application/json">`` block above; the executable
-    # block just reads it via DOM. ``window.opener`` may be null when the
-    # callback URL was opened directly (not in a popup); the fallback
-    # text covers that case.
-    html = f"""<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Authorisation complete</title></head>
-<body style="font-family: system-ui; padding: 2rem; text-align: center;">
-  <p>You may close this window.</p>
-  <script id="fdr-oauth-payload" type="application/json">{msg_safe}</script>
-  <script>
-    (function () {{
-      var el = document.getElementById('fdr-oauth-payload');
-      var msg;
-      try {{ msg = JSON.parse(el.textContent); }} catch (e) {{ return; }}
-      var origin = {origin_safe};
-      try {{
-        if (window.opener) {{
-          window.opener.postMessage(msg, origin);
-        }}
-      }} catch (e) {{ /* ignore */ }}
-      setTimeout(function () {{ try {{ window.close(); }} catch (e) {{}} }}, 250);
-    }})();
-  </script>
-</body>
-</html>"""
-    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
+    csp = (
+        "default-src 'none'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'unsafe-inline'"
+    )
+    # All non-static substitutions go through ``html.escape`` above —
+    # the f-string body below contains no user-derived literals.
+    page = (
+        '<!doctype html>'
+        '<html lang="en">'
+        '<head><meta charset="utf-8"><title>Authorisation complete</title></head>'
+        '<body style="font-family: system-ui; padding: 2rem; text-align: center;">'
+        '<p>You may close this window.</p>'
+        f'<div id="fdr-oauth-payload" data-payload="{msg_attr}" data-origin="{origin_attr}"></div>'
+        '<script>'
+        '(function () {'
+        "  var el = document.getElementById('fdr-oauth-payload');"
+        '  if (!el) { return; }'
+        '  var msg;'
+        '  try { msg = JSON.parse(el.dataset.payload); } catch (e) { return; }'
+        '  var origin = el.dataset.origin;'
+        '  try {'
+        '    if (window.opener) { window.opener.postMessage(msg, origin); }'
+        '  } catch (e) { /* ignore */ }'
+        '  setTimeout(function () { try { window.close(); } catch (e) {} }, 250);'
+        '})();'
+        '</script>'
+        '</body></html>'
+    )
+    return HTMLResponse(content=page, headers={"Content-Security-Policy": csp})
 
 
 # ============================================================================

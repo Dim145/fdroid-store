@@ -314,12 +314,28 @@ def _app_entry_for(
 
 class FetchError(Exception):
     """Wraps upstream / parse failures with the HTTP status + protocol
-    error code we'll send back to the caller."""
+    error code we'll send back to the caller.
+
+    The ``message`` is for server-side logs only. The user-facing
+    message is looked up from :data:`_FETCH_ERR_MESSAGES` by ``code`` so
+    no exception-derived string ever flows into an HTTP response.
+    """
 
     def __init__(self, message: str, *, http: int, code: str) -> None:
         super().__init__(message)
         self.http = http
         self.code = code
+
+
+# User-facing error messages keyed by FetchError.code. Static strings
+# only — what the caller sees if their /resolve request hits one of
+# the upstream-fetch failure modes. The richer detail (which library
+# raised, with traceback) is in the server logs.
+_FETCH_ERR_MESSAGES: dict[str, str] = {
+    "not_found": "upstream index not found",
+    "upstream": "upstream index could not be reached",
+    "bad_response": "upstream index could not be parsed",
+}
 
 
 @app.post("/resolve", dependencies=[Depends(require_auth)])
@@ -347,10 +363,17 @@ async def resolve(body: dict[str, Any]) -> Any:
     try:
         index = await _fetch_index_v1(repo_url)
     except FetchError as exc:
-        # FetchError messages are author-written static strings (see
-        # ``_fetch_index_v1``) — no library-raised exception detail
-        # bubbles up to the response.
-        return _err(exc.code, str(exc), http=exc.http)
+        # The FetchError messages are already author-written static
+        # strings (see ``_fetch_index_v1``), but static analysers
+        # (CodeQL py/stack-trace-exposure) still mark ``str(exc)`` as
+        # a tainted source because the value originates from an
+        # ``Exception`` object. We break the visible taint flow by
+        # routing the user-facing message through a static dict keyed
+        # on ``exc.code`` — the lookup result is constant data, not
+        # exception-derived. Operators retain full traceback context
+        # in the structured server logs already emitted at the throw
+        # site.
+        return _err(exc.code, _FETCH_ERR_MESSAGES.get(exc.code, "upstream error"), http=exc.http)
 
     apk = _pick_latest_apk(index, package)
     if apk is None:
