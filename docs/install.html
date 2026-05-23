@@ -55,6 +55,7 @@
           <li><a href="#proxy" data-num="10">Reverse proxy &amp; TLS</a></li>
           <li><a href="#hardening" data-num="11">Hardening notes</a></li>
           <li><a href="#upgrade" data-num="12">Upgrading</a></li>
+          <li><a href="#source-proxies" data-num="13">Source proxies (opt-in)</a></li>
         </ol>
       </aside>
 
@@ -512,6 +513,40 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
 <span class="c-fn">docker</span> compose logs <span class="c-fl">-f</span> backend  <span class="c-cmt"># watch the Alembic output</span></pre>
           </div>
           <p>Rolling back a release means rolling back the image tag <em>and</em> the database. Take a <code>pg_dump</code> before any upgrade you're not sure about.</p>
+        </section>
+
+        <!-- 13 source proxies -->
+        <section class="doc-section" id="source-proxies">
+          <h2><span class="num">13</span>Source proxies (opt-in)</h2>
+          <p>For APK sources that don't fit the forge model (F-Droid mirrors, Patreon, kemono.cr, private artefact registries…), fdroid-store delegates to external <em>source proxy</em> services. The proxy speaks <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">a small v1 HTTP protocol</a> over Bearer auth; the proxy author owns the scraping / ToS / legal burden, and you only run the proxies you actually want.</p>
+
+          <h3>Reference F-Droid proxy</h3>
+          <p>A reference implementation that fetches APKs from any F-Droid-compatible repo (f-droid.org, IzzyOnDroid, Guardian Project, another fdroid-store…) ships in the compose stack behind the <code>proxy-fdroid</code> profile. Off by default.</p>
+
+          <div class="code">
+            <div class="strip"><span class="what">bash</span><span>enable the reference proxy</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-fn">docker</span> compose <span class="c-fl">--profile</span> proxy-fdroid <span class="c-fl">up</span> <span class="c-fl">-d</span></pre>
+          </div>
+
+          <p>By default the proxy listens on <code>proxy-fdroid:8000</code> inside the compose network and runs in <em>open mode</em> (no shared secret) — fine for a single-host deployment where only the backend reaches it. To require a Bearer secret, set <code>PROXY_SHARED_SECRET</code> in the proxy's environment, then paste the same value into <code>/admin/proxies</code> when registering it.</p>
+
+          <p>Register the running proxy from <code>/admin/proxies</code> with <code>http://proxy-fdroid:8000</code> as the base URL — the admin UI immediately probes <code>/healthz</code> + caches the catalogue.</p>
+
+          <h3>Writing your own proxy</h3>
+          <p>The proxy protocol is six endpoints:</p>
+          <ul>
+            <li><code>GET /healthz</code> — liveness, no auth.</li>
+            <li><code>GET /sources</code> — catalogue of providers + their auth shape.</li>
+            <li><code>POST /resolve</code> — fetch the latest release for a URL + auth blob, return APK URL + metadata.</li>
+            <li><code>GET /auth/&lt;provider&gt;/begin</code> + <code>GET /auth/&lt;provider&gt;/callback</code> — OAuth dance (proxy stores tokens, hands fdroid-store an opaque <code>credential_id</code>).</li>
+            <li><code>GET &lt;apk_url&gt;</code> — the actual download, ideally a redirect to upstream or a short-lived signed URL.</li>
+          </ul>
+          <p>Full spec + payload shapes: <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">docs/proxy-protocol.md</a>. Reference impl: <a href="https://github.com/Dim145/fdroid-store/blob/main/proxy/fdroid/main.py">proxy/fdroid/main.py</a> (~350 lines of FastAPI).</p>
+
+          <div class="callout warn">
+            <div class="badge">SAFETY</div>
+            <p>fdroid-store enforces several invariants the proxy can't override: SSRF guard on <code>apk_url</code> (RFC 1918 / loopback / metadata IPs refused), admin-configured size cap during the streamed download, optional SHA-256 verification when the proxy provides <code>apk_sha256_hint</code>, and a manifest-vs-advertised <code>version_code</code> / <code>package_name</code> cross-check. A lying proxy is rejected before its bytes hit the catalogue.</p>
+          </div>
         </section>
 
       </article>

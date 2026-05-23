@@ -53,6 +53,7 @@
           <li><a href="#backup" data-num="09">Backup &amp; restore</a></li>
           <li><a href="#jobs" data-num="10">Jobs dashboard</a></li>
           <li><a href="#audit" data-num="11">Audit log</a></li>
+          <li><a href="#proxies" data-num="12">Source proxies</a></li>
         </ol>
       </aside>
 
@@ -357,6 +358,50 @@
           <div class="callout">
             <div class="badge">EXPORT</div>
             <p>The audit page offers a CSV export of the current filter. The same data is available via <code>GET /api/v1/admin/audit</code> for piping into your own SIEM.</p>
+          </div>
+        </section>
+
+        <!-- 12 source proxies -->
+        <section class="doc-section" id="proxies">
+          <h2><span class="num">12</span>Source proxies</h2>
+          <p><code>/admin/proxies</code> manages the registry of external <em>source proxies</em> — small HTTP services that fetch APKs from places fdroid-store doesn't scrape natively (Patreon, kemono.cr, F-Droid mirrors, in-house artefact repos…). The proxy owns the legal/ToS/maintenance burden for its slice; fdroid-store stays neutral and only speaks <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">the v1 proxy protocol</a> over plain HTTP.</p>
+
+          <h3>Registering a proxy</h3>
+          <ol class="steps">
+            <li>
+              <strong>Deploy the proxy</strong>
+              <p>The reference F-Droid proxy ships in the compose stack under the <code>proxy-fdroid</code> profile (see install §08). Third-party proxies (Patreon, kemono, …) are out-of-tree — see the protocol spec to write your own.</p>
+            </li>
+            <li>
+              <strong>Add it</strong>
+              <p>Click <em>Ajouter</em> on <code>/admin/proxies</code>, name it, paste the base URL and the shared secret your proxy expects. fdroid-store immediately hits <code>GET /healthz</code> and caches the proxy's <code>GET /sources</code> catalogue (which providers it exposes, what auth each needs).</p>
+            </li>
+            <li>
+              <strong>Health chip</strong>
+              <p>Each row shows <em>OK / Unreachable / Auth refused / Bad response</em> based on the last probe. <em>Tester</em> re-runs the health check + catalogue refresh on demand.</p>
+            </li>
+          </ol>
+
+          <h3>What admins see (and uploaders don't)</h3>
+          <p>The proxy URL, shared secret status, health detail, and timestamps live on <code>/admin/proxies</code> only. The <code>GET /api/v1/proxies</code> endpoint that uploaders hit returns a slim schema — <code>{id, name, cached_sources_json}</code> — so internal hostnames, custom ports, and operational chatter never leak past this page. Uploaders pick a proxy by name; the actual HTTP traffic happens server-side.</p>
+
+          <h3>Auth modes</h3>
+          <p>What each provider tells uploaders to fill, declared in the catalogue:</p>
+          <dl class="spec">
+            <dt><code>none</code></dt>
+            <dd>Open source (e.g. F-Droid public repo). Uploader pastes a URL, that's it.</dd>
+            <dt><code>api_token</code> / <code>basic</code></dt>
+            <dd>Uploader pastes one or more secret fields (label + placeholder declared by the provider). Stored Fernet-encrypted on the source row; only sent to <em>this</em> proxy on a scan.</dd>
+            <dt><code>oauth2</code></dt>
+            <dd>Uploader clicks <em>Connect</em>, a popup opens against the proxy's begin endpoint, the proxy handles the IdP dance, then redirects back to <code>/api/v1/auth/proxy-callback</code> with a <code>credential_id</code>. fdroid-store stores the opaque id — the access/refresh token stays on the proxy. State is HMAC-signed with a key derived from <code>SECRET_KEY</code>.</dd>
+          </dl>
+
+          <h3>Cron + audit</h3>
+          <p>The worker runs <code>scan_apk_proxy_sources_periodic</code> at 05:00 UTC — one job per enabled source. <code>retry_after</code> from a 429 is honoured (capped at 24 h so a hostile proxy can't pause sources for years). Every transition writes a <code>proxy_source.*</code> audit entry (<code>created</code>, <code>updated</code>, <code>deleted</code>, <code>imported</code>, <code>sha256_mismatch</code>, <code>import_failed</code>). SHA-256 mismatches between the proxy's <code>apk_sha256_hint</code> and the downloaded bytes are logged as their own row — strongest signal of a compromised upstream link.</p>
+
+          <div class="callout warn">
+            <div class="badge">SAFETY</div>
+            <p>The proxy's <code>apk_url</code> is run through the same SSRF guard as forge downloads: RFC 1918, loopback, link-local, and cloud-metadata IPs are refused. The advertised <code>apk_size_bytes</code> is enforced during streaming so a proxy lying about the file size can't fill disk. The manifest's <code>version_code</code> and <code>package_name</code> are belt-and-suspenders-checked against the proxy's advertised values — a mismatch rejects the import.</p>
           </div>
         </section>
 

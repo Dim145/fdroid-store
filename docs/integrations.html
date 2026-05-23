@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Integrations — fdroid-store</title>
-  <meta name="description" content="Point F-Droid clients at your repo, publish APKs from CI, and wire up forge auto-ingest (GitHub, GitLab, Gitea/Forgejo)." />
+  <meta name="description" content="Point F-Droid clients at your repo, publish APKs from CI, wire up forge auto-ingest (GitHub, GitLab, Gitea/Forgejo), and attach source proxies (F-Droid mirrors, Patreon, kemono, internal registries)." />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -53,6 +53,7 @@
           <li><a href="#api" data-num="09">REST API basics</a></li>
           <li><a href="#feeds" data-num="10">Atom / RSS feeds</a></li>
           <li><a href="#fdroiddata" data-num="11">fdroiddata bridge</a></li>
+          <li><a href="#proxies" data-num="12">Source proxies</a></li>
         </ol>
       </aside>
 
@@ -60,10 +61,12 @@
         <div class="eyebrow">Doc · 04 · Integrations</div>
         <h1>Integrations.</h1>
         <p class="lead">
-          Three flavours of integration: pointing an <strong>F-Droid client</strong>
-          at your repo, publishing APKs from <strong>CI</strong>, and wiring up
+          Four flavours of integration: pointing an <strong>F-Droid client</strong>
+          at your repo, publishing APKs from <strong>CI</strong>, wiring up
           <strong>forge auto-ingest</strong> so releases on GitHub / GitLab /
-          Gitea show up here automatically.
+          Gitea show up here automatically, and delegating to
+          <strong>source proxies</strong> for anything else (F-Droid mirrors,
+          Patreon, kemono, internal artefact registries…).
         </p>
 
         <!-- 01 client -->
@@ -511,6 +514,58 @@ GET  /api/v1/feed/apps/&lt;package_name&gt;</pre>
 <pre>https://verification.f-droid.org/&lt;package&gt;_&lt;versionCode&gt;.apk.json</pre>
           </div>
           <p>That JSON bundles both <code>local.sha256</code> (the build farm's bytes) and <code>remote.sha256</code> (the developer's upstream). Paste the URL into the <em>Verify from URL</em> field on the APK's RB editor — the backend fetches it (SSRF-guarded, redirects refused), extracts every 64-hex hash it finds, and verifies if any of them match this repo's APK. The stored reference is whichever hash actually matched.</p>
+        </section>
+
+        <!-- 12 source proxies -->
+        <section class="doc-section" id="proxies">
+          <h2><span class="num">12</span>Source proxies</h2>
+          <p>For APK sources that don't fit the forge model — F-Droid mirrors, Patreon, kemono.cr, your own internal artefact registry — fdroid-store delegates to external <em>source proxy</em> services that speak <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">a small HTTP protocol</a>. Each proxy author owns the scraping / ToS / legal burden for their slice; fdroid-store stays neutral and only talks to the proxies your operator has whitelisted.</p>
+
+          <h3>What the operator sees, what you see</h3>
+          <p>Admins register proxies on <code>/admin/proxies</code> with a name, a base URL and an optional shared secret. As an uploader you only see the proxy's name + the providers it exposes — never the URL, never the secret. The actual HTTP traffic from <code>/resolve</code> downloads happens server-side, so internal hostnames stay internal.</p>
+
+          <h3>Attaching a source to an existing app</h3>
+          <p>From <code>/my-apps/&lt;id&gt;</code>, scroll to <em>Sources externes</em> (Section 09) → <em>Ajouter une source</em>. A right-edge wizard opens with three steps:</p>
+          <ol class="steps">
+            <li>
+              <strong>Pick a proxy</strong>
+              <p>Only enabled + healthy proxies with a non-empty catalogue appear. Each card shows the proxy's name and its provider count.</p>
+            </li>
+            <li>
+              <strong>Pick a provider</strong>
+              <p>The proxy's catalogue, with each provider's auth requirements as a chip (<code>Sans auth</code> / <code>Token API</code> / <code>Basic auth</code> / <code>OAuth</code>). Providers already attached to this app are greyed out.</p>
+            </li>
+            <li>
+              <strong>Fill the form</strong>
+              <p>One URL field (with <code>url_hint</code> placeholder and <code>url_pattern</code> hint) plus zero, one, or many secret fields depending on the provider's <code>auth_kind</code>. OAuth providers replace the secret fields with a <em>Se connecter</em> button.</p>
+            </li>
+          </ol>
+
+          <h3>Attaching a source from the start (New App page)</h3>
+          <p><code>/my-apps/new</code> now has a third tab <em>Depuis un proxy</em> next to <em>Uploader un APK</em> and <em>Depuis GitHub</em>. The flow is the same 3-step wizard inline in Step 01, ending with a <em>Valider la source</em> button. fdroid-store resolves through the proxy, downloads the APK, parses the manifest and shows you the package + version + size before you commit to creating the app.</p>
+
+          <div class="callout">
+            <div class="badge">PREVIEW</div>
+            <p>The validate step writes nothing to the DB — it's a probe. If the package name or signer don't match what you expected, switch the URL or the provider and re-validate. Only when you click <em>Publier la sortie</em> does the App + first APK + ApkProxySource land.</p>
+          </div>
+
+          <h3>OAuth in two clicks</h3>
+          <p>For providers with <code>auth_kind: oauth2</code> (Patreon, services with proper OAuth), clicking <em>Se connecter</em> opens a popup against the proxy's begin endpoint. The proxy walks the IdP dance, stores the access/refresh tokens on its side, and redirects the popup back to <code>/api/v1/auth/proxy-callback?credential_id=&lt;opaque&gt;&amp;state=&lt;signed&gt;</code>. The callback verifies the HMAC state (the SPA never sees the real token), the popup posts the <code>credential_id</code> to its opener and closes. The wizard then shows <em>Compte connecté · prêt à attacher la source</em>.</p>
+
+          <h3>What the daily scan does</h3>
+          <ol>
+            <li>Worker calls <code>POST /resolve</code> on the proxy with your <code>last_release_id</code>.</li>
+            <li>304 means "same release, nothing to do" → row stays as <code>up_to_date</code>.</li>
+            <li>200 with new metadata → download (SSRF-guarded, size-capped), parse, verify <code>apk_sha256_hint</code> if provided, cross-check <code>version_code</code> + <code>package_name</code> against the proxy's claim, run ClamAV + Trivy if enabled, attach as a new APK.</li>
+            <li>401 → row flips to <code>auth_required</code> until you edit the secrets (or reconnect OAuth).</li>
+            <li>429 → row goes into <code>rate_limited</code> with a cooldown derived from the proxy's <code>retry_after</code> (capped at 24 h).</li>
+            <li>Every transition is one row in the audit log under <code>proxy_source.*</code>.</li>
+          </ol>
+
+          <div class="callout warn">
+            <div class="badge">SECRETS</div>
+            <p>API tokens, basic-auth credentials and OAuth <code>credential_id</code>s are stored Fernet-encrypted on the source row (key derived from <code>SECRET_KEY</code>). Only the boolean <code>has_secrets</code> is ever returned by the API. Audit-log entries carry the <em>names</em> of the secret keys you set, never the values.</p>
+          </div>
         </section>
 
       </article>

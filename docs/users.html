@@ -232,13 +232,16 @@
         <!-- 08 create app -->
         <section class="doc-section" id="create-app">
           <h2><span class="num">08</span>Creating an app</h2>
-          <p>Three entry points, all reachable from <code>My apps → New app</code>:</p>
+          <p>Four entry points, all reachable from <code>My apps → New app</code>:</p>
 
           <h3>A · Manual</h3>
           <p>Type the package name + title, pick a category, set visibility (public / private), drag a screenshot if you have one. You'll attach the first APK on the next screen.</p>
 
           <h3>B · From a forge release</h3>
           <p>Paste a GitHub / GitLab / Gitea repo URL. The wizard fetches the latest release, picks the first <code>.apk</code> asset (or one matching your glob), parses the manifest, and pre-fills the app fields. Once accepted, the worker subscribes to the source and re-fetches on a cron.</p>
+
+          <h3>C · From a source proxy</h3>
+          <p>For sources that aren't a Git forge (an F-Droid mirror, Patreon, kemono.cr, your internal artefact registry), pick the <em>Depuis un proxy</em> tab. Choose one of the proxies your admin has registered, pick a provider from its catalogue, paste the upstream URL, and click <em>Valider la source</em>. fdroid-store resolves through the proxy server-side and shows you the parsed package + version + size before you create the app. See <a href="integrations.html#proxies">Integrations → Source proxies</a> for the full flow including OAuth.</p>
 
           <div class="shot real">
             <div class="titlebar">
@@ -250,7 +253,7 @@
             </div>
           </div>
 
-          <h3>C · Paste fdroiddata metadata</h3>
+          <h3>D · Paste fdroiddata metadata</h3>
           <p>If you're migrating an app that already lives in the upstream <code>fdroiddata</code> repo, paste its YAML. The parser fills out fields (description, links, categories, anti-features). You still need to attach an APK afterwards.</p>
         </section>
 
