@@ -31,6 +31,7 @@ import { DeployTokensSection } from "@/components/deploy-tokens-section";
 import { GithubSourceSection } from "@/components/github-source-section";
 import { ProxySourcesSection } from "@/components/proxy-sources-section";
 import { LocalizationsEditor } from "@/components/localizations-editor";
+import { MarkdownEditor } from "@/components/markdown/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -664,12 +665,12 @@ function ManageAppInner() {
             <Input id="sum" value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={255} />
           </FormField>
           <FormField label={t("myApps.edit.fields.description")} htmlFor="desc" className="md:col-span-2">
-            <textarea
+            <MarkdownEditor
               id="desc"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={6}
-              className="w-full rounded-xl border border-outline bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
+              onChange={setDescription}
+              minRows={6}
+              placeholder={t("myApps.edit.fields.descriptionPlaceholder")}
             />
           </FormField>
           <FormField label={t("myApps.edit.fields.categories")} className="md:col-span-2">

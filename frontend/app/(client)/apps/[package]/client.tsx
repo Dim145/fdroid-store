@@ -10,6 +10,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { AppIcon } from "@/components/app-icon";
 import { AppPermissions } from "@/components/app-permissions";
 import { InstallPill } from "@/components/install-pill";
+import { MarkdownView } from "@/components/markdown/markdown-view";
 import { NsfwTag } from "@/components/nsfw-tag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -402,14 +403,10 @@ export default function AppDetailClient() {
           <div className="surface p-6">
             {app.description ? (
               <>
-                <p
-                  className={cn(
-                    "whitespace-pre-wrap text-sm leading-relaxed text-ink-soft",
-                    !expandDesc && "line-clamp-6",
-                  )}
-                >
-                  {app.description}
-                </p>
+                <MarkdownView
+                  markdown={app.description}
+                  maxLines={expandDesc ? undefined : 6}
+                />
                 {app.description.length > 320 && (
                   <Button
                     variant="text"

@@ -58,6 +58,25 @@
     "docTitle": "fdroid-store — your private app shelf",
     "description": "A self-hosted F-Droid repository with a modern app-store interface. Browse, install, and ship Android apps with full control."
   },
+  "markdown": {
+    "edit": "Edit",
+    "preview": "Preview",
+    "viewMode": "View mode",
+    "previewEmpty": "Nothing to preview yet — start typing on the left.",
+    "acceptsMarkdown": "Markdown & HTML paste supported",
+    "helpHint": "Type, paste from a doc, or use the toolbar. Bold, italic, lists, quotes and links are kept; headings, images and tables are stripped to match the F-Droid client.",
+    "toolbar": {
+      "bold": "Bold",
+      "italic": "Italic",
+      "code": "Inline code",
+      "bulletList": "Bullet list",
+      "orderedList": "Numbered list",
+      "quote": "Quote",
+      "link": "Link",
+      "undo": "Undo",
+      "redo": "Redo"
+    }
+  },
   "header": {
     "homeAriaLabel": "fdroid-store home",
     "brand": "fdroid-store",

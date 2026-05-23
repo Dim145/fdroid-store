@@ -255,3 +255,112 @@
 
   .num { font-variant-numeric: tabular-nums; }
 }
+
+/* ============================================================================
+   Prose — app description rendering (Markdown subset)
+   ----------------------------------------------------------------------------
+   Used by <MarkdownView> on the public app page AND by the editor's preview
+   tab + the live ProseMirror surface inside <MarkdownEditor>. Keeping a single
+   stylesheet for both means WYSIWYG actually means what it says: the editor
+   surface is a 1:1 visual match for what gets published.
+
+   We deliberately scope every selector to `.prose-md` so the styles can never
+   leak into surrounding UI (cards, sidebars, the navbar's rich tooltips…).
+   ============================================================================ */
+.prose-md {
+  font-size: 0.9375rem;       /* 15px — matches the public app paragraph size */
+  line-height: 1.65;
+  color: rgb(var(--ink-soft));
+  word-wrap: break-word;
+  overflow-wrap: anywhere;    /* long URLs in links don't break the layout */
+}
+.prose-md > * + * { margin-top: 0.85em; }
+.prose-md p { margin: 0; }
+.prose-md strong { color: rgb(var(--ink)); font-weight: 600; }
+.prose-md em { font-style: italic; }
+.prose-md a {
+  color: rgb(var(--primary));
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color 150ms ease;
+}
+.prose-md a:hover { color: rgb(var(--primary) / 0.78); }
+.prose-md code {
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: 6px;
+  background: rgb(var(--surface-2));
+  color: rgb(var(--ink));
+}
+.prose-md ul, .prose-md ol {
+  padding-left: 1.4em;
+  margin: 0;
+}
+.prose-md ul { list-style: disc; }
+.prose-md ol { list-style: decimal; }
+.prose-md li { margin-top: 0.25em; }
+.prose-md li > p { display: inline; }
+.prose-md li::marker { color: rgb(var(--ink-mute)); }
+.prose-md blockquote {
+  margin: 0;
+  padding: 0.4em 0 0.4em 1em;
+  border-left: 3px solid rgb(var(--primary) / 0.55);
+  color: rgb(var(--ink-soft));
+  background: linear-gradient(
+    90deg,
+    rgb(var(--primary) / 0.04),
+    transparent 70%
+  );
+  border-radius: 4px;
+}
+.prose-md br { content: ""; display: block; margin-top: 0.2em; }
+
+/* Line-clamp variant: collapses the rendered description to N lines on the
+   public app page, with a soft fade so truncation doesn't read as a hard cut.
+   Uses a CSS custom property so the JS just passes the line count. */
+.prose-md--clamped {
+  position: relative;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--prose-md-max-lines, 6);
+  overflow: hidden;
+}
+.prose-md--clamped::after {
+  content: "";
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline: 0;
+  height: 2.4em;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, rgb(var(--surface)) 90%);
+}
+
+/* ProseMirror live-editing surface — sits inside the editor frame. We add
+   padding through the wrapper rather than the contenteditable so the caret
+   doesn't bottom out against the bottom-bar of the editor. */
+.tiptap-content {
+  outline: none;
+  caret-color: rgb(var(--primary));
+}
+.tiptap-content[contenteditable="true"]:empty::before {
+  content: attr(data-placeholder);
+}
+/* Placeholder rendered by `@tiptap/extension-placeholder`: it adds a `is-empty`
+   class on the current empty node. We hook that to show the placeholder
+   prompt at the right vertical rhythm without shifting layout. */
+.tiptap-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: rgb(var(--ink-mute));
+  pointer-events: none;
+  height: 0;
+}
+/* The ProseMirror focus ring is handled by the editor wrapper's
+   `focus-within` ring — we suppress the default outline on the content. */
+.ProseMirror:focus,
+.ProseMirror-focused {
+  outline: none;
+}
+

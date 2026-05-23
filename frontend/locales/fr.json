@@ -58,6 +58,25 @@
     "docTitle": "fdroid-store — ton étagère d'apps privée",
     "description": "Un dépôt F-Droid auto-hébergé avec une interface moderne d'app store. Parcours, installe et publie des apps Android avec un contrôle total."
   },
+  "markdown": {
+    "edit": "Édition",
+    "preview": "Aperçu",
+    "viewMode": "Mode d'affichage",
+    "previewEmpty": "Rien à prévisualiser pour l'instant — commencez à taper à gauche.",
+    "acceptsMarkdown": "Coller du Markdown ou du HTML accepté",
+    "helpHint": "Tapez, collez depuis un document, ou utilisez la barre d'outils. Gras, italique, listes, citations et liens sont conservés ; titres, images et tableaux sont retirés pour rester compatibles avec le client F-Droid.",
+    "toolbar": {
+      "bold": "Gras",
+      "italic": "Italique",
+      "code": "Code inline",
+      "bulletList": "Liste à puces",
+      "orderedList": "Liste numérotée",
+      "quote": "Citation",
+      "link": "Lien",
+      "undo": "Annuler",
+      "redo": "Rétablir"
+    }
+  },
   "header": {
     "homeAriaLabel": "Accueil fdroid-store",
     "brand": "fdroid-store",

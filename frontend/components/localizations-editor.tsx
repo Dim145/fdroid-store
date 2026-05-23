@@ -4,6 +4,7 @@ import { Globe2, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { MarkdownEditor } from "@/components/markdown/markdown-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -356,14 +357,12 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                     />
                   </FormField>
                   <FormField label={t("myApps.edit.translations.fields.description")} htmlFor={`loc-desc-${row.locale}`} className="md:col-span-2">
-                    <textarea
+                    <MarkdownEditor
                       id={`loc-desc-${row.locale}`}
                       value={row.description}
-                      maxLength={20000}
-                      onChange={(e) => updateRow(row.locale, { description: e.target.value })}
-                      rows={5}
+                      onChange={(md) => updateRow(row.locale, { description: md })}
+                      minRows={5}
                       placeholder={t("myApps.edit.translations.fields.descriptionPlaceholder")}
-                      className="w-full rounded-xl border border-outline bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                     />
                   </FormField>
                 </div>
