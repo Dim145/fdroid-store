@@ -103,8 +103,15 @@ export function MarkdownEditor({
       }),
       Placeholder.configure({
         placeholder: placeholder ?? "",
-        emptyEditorClass:
-          "before:content-[attr(data-placeholder)] before:text-ink-mute before:float-left before:h-0 before:pointer-events-none",
+        // ``float-left + h-0`` is Tiptap's canonical recipe but on Firefox /
+        // some Chromium versions it leaves the empty paragraph's caret
+        // clipped to a barely-visible sliver at the top-left — the
+        // placeholder's float occupies the same baseline. Absolute
+        // positioning takes the placeholder out of flow entirely so the
+        // caret renders at its natural width + height. ``relative`` on the
+        // empty paragraph is what gives the absolute child a
+        // containing block.
+        emptyEditorClass: "is-editor-empty",
       }),
       Markdown.configure({
         html: false,           // never accept raw HTML through the markdown bridge
