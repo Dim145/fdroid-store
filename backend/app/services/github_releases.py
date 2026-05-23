@@ -19,7 +19,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -225,6 +225,46 @@ def validate_base_url(value: str | None) -> str | None:
     return stripped
 
 
+def assert_fetch_url_safe(url: str) -> str:
+    """Validate a user-supplied URL is safe for the backend to fetch and
+    return a canonicalised copy rebuilt from the validated components.
+
+    Checks: http(s) scheme, present hostname, no metadata hostname, no
+    private/loopback/link-local/metadata IPs (both IP-literal and any
+    DNS answer). Raises :class:`ValueError` on any failure so callers
+    can map to their own error type (HTTPException, GithubReleaseError…).
+
+    Returning a freshly-built URL — rather than the input string — makes
+    the sanitised value flow-distinct from the tainted input for static
+    analysers, and discards any userinfo / fragment that could otherwise
+    confuse downstream URL handling.
+    """
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise ValueError(f"Invalid URL: {exc}") from exc
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError("URL must be http(s)://")
+    host = (parsed.hostname or "").strip()
+    if not host:
+        raise ValueError("URL is missing a hostname")
+    if host.lower() in _BLOCKED_HOSTNAMES:
+        raise ValueError(f"Host {host!r} is blocked")
+    try:
+        as_ip = ipaddress.ip_address(host)
+    except ValueError:
+        as_ip = None
+    if as_ip is not None:
+        if _is_private_ip(str(as_ip)):
+            raise ValueError(f"IP {as_ip!s} is in a blocked range")
+    elif _resolves_to_blocked(host):
+        raise ValueError(f"Host {host!r} resolves to a blocked range")
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    netloc = f"{host}{port}"
+    return urlunsplit((scheme, netloc, parsed.path, parsed.query, ""))
+
+
 def _assert_download_url_public(url: str) -> None:
     """Defence-in-depth check applied to ``browser_download_url`` /
     asset link URLs returned by the upstream API. The upstream payload
@@ -232,23 +272,9 @@ def _assert_download_url_public(url: str) -> None:
     could embed an internal-IP link); we refuse the download rather
     than blindly streaming it."""
     try:
-        parsed = urlsplit(url)
+        assert_fetch_url_safe(url)
     except ValueError as exc:
-        raise GithubReleaseError(f"Invalid asset URL: {exc}") from exc
-    if (parsed.scheme or "").lower() not in {"http", "https"}:
-        raise GithubReleaseError("Asset URL must be http(s)")
-    host = (parsed.hostname or "").strip()
-    if not host or host.lower() in _BLOCKED_HOSTNAMES:
-        raise GithubReleaseError(f"Asset host {host!r} is blocked")
-    try:
-        as_ip = ipaddress.ip_address(host)
-        if _is_private_ip(str(as_ip)):
-            raise GithubReleaseError(f"Asset IP {as_ip!s} is in a blocked range")
-        return
-    except ValueError:
-        pass
-    if _resolves_to_blocked(host):
-        raise GithubReleaseError(f"Asset host {host!r} resolves to a blocked range")
+        raise GithubReleaseError(f"Asset URL rejected: {exc}") from exc
 
 
 def _resolve_token(provider: str, explicit: str | None) -> str | None:

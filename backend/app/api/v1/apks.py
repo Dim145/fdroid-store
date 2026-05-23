@@ -930,33 +930,21 @@ async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
     the SSRF guard from :mod:`github_releases` so an admin can't pivot
     through the backend into the host's private network."""
     import httpx
-    from urllib.parse import urlsplit
 
-    from app.services.github_releases import _is_private_ip, _resolves_to_blocked
-    import ipaddress
+    from app.services.github_releases import assert_fetch_url_safe
 
-    parsed = urlsplit(url)
-    scheme = (parsed.scheme or "").lower()
-    if scheme not in {"http", "https"}:
-        raise HTTPException(status_code=400, detail="reference_url must be http(s)://")
-    host = (parsed.hostname or "").strip()
-    if not host:
-        raise HTTPException(status_code=400, detail="reference_url is missing a hostname")
     try:
-        as_ip = ipaddress.ip_address(host)
-        if _is_private_ip(str(as_ip)):
-            raise HTTPException(status_code=400, detail="reference_url resolves to a blocked range")
-    except ValueError:
-        if _resolves_to_blocked(host):
-            raise HTTPException(
-                status_code=400, detail="reference_url resolves to a blocked range"
-            )
+        safe_url = assert_fetch_url_safe(url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"reference_url rejected: {exc}"
+        ) from exc
 
     timeout = httpx.Timeout(10.0, connect=5.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         try:
             res = await client.get(
-                url,
+                safe_url,
                 headers={"accept": "application/json, text/plain, */*;q=0.5"},
             )
         except httpx.HTTPError as exc:
@@ -979,7 +967,7 @@ async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
             status_code=400,
             detail="reference_url body did not contain a SHA-256 hash",
         )
-    return hashes, url
+    return hashes, safe_url
 
 
 async def _ensure_rb_feature_enabled(db) -> None:
