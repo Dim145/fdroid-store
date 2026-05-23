@@ -52,6 +52,7 @@
           <li><a href="#forges" data-num="08">Forge auto-ingest</a></li>
           <li><a href="#api" data-num="09">REST API basics</a></li>
           <li><a href="#feeds" data-num="10">Atom / RSS feeds</a></li>
+          <li><a href="#fdroiddata" data-num="11">fdroiddata bridge</a></li>
         </ol>
       </aside>
 
@@ -425,7 +426,41 @@ POST /api/v1/apks/&lt;apk_id&gt;/download-url
 
 <span class="c-cmt"># your active sessions; DELETE to revoke one</span>
 GET  /api/v1/me/sessions
-DEL  /api/v1/me/sessions/&lt;id&gt;</pre>
+DEL  /api/v1/me/sessions/&lt;id&gt;
+
+<span class="c-cmt"># v1.2 additions</span>
+<span class="c-cmt"># per-APK reproducibility — set the status / reference hash / notes</span>
+POST /api/v1/apks/&lt;apk_id&gt;/reproducibility
+<span class="c-cmt"># or fetch a published hash document and auto-decide</span>
+POST /api/v1/apks/&lt;apk_id&gt;/reproducibility/verify-from-url
+
+<span class="c-cmt"># per-APK SBOM + CVE findings (owner / collab / admin only)</span>
+GET  /api/v1/apks/&lt;apk_id&gt;/sbom
+GET  /api/v1/apks/&lt;apk_id&gt;/sbom?summary=true   <span class="c-cmt"># skip the CVE list</span>
+POST /api/v1/apks/&lt;apk_id&gt;/sbom/rescan
+
+<span class="c-cmt"># app metadata as F-Droid YAML (owner / collab / admin)</span>
+GET  /api/v1/apps/&lt;app_id&gt;/metadata.yml
+
+<span class="c-cmt"># WebAuthn / passkey enrolment + sign-in</span>
+POST /api/v1/webauthn/register/start
+POST /api/v1/webauthn/register/finish
+POST /api/v1/webauthn/login/start
+POST /api/v1/webauthn/login/finish
+GET  /api/v1/me/webauthn-credentials
+DEL  /api/v1/me/webauthn-credentials/&lt;id&gt;
+
+<span class="c-cmt"># encrypted backup workflow (admin only)</span>
+POST /api/v1/admin/backup/jobs           <span class="c-cmt"># start a job; body = components + passphrase</span>
+GET  /api/v1/admin/backup/jobs           <span class="c-cmt"># history list</span>
+GET  /api/v1/admin/backup/jobs/&lt;id&gt;/download
+POST /api/v1/admin/backup/restore        <span class="c-cmt"># multipart: archive + passphrase + components</span>
+
+<span class="c-cmt"># aggregate stats (visibility honours admin toggles)</span>
+GET  /api/v1/stats
+
+<span class="c-cmt"># per-app release feed</span>
+GET  /api/v1/feed/apps/&lt;package_name&gt;</pre>
           </div>
         </section>
 
@@ -439,14 +474,43 @@ DEL  /api/v1/me/sessions/&lt;id&gt;</pre>
             <dd>Atom — every new app added to the public repo. Useful for posting to an internal Slack channel.</dd>
             <dt>/api/v1/feed/updates</dt>
             <dd>Atom — every <strong>new APK version</strong> published. One entry per (app, version).</dd>
+            <dt>/api/v1/feed/apps/{package_name}</dt>
+            <dd>Atom — release feed scoped to a single app. Subscribe per-app for projects you care about without flooding the global feed. Auto-discovered via a <code>&lt;link rel="alternate"&gt;</code> on <code>/apps/{package}</code>.</dd>
           </dl>
 
-          <p>Both endpoints also accept <code>?format=rss</code>. Both respect the public/private boundary — anonymous callers see public-only.</p>
+          <p>All three endpoints also accept <code>?format=rss</code>. All respect the public/private boundary — anonymous callers see public-only.</p>
 
           <div class="callout">
             <div class="badge">SAY HI</div>
             <p>If you wire something interesting on top of the API, open an issue on <a href="https://github.com/Dim145/fdroid-store/issues" target="_blank" rel="noopener">GitHub</a> and we'll happily link it from here.</p>
           </div>
+        </section>
+
+        <!-- 11 fdroiddata bridge -->
+        <section class="doc-section" id="fdroiddata">
+          <h2><span class="num">11</span>fdroiddata bridge</h2>
+          <p>Your private repo and the official global F-Droid index aren't either/or — fdroid-store can act as a staging ground before you PR an app into upstream <code>fdroiddata</code>.</p>
+
+          <h3>Import a metadata.yml from fdroiddata</h3>
+          <p>The <em>New app</em> wizard accepts a pasted <code>metadata.yml</code>. Drop the file from an existing fdroiddata entry, hit Continue: the parser extracts the title, summary, description, license, links, author, anti-features and categories. You still need to attach an APK afterwards, but everything else is pre-filled.</p>
+
+          <h3>Export your app as metadata.yml</h3>
+          <p>The <em>Exporter YAML</em> button on the Hero of <code>/my-apps/[id]</code> downloads a <code>&lt;package&gt;.yml</code> in F-Droid's canonical field order. Every field that round-trips with the importer is written; <code>Builds[]</code> is emitted in the <code>binary:</code> shape pointing at <strong>this repo's</strong> APK URLs, so the YAML can be PR'd into fdroiddata as a binary-only entry without further editing.</p>
+
+          <div class="code">
+            <div class="strip"><span class="what">curl</span><span>export</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-fn">curl</span> <span class="c-fl">-H</span> <span class="c-str">"Authorization: Bearer $TOKEN"</span> \
+     <span class="c-fl">-o</span> <span class="c-str">"org.example.app.yml"</span> \
+     <span class="c-str">"https://apks.example.com/api/v1/apps/$APP_ID/metadata.yml"</span></pre>
+          </div>
+
+          <h3>Reproducible-builds verification flow</h3>
+          <p>For apps that participate in <a href="https://reproducible-builds.org/" target="_blank" rel="noopener">reproducible builds</a>, the canonical reference is F-Droid's verification server:</p>
+          <div class="code">
+            <div class="strip"><span class="what">verification</span><span>endpoint</span><button class="copy" type="button">copy</button></div>
+<pre>https://verification.f-droid.org/&lt;package&gt;_&lt;versionCode&gt;.apk.json</pre>
+          </div>
+          <p>That JSON bundles both <code>local.sha256</code> (the build farm's bytes) and <code>remote.sha256</code> (the developer's upstream). Paste the URL into the <em>Verify from URL</em> field on the APK's RB editor — the backend fetches it (SSRF-guarded, redirects refused), extracts every 64-hex hash it finds, and verifies if any of them match this repo's APK. The stored reference is whichever hash actually matched.</p>
         </section>
 
       </article>
@@ -484,7 +548,7 @@ DEL  /api/v1/me/sessions/&lt;id&gt;</pre>
       </div>
       <div class="meta">
         <span class="sig">[ fd-store ]</span>
-        <span>v1.0.9</span>
+        <span>v1.2.0</span>
         <span>·</span>
         <span>MIT licensed</span>
         <span style="margin-left:auto;">Built for self-hosting.</span>

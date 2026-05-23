@@ -47,7 +47,7 @@
         <div>
           <div class="stamp reveal in">
             <span class="dot" aria-hidden="true"></span>
-            <span>v1.0.9 · self-hosted · Apache-licensed APKs welcome</span>
+            <span>v1.2.0 · self-hosted · Apache-licensed APKs welcome</span>
           </div>
           <h1 class="reveal in">
             Run your own<br />
@@ -204,7 +204,7 @@
       <div class="sec-head reveal">
         <span class="num">01 / what's in the box</span>
         <h2>Built for self-hosting.</h2>
-        <span class="kicker">12 features · zero plugins</span>
+        <span class="kicker">16 features · zero plugins</span>
       </div>
 
       <div class="features reveal">
@@ -239,9 +239,9 @@
 
         <article class="feature">
           <span class="ix">05</span>
-          <h3>TOTP 2FA + OIDC</h3>
-          <p>Local password (argon2), OIDC via Authlib (Keycloak, Authentik, Google…), and optional TOTP second factor with QR enrolment.</p>
-          <span class="tag">argon2 · oidc · rfc 6238</span>
+          <h3>Passkeys, OIDC &amp; TOTP</h3>
+          <p>Local password (argon2), OIDC via Authlib (Keycloak, Authentik, Google…), TOTP second factor, and full WebAuthn passwordless sign-in with admin-enforceable per-role policy.</p>
+          <span class="tag">argon2 · oidc · totp · webauthn</span>
         </article>
 
         <article class="feature">
@@ -253,9 +253,9 @@
 
         <article class="feature">
           <span class="ix">07</span>
-          <h3>Optional ClamAV</h3>
-          <p>Opt-in compose profile streams every upload through clamd. Manual + scheduled rescans. Quarantines refused APKs.</p>
-          <span class="tag">--profile clamav</span>
+          <h3>ClamAV + Trivy scanning</h3>
+          <p>Two opt-in compose profiles: ClamAV streams uploads through clamd, Trivy extracts a CycloneDX SBOM and runs per-APK CVE lookup. Both gated by admin runtime toggles.</p>
+          <span class="tag">--profile clamav · trivy</span>
         </article>
 
         <article class="feature">
@@ -291,6 +291,34 @@
           <h3>en + fr i18n</h3>
           <p>The whole UI ships English &amp; French out of the box, with per-user locale persistence and a clean i18next surface for more.</p>
           <span class="tag">i18next</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">13</span>
+          <h3>Reproducible Builds</h3>
+          <p>Per-APK verification flag with auto-decide from a reference SHA-256 or a fetched <code>verification.f-droid.org</code> JSON. SSRF-guarded fetch. Owner-editable, public badge.</p>
+          <span class="tag">verified · failed · unknown</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">14</span>
+          <h3>Encrypted backup &amp; restore</h3>
+          <p>Selective async backups (DB, keystore, assets, APKs) produced by the worker, AES-256 + HMAC encrypted with a passphrase-derived key. Drop-in restore of any subset.</p>
+          <span class="tag">aes-256-cbc · hmac-sha256</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">15</span>
+          <h3>YAML metadata export</h3>
+          <p>Download a binary-only F-Droid <code>metadata.yml</code> for any app the user can manage. Drops straight into an <code>fdroiddata</code> fork; round-trips with the New-App YAML importer.</p>
+          <span class="tag">fdroiddata compatible</span>
+        </article>
+
+        <article class="feature">
+          <span class="ix">16</span>
+          <h3>Stats spread &amp; feeds</h3>
+          <p>Public-or-admin <code>/stats</code> rendered as an editorial almanac (Fraunces serif hero, SVG area chart, ranked leaderboard). Per-app Atom feed at <code>/feed/apps/{pkg}</code>.</p>
+          <span class="tag">/stats · atom · rss</span>
         </article>
 
       </div>
@@ -404,7 +432,7 @@
       </div>
       <div class="meta">
         <span class="sig">[ fd-store ]</span>
-        <span>v1.0.9</span>
+        <span>v1.2.0</span>
         <span>·</span>
         <span>MIT licensed</span>
         <span style="margin-left:auto;">Built for self-hosting.</span>

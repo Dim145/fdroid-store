@@ -117,6 +117,15 @@ CLAMAV_HOST=clamav
 CLAMAV_PORT=3310
 CLAMAV_MAX_STREAM_MB=100
 
+# --- optional: Trivy CVE/SBOM (only used when the ``trivy`` profile is up) ---
+# Empty / unset → CVE/SBOM feature disabled, worker short-circuits to SKIPPED.
+TRIVY_SERVER_URL=http://trivy:4954
+
+# --- backup worker scratch dir ----------------------------------------------
+# Bind a persistent volume here (the stock compose mounts ``backup_tmp``).
+# The default ``/tmp`` tmpfs is 512 MB and too small for real-sized repos.
+BACKUP_TMP_DIR=/data/backup-tmp
+
 # --- optional: forge tokens (per-source PATs override these in the UI) -------
 GITHUB_TOKEN=ghp_…
 GITLAB_TOKEN=glpat-…
@@ -157,6 +166,7 @@ path. Browser caches get sensible `Cache-Control` headers:
 | Local password | argon2 (legacy bcrypt rows still verify) | normal browser sessions |
 | OIDC | external IdP via Authlib | SSO with Keycloak, Google, etc. |
 | TOTP | RFC 6238 (`pyotp`), QR enrolment under `/account` | optional second factor for local logins |
+| WebAuthn / passkey | FIDO2 credential bound to the relying-party `PUBLIC_APP_URL` | passwordless sign-in, or MFA on top of a password. Per-role force toggles on `/admin/access`. |
 | Personal API key | `fdr_<prefix>_<secret>` | F-Droid Basic-auth on private repo, CI scripts you own |
 | Per-app deploy token | `fdci_<prefix>_<secret>` | CI runners that only need APK upload on a single app |
 | Signed download URL | itsdangerous-signed, time-bounded | sharing a single private APK without an account |
@@ -263,6 +273,13 @@ GET   /api/v1/me/quotas
 GET   /api/v1/me/api-keys / POST / DELETE
 GET   /api/v1/me/totp/status
 POST  /api/v1/me/totp/{setup,confirm,disable}
+POST  /api/v1/me/export                 # GDPR JSON dump of everything tied to me
+GET   /api/v1/me/webauthn-credentials   # passkey list
+DELETE /api/v1/me/webauthn-credentials/{id}
+
+# webauthn (passkeys)
+POST  /api/v1/webauthn/register/{start,finish}
+POST  /api/v1/webauthn/login/{start,finish}
 
 # apps + apks
 GET   /api/v1/apps                      # browse public + my private
@@ -271,8 +288,13 @@ POST  /api/v1/apps/with-apk             # create + first APK in one shot
 POST  /api/v1/apps/with-github-source   # create from a forge URL
 POST  /api/v1/apps/import-metadata      # paste fdroiddata YAML
 GET   /api/v1/apps/{id|package_name}
+GET   /api/v1/apps/{id}/metadata.yml    # F-Droid binary-only YAML export
 POST  /api/v1/apks/upload/{app_id}      # bearer JWT, API key, or deploy token
 POST  /api/v1/apks/{id}/download-url    # signed URL for private APK
+POST  /api/v1/apks/{id}/reproducibility            # set status / hash / notes
+POST  /api/v1/apks/{id}/reproducibility/verify-from-url  # fetch + auto-decide
+GET   /api/v1/apks/{id}/sbom            # CVE / SBOM detail (private)
+POST  /api/v1/apks/{id}/sbom/rescan
 
 # per-app config
 GET/POST/DELETE  /api/v1/apps/{id}/deploy-tokens
@@ -282,8 +304,12 @@ GET/POST/DELETE  /api/v1/apps/{id}/collaborators
 POST/DELETE      /api/v1/apps/{id}/{icon,feature-graphic,promo-graphic,tv-banner,screenshots}
 
 # feeds
-GET   /api/v1/feed/new                  # Atom / RSS
-GET   /api/v1/feed/updates
+GET   /api/v1/feed/new                  # Atom / RSS — every new app
+GET   /api/v1/feed/updates              # Atom / RSS — every new APK version
+GET   /api/v1/feed/apps/{package_name}  # Atom / RSS — per-app release feed
+
+# stats (visibility: public / admin per ``public_stats`` toggle)
+GET   /api/v1/stats
 
 # setup
 GET   /api/v1/setup/status              # has setup been done?
@@ -293,14 +319,20 @@ POST  /api/v1/setup/wizard              # generate/import keystore
 GET/POST/PATCH/DELETE /api/v1/admin/users
 GET/PATCH             /api/v1/admin/apps
 POST                  /api/v1/admin/apks/{id}/publish (or /reject)
-GET/PATCH             /api/v1/admin/repo
+GET/PATCH             /api/v1/admin/repo               # ClamAV + Trivy + RB toggles live here
 POST                  /api/v1/admin/repo/reindex
 GET                   /api/v1/admin/jobs              # arq run history
 GET                   /api/v1/admin/audit             # audit log
-GET                   /api/v1/admin/scans             # ClamAV results
+GET                   /api/v1/admin/scans             # ClamAV results (UI: /admin/scanning)
 POST                  /api/v1/admin/apks/rescan
 GET                   /api/v1/admin/stats
 GET                   /api/v1/admin/clamav/ping
+
+# admin · encrypted backup + restore
+POST  /api/v1/admin/backup/jobs                       # start a job (components + passphrase)
+GET   /api/v1/admin/backup/jobs                       # history
+GET   /api/v1/admin/backup/jobs/{id}/download         # encrypted .tar.enc
+POST  /api/v1/admin/backup/restore                    # multipart: archive + passphrase
 ```
 
 ## Development
@@ -355,6 +387,20 @@ fields (name, description, links, categories) without re-typing.
 - **Per-source forge PATs** are encrypted at rest with Fernet (key
   derived from `SECRET_KEY` via SHA-256). They are never returned by
   the API; the read schema only reports a `has_access_token` boolean.
+- **Encrypted backup archives** use AES-256-CBC + HMAC-SHA256 with a
+  key derived from an operator-supplied passphrase (PBKDF2 over a
+  per-archive random salt). The passphrase is never persisted; lose
+  it and the archive is unrecoverable.
+- **WebAuthn / passkeys** are bound to the `PUBLIC_APP_URL`
+  relying-party ID. Only the credential's public key is stored; the
+  authenticator never leaks anything secret over the wire. Per-role
+  force toggles (`/admin/access`) gate sign-in on enrolment.
+- **CVE / SBOM data** is private — owner / collaborator / admin only.
+  The Trivy server is reached over the compose network and never
+  exposed publicly (no auth on its API).
+- **Reproducibility verification fetches** go through the same SSRF
+  guard as the forge-release fetcher: DNS allow-list, RFC 1918 +
+  metadata-IP rejection, redirects refused, HTTPS only.
 - **Audit log** records actor + target + summary on every privileged
   action (upload, publish, reject, token mint/revoke, source upsert,
   admin role changes). Plaintext credentials are never logged — only

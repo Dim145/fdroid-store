@@ -45,13 +45,15 @@
           <li><a href="#signup" data-num="01">Signing up</a></li>
           <li><a href="#account" data-num="02">Your account</a></li>
           <li><a href="#totp" data-num="03">Two-factor (TOTP)</a></li>
-          <li><a href="#api-keys" data-num="04">API keys</a></li>
-          <li><a href="#sessions" data-num="05">Sessions</a></li>
-          <li><a href="#browse" data-num="06">Browsing &amp; downloads</a></li>
-          <li><a href="#create-app" data-num="07">Creating an app</a></li>
-          <li><a href="#upload" data-num="08">Uploading an APK</a></li>
-          <li><a href="#collab" data-num="09">Collaborators</a></li>
-          <li><a href="#retention-user" data-num="10">Retention &amp; suggested</a></li>
+          <li><a href="#passkeys" data-num="04">Passkeys</a></li>
+          <li><a href="#api-keys" data-num="05">API keys</a></li>
+          <li><a href="#sessions" data-num="06">Sessions</a></li>
+          <li><a href="#browse" data-num="07">Browsing &amp; downloads</a></li>
+          <li><a href="#create-app" data-num="08">Creating an app</a></li>
+          <li><a href="#upload" data-num="09">Uploading an APK</a></li>
+          <li><a href="#collab" data-num="10">Collaborators</a></li>
+          <li><a href="#retention-user" data-num="11">Retention &amp; suggested</a></li>
+          <li><a href="#quality" data-num="12">Quality signals &amp; export</a></li>
         </ol>
       </aside>
 
@@ -121,9 +123,48 @@
           </div>
         </section>
 
-        <!-- 04 api keys -->
+        <!-- 04 passkeys -->
+        <section class="doc-section" id="passkeys">
+          <h2><span class="num">04</span>Passkeys</h2>
+          <p>A passkey is a FIDO2 credential bound to a single origin (this site) and a single device or roaming key. It replaces the password on sign-in, or stands as a second factor on top of it — your choice on the login page once you've enrolled.</p>
+
+          <h3>What works as a passkey</h3>
+          <ul>
+            <li><strong>Platform authenticators</strong> — Touch&nbsp;ID on macOS / iOS, Windows Hello, Android biometrics, Linux laptops with the fingerprint reader wired up.</li>
+            <li><strong>Roaming security keys</strong> — YubiKey 5 series, Solo 2, Token2, Nitrokey 3, any FIDO2 USB / NFC key.</li>
+            <li><strong>Password-manager-synced passkeys</strong> — Bitwarden, 1Password, Apple Keychain, Google Password Manager. They roam across your devices automatically.</li>
+          </ul>
+
+          <h3>Enrolling</h3>
+          <ol class="steps">
+            <li>
+              <strong>Open the passkey panel</strong>
+              <p><code>Account → Security → Passkeys → Add a passkey</code>. Name it ("MacBook · Touch ID", "Phone · Bitwarden", "YubiKey 5C") — labels are for your eyes only and help when revoking.</p>
+            </li>
+            <li>
+              <strong>Confirm with your authenticator</strong>
+              <p>The browser hands the registration challenge to the OS. Authorise it the way you usually do — fingerprint, PIN, security key tap. No secret ever leaves your device; only the public key is stored.</p>
+            </li>
+            <li>
+              <strong>Use it on the next sign-in</strong>
+              <p>The login page now shows a <em>Sign in with a passkey</em> button alongside the password form. Tap, authorise, you're in.</p>
+            </li>
+          </ol>
+
+          <div class="callout">
+            <div class="badge">FORCED ENROLMENT</div>
+            <p>If your admin flipped the <em>require passkey for admins</em> or <em>for uploaders</em> toggle, the next time you sign in you'll be sent through a forced-enrolment screen before any session is minted. You can keep the password for the role you don't fall under, but the gated role can't use it alone anymore.</p>
+          </div>
+
+          <div class="callout warn">
+            <div class="badge">REVOKE</div>
+            <p>If you lose the device, the <em>Passkeys</em> list lets you revoke that credential. Enrol at least two (e.g. a phone + a hardware key) so losing one doesn't lock you out — there's no recovery code for passkeys.</p>
+          </div>
+        </section>
+
+        <!-- 05 api keys -->
         <section class="doc-section" id="api-keys">
-          <h2><span class="num">04</span>API keys</h2>
+          <h2><span class="num">05</span>API keys</h2>
           <p>Personal API keys do two things:</p>
           <ul>
             <li>Authenticate the F-Droid Android client for <strong>private apps</strong> (HTTP Basic auth, see <a href="integrations.html#client">integrations</a>).</li>
@@ -154,9 +195,9 @@
           </div>
         </section>
 
-        <!-- 05 sessions -->
+        <!-- 06 sessions -->
         <section class="doc-section" id="sessions">
-          <h2><span class="num">05</span>Sessions</h2>
+          <h2><span class="num">06</span>Sessions</h2>
           <p>Every browser login + every refresh-token rotation lives as a row under <code>Account → Sessions</code>. You see:</p>
           <ul>
             <li>Device and user-agent hint (Chrome on macOS, etc.).</li>
@@ -168,9 +209,9 @@
           <p>Refresh tokens rotate on use: every time the SPA exchanges a refresh token for a new pair, the old <code>jti</code> is marked consumed. A leaked refresh token used a second time fails — and we know about it.</p>
         </section>
 
-        <!-- 06 browse -->
+        <!-- 07 browse -->
         <section class="doc-section" id="browse">
-          <h2><span class="num">06</span>Browsing &amp; downloads</h2>
+          <h2><span class="num">07</span>Browsing &amp; downloads</h2>
           <p>The public landing for everyone — logged in or out — is <code>/apps</code>. Each card shows the icon, title, suggested-version label, category chips, and an at-a-glance "open in F-Droid" link.</p>
 
           <h3>Search &amp; filter</h3>
@@ -188,9 +229,9 @@
           <p><code>/history</code> shows the last few hundred downloads you triggered while logged in. Useful when you forgot which version you grabbed yesterday.</p>
         </section>
 
-        <!-- 07 create app -->
+        <!-- 08 create app -->
         <section class="doc-section" id="create-app">
-          <h2><span class="num">07</span>Creating an app</h2>
+          <h2><span class="num">08</span>Creating an app</h2>
           <p>Three entry points, all reachable from <code>My apps → New app</code>:</p>
 
           <h3>A · Manual</h3>
@@ -213,9 +254,9 @@
           <p>If you're migrating an app that already lives in the upstream <code>fdroiddata</code> repo, paste its YAML. The parser fills out fields (description, links, categories, anti-features). You still need to attach an APK afterwards.</p>
         </section>
 
-        <!-- 08 upload -->
+        <!-- 09 upload -->
         <section class="doc-section" id="upload">
-          <h2><span class="num">08</span>Uploading an APK</h2>
+          <h2><span class="num">09</span>Uploading an APK</h2>
           <p>From an app's detail page, <strong>maintainers</strong> see an <em>Upload APK</em> drop-zone. Drag a file or click to pick one.</p>
 
           <p>What happens behind the scenes:</p>
@@ -237,9 +278,9 @@
           </div>
         </section>
 
-        <!-- 09 collaborators -->
+        <!-- 10 collaborators -->
         <section class="doc-section" id="collab">
-          <h2><span class="num">09</span>Collaborators</h2>
+          <h2><span class="num">10</span>Collaborators</h2>
           <p>The owner of an app can invite <strong>co-maintainers</strong>. They get most of the same powers:</p>
           <dl class="spec">
             <dt>Upload APKs</dt>
@@ -257,9 +298,9 @@
           </dl>
         </section>
 
-        <!-- 10 retention -->
+        <!-- 11 retention -->
         <section class="doc-section" id="retention-user">
-          <h2><span class="num">10</span>Retention &amp; suggested version</h2>
+          <h2><span class="num">11</span>Retention &amp; suggested version</h2>
 
           <h3>Suggested version</h3>
           <p>The F-Droid client downloads the <strong>suggested</strong> version, not necessarily the latest one. By default that's "latest", but you can pin a specific version (useful when v2.0 has a regression and you want v1.9 served).</p>
@@ -271,6 +312,42 @@
           <div class="callout">
             <div class="badge">PINNED</div>
             <p>The currently-suggested version is <strong>never</strong> evicted. If you pin v1.9 and the cap is 3, the system keeps v1.9 plus the two newest — even if v1.9 is older than the cutoff.</p>
+          </div>
+        </section>
+
+        <!-- 12 quality + export -->
+        <section class="doc-section" id="quality">
+          <h2><span class="num">12</span>Quality signals &amp; export</h2>
+          <p>Three operator-grade tools sit on each APK row in <code>/my-apps/[id]</code>, plus one app-level export. They're all visible to the app's owner, its collaborators, and admins.</p>
+
+          <h3>Reproducible Builds badge</h3>
+          <p>Per-APK flag attesting that the binary you published has been reproduced from source independently — typically by F-Droid's build farm at <code>verification.f-droid.org</code>. Four states:</p>
+          <dl class="spec">
+            <dt><code>unknown</code></dt>
+            <dd>Default. No badge on the public page. The owner hasn't told us anything yet.</dd>
+            <dt><code>not_attempted</code></dt>
+            <dd>The owner has declared the build is non-deterministic (signed by a hardware key, NDK ABI choice, etc.). The badge is rendered in a neutral outline — readers know the lack of verification is deliberate.</dd>
+            <dt><code>verified</code></dt>
+            <dd>Green badge. A reference SHA-256 was supplied and matches this APK's bytes exactly.</dd>
+            <dt><code>failed</code></dt>
+            <dd>Red badge. A reference was supplied and <em>didn't</em> match — the public artefact diverges from the upstream build.</dd>
+          </dl>
+          <p>Open the side-sheet from <em>Éditer</em> next to the badge on <code>/my-apps/[id]</code>. Two write paths:</p>
+          <ul>
+            <li><strong>Paste a SHA-256</strong> — typed in or copied from the build report. Auto-decides verified / failed by comparing against the APK.</li>
+            <li><strong>Verify from URL</strong> — paste a URL (the F-Droid verification server is the canonical one: <code>https://verification.f-droid.org/&lt;pkg&gt;_&lt;vcode&gt;.apk.json</code>). The backend fetches it through the SSRF guard, extracts every 64-hex SHA-256 it finds, and verifies if any of them match. Useful when the verification doc bundles a local+remote hash pair.</li>
+          </ul>
+
+          <h3>CVE / SBOM panel</h3>
+          <p>When the admin enabled Trivy scanning (see <a href="admin.html#scans">admin §08</a>), every APK gets a CVE row with a status pill and a per-severity count strip. <em>Détails</em> opens a side-sheet with the full CVE table — CVE id, severity, package, installed version, fix version, NVD link. <em>Re-scanner</em> requeues the worker job.</p>
+          <p>The data is private — only owners / collaborators / admins see it. The public catalogue never exposes CVE counts.</p>
+
+          <h3>Export <code>metadata.yml</code></h3>
+          <p>The <em>Exporter YAML</em> button on the app Hero downloads a binary-only F-Droid <code>metadata.yml</code> for the app. Every field the New-App YAML importer reads is also written here, and <code>Builds[]</code> is emitted in F-Droid's <code>binary:</code> shape pointing at this repo's APK URLs — so the file drops straight into an <code>fdroiddata</code> fork without further editing if you want to mirror your app into the official catalogue.</p>
+
+          <div class="callout">
+            <div class="badge">USE CASE</div>
+            <p>Publish an app on your private repo first, iron out the metadata, then export and PR into <code>fdroiddata</code> when you're ready to ship to the global F-Droid index. No rewriting from scratch.</p>
           </div>
         </section>
 
@@ -309,7 +386,7 @@
       </div>
       <div class="meta">
         <span class="sig">[ fd-store ]</span>
-        <span>v1.0.9</span>
+        <span>v1.2.0</span>
         <span>·</span>
         <span>MIT licensed</span>
         <span style="margin-left:auto;">Built for self-hosting.</span>

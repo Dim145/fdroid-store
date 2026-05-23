@@ -49,10 +49,12 @@
           <li><a href="#storage" data-num="04">Storage backends</a></li>
           <li><a href="#auth" data-num="05">Auth &amp; OIDC</a></li>
           <li><a href="#clamav" data-num="06">ClamAV (opt-in)</a></li>
-          <li><a href="#forges" data-num="07">Forge tokens</a></li>
-          <li><a href="#proxy" data-num="08">Reverse proxy &amp; TLS</a></li>
-          <li><a href="#hardening" data-num="09">Hardening notes</a></li>
-          <li><a href="#upgrade" data-num="10">Upgrading</a></li>
+          <li><a href="#trivy" data-num="07">Trivy CVE/SBOM (opt-in)</a></li>
+          <li><a href="#backup" data-num="08">Backup &amp; restore</a></li>
+          <li><a href="#forges" data-num="09">Forge tokens</a></li>
+          <li><a href="#proxy" data-num="10">Reverse proxy &amp; TLS</a></li>
+          <li><a href="#hardening" data-num="11">Hardening notes</a></li>
+          <li><a href="#upgrade" data-num="12">Upgrading</a></li>
         </ol>
       </aside>
 
@@ -81,7 +83,13 @@
           </ul>
           <div class="callout">
             <div class="badge">NOTE</div>
-            <p>The published images at <code>ghcr.io/dim145/fdroid-store-backend</code> and <code>fdroid-store-frontend</code> are pulled automatically by the stock <code>docker-compose.yml</code>. Set them to <code>build:</code> stanzas if you fork.</p>
+            <p>Three published images are pulled automatically by the stock <code>docker-compose.yml</code>:</p>
+            <ul>
+              <li><code>ghcr.io/dim145/fdroid-store-backend</code> — pure-Python API (FastAPI + uvicorn)</li>
+              <li><code>ghcr.io/dim145/fdroid-store-worker</code> — extends the backend image with the JDK (<code>apksigner</code> for signing the F-Droid index), <code>postgresql-client-16</code> (backup feature), and the <code>trivy</code> CLI (CVE scan, client mode)</li>
+              <li><code>ghcr.io/dim145/fdroid-store-frontend</code> — Next.js SPA + nginx</li>
+            </ul>
+            <p>The worker pins its base layer to the backend image by content digest in CI, so the two never drift. Set them to <code>build:</code> stanzas if you fork.</p>
           </div>
         </section>
 
@@ -208,6 +216,22 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
             <dt>CORS_ORIGINS</dt>
             <dd>Comma-separated list of origins allowed to call the API. e.g. <code>https://apks.example.com</code>. The browser SPA on the same host doesn't need to be listed.</dd>
           </dl>
+
+          <h3>Scanners (opt-in)</h3>
+          <dl class="spec">
+            <dt>CLAMAV_HOST · CLAMAV_PORT</dt>
+            <dd>Host + port of the optional ClamAV daemon. Empty <code>CLAMAV_HOST</code> = malware-scan feature disabled. <span class="opt">default empty</span></dd>
+            <dt>CLAMAV_MAX_STREAM_MB</dt>
+            <dd>Mirrors clamd's <code>StreamMaxLength</code>. <span class="opt">default 100</span></dd>
+            <dt>TRIVY_SERVER_URL</dt>
+            <dd>URL of the optional Trivy server for per-APK SBOM extraction + CVE lookup. The worker talks to it in CLIENT mode — the DB stays on the server. Empty = CVE/SBOM feature disabled (worker short-circuits to <code>SKIPPED</code>). e.g. <code>http://trivy:4954</code> when using the bundled <code>trivy</code> compose profile. <span class="opt">default empty</span></dd>
+          </dl>
+
+          <h3>Backup &amp; restore</h3>
+          <dl class="spec">
+            <dt>BACKUP_TMP_DIR</dt>
+            <dd>Working directory the encrypted-backup worker uses to stage the in-progress tarball + extraction tree. Bind a persistent volume (the stock compose does — see <code>backup_tmp</code>); the default <code>/tmp</code> tmpfs is 512 MB and too small for real-sized repos. <span class="opt">default /data/backup-tmp in compose</span></dd>
+          </dl>
         </section>
 
         <!-- 04 -->
@@ -297,6 +321,15 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
             <div class="badge">TIP</div>
             <p>Admins can <em>require</em> TOTP by disabling password-only sessions in <code>/admin/access</code> once the team has all enrolled.</p>
           </div>
+
+          <h3>WebAuthn / passkeys</h3>
+          <p>Each user can enrol one or more FIDO2 authenticators from <code>/account/security → Passkeys</code> — platform authenticators (Touch&nbsp;ID, Windows Hello, Android biometrics) or roaming keys (YubiKey, Solo, …). Once enrolled, the passkey replaces the password on subsequent logins (or acts as a second factor on top of the password if you prefer that).</p>
+          <p>Admins can <em>force</em> passkey enrolment per role from <code>/admin/access</code>:</p>
+          <ul>
+            <li><strong>Require passkey for admins</strong> — every admin must enrol at least one passkey to log in. Accounts caught between the toggle flip and their first enrolment receive a short-lived <code>enrollment_required</code> token at the post-password step and are routed through a forced enrolment screen.</li>
+            <li><strong>Require passkey for uploaders</strong> — same policy for the uploader role.</li>
+          </ul>
+          <p>No new env var. The relying-party ID is derived from <code>PUBLIC_APP_URL</code>; passkeys are bound to that origin and won't follow you if you rename your instance.</p>
         </section>
 
         <!-- 06 -->
@@ -325,7 +358,7 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
             </li>
             <li>
               <strong>Turn it on in admin</strong>
-              <p>Open <code>/admin/repo</code> → toggle <em>Scan on upload</em>. The freshmclamd container takes ~5 min on first boot to download its signature database — until it's ready, <code>/admin/scans</code> shows a red banner.</p>
+              <p>Open <code>/admin/scanning</code> (renamed from <code>/admin/scans</code> in v1.2 — that's where every malware/CVE/RB toggle now lives) and flip <em>Scan on upload</em>. The freshclam container takes ~5 min on first boot to download its signature database — until it's ready, the page shows a red <em>ClamAV unreachable</em> chip.</p>
             </li>
           </ol>
 
@@ -336,8 +369,67 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
         </section>
 
         <!-- 07 -->
+        <section class="doc-section" id="trivy">
+          <h2><span class="num">07</span>Trivy CVE/SBOM — opt-in vulnerability scan</h2>
+          <p>fdroid-store can extract a CycloneDX SBOM and run a CVE lookup for every published APK using <a href="https://trivy.dev" target="_blank" rel="noopener">Aqua Trivy</a>. The bundled compose stack ships a <code>trivy</code> server profile so you don't need to pull the binary or the vulnerability database onto your worker.</p>
+          <p>How it works: the worker has the <code>trivy</code> CLI baked in and talks to the trivy <em>server</em> in CLIENT mode. File parsing happens on the worker, DB lookups go to the server. That means the ~200&nbsp;MB CVE DB lives on the server only — refreshed daily, persisted across restarts via the <code>trivy_cache</code> volume — and multiple workers share it.</p>
+
+          <ol class="steps">
+            <li>
+              <strong>Set the env var</strong>
+              <p>In your <code>.env</code>:</p>
+              <div class="code">
+                <div class="strip"><span class="what">.env</span><span>trivy</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">TRIVY_SERVER_URL</span>=http://trivy:4954   <span class="c-cmt"># the compose service name + internal port</span></pre>
+              </div>
+              <p>If you point at an external Trivy server, that URL replaces <code>http://trivy:4954</code>. The worker reaches it over the compose network; never expose Trivy publicly — it has no auth.</p>
+            </li>
+            <li>
+              <strong>Start the stack with the profile</strong>
+              <p>The profile flag adds the <code>trivy</code> container to <code>up</code> / <code>down</code> calls.</p>
+              <div class="code">
+                <div class="strip"><span class="what">bash</span><span>up</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-fn">docker</span> compose <span class="c-fl">--profile</span> trivy <span class="c-fl">up</span> <span class="c-fl">-d</span></pre>
+              </div>
+            </li>
+            <li>
+              <strong>Turn it on in admin</strong>
+              <p>Open <code>/admin/scanning</code> → toggle <em>CVE / SBOM scanning</em>. The admin chip mirrors the env knob — when <code>TRIVY_SERVER_URL</code> is unset, the toggle is locked off and the page surfaces the env hint instead. Every newly attached APK is queued for a scan; manual re-scans are available from each APK's row in <code>/my-apps/[id]</code>.</p>
+            </li>
+          </ol>
+
+          <div class="callout">
+            <div class="badge">PRIVACY</div>
+            <p>SBOM + CVE results are visible to the app's owner, its collaborators and admins only — they never appear on the public catalogue. The exact CVE list can be sensitive (it gives an attacker a roadmap), so we keep it gated.</p>
+          </div>
+        </section>
+
+        <!-- 08 -->
+        <section class="doc-section" id="backup">
+          <h2><span class="num">08</span>Backup &amp; restore</h2>
+          <p>Encrypted full-repo archives are produced asynchronously by the worker, then streamed back through the API. The workflow lives under <code>/admin/backup</code>:</p>
+          <ul>
+            <li>Pick the components you want (DB / keystore / assets / APKs — any non-empty subset).</li>
+            <li>Provide a <em>passphrase</em>: the worker derives the encryption key from it and the resulting <code>.tar.enc</code> archive can't be opened without it. The passphrase is <strong>never persisted</strong> — losing it loses the backup.</li>
+            <li>Watch the job progress; once it lands in the history list, download the archive. The compose stack keeps every produced archive on the <code>backup_tmp</code> volume so a re-download doesn't re-run the job.</li>
+            <li>Restore is selective too — drop the encrypted archive on the same page, type the passphrase, tick the components you want to apply.</li>
+          </ul>
+          <p>Operator-relevant env + volume:</p>
+          <div class="code">
+            <div class="strip"><span class="what">.env</span><span>backup</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-kw">BACKUP_TMP_DIR</span>=/data/backup-tmp   <span class="c-cmt"># default in docker-compose; persistent volume</span></pre>
+          </div>
+          <p>The stock compose mounts a named <code>backup_tmp</code> volume there so the working set survives a worker restart. If you change the path, make sure it's a real volume (not the 512&nbsp;MB <code>/tmp</code> tmpfs) or a multi-GB backup will run out of room.</p>
+
+          <div class="callout warn">
+            <div class="badge">NOTE</div>
+            <p>The <em>keystore</em> component is the most operationally critical: lose it and every F-Droid client that already added your repo refuses to update past that point (signing key mismatch). Take a backup right after the setup wizard mints the keystore, and keep a copy off-host.</p>
+          </div>
+        </section>
+
+        <!-- 09 -->
         <section class="doc-section" id="forges">
-          <h2><span class="num">07</span>Forge tokens (optional)</h2>
+          <h2><span class="num">09</span>Forge tokens (optional)</h2>
           <p>fdroid-store can auto-fetch new APK releases from GitHub, GitLab, and Gitea / Forgejo (including self-hosted instances). Tokens unlock private repos and raise the API rate budget.</p>
 
           <p>Two ways to provide a token — they coexist; per-source wins:</p>
@@ -354,9 +446,9 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
           <p>For self-hosted GitLab / Gitea, the user provides the <code>base_url</code> on the source itself (e.g. <code>https://forge.internal</code>). It goes through the SSRF guard before any request is made.</p>
         </section>
 
-        <!-- 08 -->
+        <!-- 10 -->
         <section class="doc-section" id="proxy">
-          <h2><span class="num">08</span>Reverse proxy &amp; TLS</h2>
+          <h2><span class="num">10</span>Reverse proxy &amp; TLS</h2>
           <p>The bundled <code>frontend</code> container is itself nginx. For production you'll want a second layer that terminates TLS and forwards to it. Two recipes:</p>
 
           <h3>Caddy</h3>
@@ -395,22 +487,23 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
           </div>
         </section>
 
-        <!-- 09 -->
+        <!-- 11 -->
         <section class="doc-section" id="hardening">
-          <h2><span class="num">09</span>Hardening notes</h2>
+          <h2><span class="num">11</span>Hardening notes</h2>
           <ul>
             <li><strong>SECRET_KEY rotation</strong>: invalidates all JWTs, refresh tokens, OIDC state cookies, and decrypts any stored Fernet PATs. Plan for users to re-login and re-enter forge PATs.</li>
             <li><strong>Containers</strong> run <code>read_only</code> with <code>no-new-privileges</code> and all caps dropped. Don't relax this unless you have a specific reason.</li>
             <li><strong>Rate limits</strong> (slowapi): login/signup/MFA 5/min, refresh 10/min, OIDC 20/min, app list 10/min, forge upsert 10/min, APK inspect 10/min. Tune by editing the <code>@limiter.limit()</code> decorators if needed.</li>
             <li><strong>SSRF</strong>: forge fetches resolve DNS, reject metadata IP ranges (link-local, AWS/GCP/Azure metadata, RFC1918 if you don't host your forge there), walk redirects manually with the same checks, strip userinfo from URLs.</li>
             <li><strong>CSP / X-Frame-Options / X-Content-Type-Options</strong> are emitted by the <code>frontend</code> nginx layer. Inspect <code>frontend/nginx.conf.template</code> if you need to add a CDN domain to <code>img-src</code>.</li>
-            <li><strong>Backups</strong>: snapshot the <code>postgres</code> volume and the <code>storage</code> volume together. Without the database the index can be rebuilt, but app metadata, audit log, and user accounts live in pg.</li>
+            <li><strong>Backups</strong>: the built-in <code>/admin/backup</code> flow (see section 08) produces encrypted, passphrase-protected archives that cover the DB, storage, keystore and assets in one shot. For a host-level snapshot fallback, copy the <code>postgres</code> and <code>storage</code> volumes together.</li>
+            <li><strong>Encryption at rest</strong>: per-source forge PATs are stored Fernet-encrypted with a key derived from <code>SECRET_KEY</code>. The admin Backup feature reuses the same recipe (passphrase-derived key, AES + HMAC) for the archive — the passphrase itself is never persisted.</li>
           </ul>
         </section>
 
-        <!-- 10 -->
+        <!-- 12 -->
         <section class="doc-section" id="upgrade">
-          <h2><span class="num">10</span>Upgrading</h2>
+          <h2><span class="num">12</span>Upgrading</h2>
           <p>Migrations run automatically on backend boot — there's nothing to invoke by hand.</p>
           <div class="code">
             <div class="strip"><span class="what">bash</span><span>upgrade</span><button class="copy" type="button">copy</button></div>
@@ -456,7 +549,7 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
       </div>
       <div class="meta">
         <span class="sig">[ fd-store ]</span>
-        <span>v1.0.9</span>
+        <span>v1.2.0</span>
         <span>·</span>
         <span>MIT licensed</span>
         <span style="margin-left:auto;">Built for self-hosting.</span>
