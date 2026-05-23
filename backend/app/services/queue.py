@@ -137,6 +137,32 @@ async def enqueue_github_source_scan(source_id: str, *, immediate: bool = False)
         return False
 
 
+async def enqueue_apk_proxy_source_scan(source_id: str) -> bool:
+    """Schedule a one-shot scan of a single proxy source.
+
+    Mirrors :func:`enqueue_github_source_scan` — the cron coordinator
+    enqueues with a stable per-source job id (one run per cycle coalesced),
+    manual triggers use an epoch-suffixed id so the result from the
+    previous run doesn't dedupe the new one to a silent no-op.
+    """
+    import time
+
+    try:
+        pool = await create_pool(_redis_settings())
+        try:
+            await pool.enqueue_job(
+                "fetch_apk_proxy_source",
+                source_id,
+                _job_id=f"fetch_apk_proxy_source:{source_id}:{int(time.time() * 1000)}",
+            )
+            return True
+        finally:
+            await pool.close()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not enqueue proxy source scan", error=str(exc))
+        return False
+
+
 async def queue_snapshot() -> dict:
     """Best-effort introspection for the admin "Jobs" page.
 

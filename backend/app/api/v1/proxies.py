@@ -523,6 +523,40 @@ async def update_proxy_source(
     return _source_to_read(src)
 
 
+@per_app_router.post(
+    "/{app_id}/proxy-source/{source_id}/scan",
+    response_model=dict,
+)
+async def scan_proxy_source_now(
+    app_id: uuid.UUID,
+    source_id: uuid.UUID,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_uploader)],
+) -> dict:
+    """Trigger a one-shot scan of this source via the arq worker.
+
+    Returns immediately — the actual scan runs out-of-band and its
+    outcome lands on the source row + audit log. The user polls the
+    GET endpoint (or the /admin/jobs page) to see when it finishes.
+    """
+    from app.services.queue import enqueue_apk_proxy_source_scan
+
+    await _load_app_for_management(db, app_id, user)
+    src = await _load_source_or_404(db, app_id, source_id)
+    if not src.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Source is disabled. Toggle it on before scanning.",
+        )
+    ok = await enqueue_apk_proxy_source_scan(str(src.id))
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not enqueue the scan — Redis is unreachable.",
+        )
+    return {"queued": True, "source_id": str(src.id)}
+
+
 @per_app_router.delete(
     "/{app_id}/proxy-source/{source_id}",
     status_code=status.HTTP_204_NO_CONTENT,

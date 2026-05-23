@@ -405,6 +405,10 @@ from app.workers.backup_tasks import (
     run_restore_job,
 )
 from app.workers.cve_tasks import scan_apk_cve
+from app.workers.proxy_tasks import (
+    fetch_apk_proxy_source,
+    scan_apk_proxy_sources_periodic,
+)
 
 
 class WorkerSettings:
@@ -423,6 +427,10 @@ class WorkerSettings:
         # an APK reaches PARSED; short-circuits when the feature is
         # disabled in RepoConfig.
         scan_apk_cve,
+        # APK source proxy pipeline. Coordinator runs alongside the
+        # GitHub one (different cron slot) so cold starts don't bunch.
+        scan_apk_proxy_sources_periodic,
+        fetch_apk_proxy_source,
     ]
     # Run the rescan at 03:00 UTC every day. The function short-circuits
     # at the top when the feature is off, so leaving the cron registered
@@ -432,6 +440,9 @@ class WorkerSettings:
     cron_jobs = [
         cron(scan_apks_periodic, hour={3}, minute={0}, run_at_startup=False),
         cron(scan_github_sources_periodic, hour={4}, minute={0}, run_at_startup=False),
+        # Proxy sources at 05:00 UTC — same hourly rhythm as forges, an
+        # hour later so dial-out bursts don't overlap on a slow uplink.
+        cron(scan_apk_proxy_sources_periodic, hour={5}, minute={0}, run_at_startup=False),
         cron(cleanup_expired_backups, minute={30}, run_at_startup=False),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
