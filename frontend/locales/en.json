@@ -808,6 +808,9 @@
     "edit": {
       "back": "My apps",
       "publicPage": "Public page",
+      "exportYaml": "Export YAML",
+      "exportYamlOk": "metadata.yml downloaded.",
+      "exportYamlFailed": "YAML export failed",
       "sections": {
         "listing": "Listing",
         "listingSubtitle": "Package name is locked to the signing certificate.",

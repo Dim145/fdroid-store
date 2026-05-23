@@ -496,6 +496,33 @@ export const api = {
       ),
     sbomRescan: (apkId: string) =>
       apiFetch<SbomRead>(`/api/v1/apks/${apkId}/sbom/rescan`, { method: "POST" }),
+    /** Download the F-Droid metadata.yml for an app the caller can
+     *  manage (owner / collab / admin). Returns the blob + the
+     *  filename pulled from the server's Content-Disposition so the
+     *  caller can save it under the canonical ``<package>.yml`` name
+     *  without having to derive it itself. */
+    exportMetadataYaml: async (appId: string) => {
+      const token = getAccessToken();
+      if (!token) throw new ApiError(401, "Not authenticated");
+      const res = await fetch(`${API_URL}/api/v1/apps/${appId}/metadata.yml`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (body?.detail) detail = formatApiDetail(body.detail) || detail;
+        } catch {
+          /* non-JSON body */
+        }
+        throw new ApiError(res.status, detail);
+      }
+      const dispo = res.headers.get("content-disposition") || "";
+      const match = dispo.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || `${appId}.yml`;
+      const blob = await res.blob();
+      return { filename, blob };
+    },
     myApps: () => apiFetch<Array<AppSummary>>("/api/v1/me/apps"),
     uploadIcon: (appId: string, file: File) => {
       const fd = new FormData();

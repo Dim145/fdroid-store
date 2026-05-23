@@ -808,6 +808,9 @@
     "edit": {
       "back": "Mes apps",
       "publicPage": "Page publique",
+      "exportYaml": "Exporter YAML",
+      "exportYamlOk": "metadata.yml téléchargé.",
+      "exportYamlFailed": "Échec de l'export YAML",
       "sections": {
         "listing": "Fiche",
         "listingSubtitle": "Le nom du paquet est verrouillé sur le certificat de signature.",

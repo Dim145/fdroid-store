@@ -17,7 +17,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, Bug, CheckCircle2, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowLeft, Bug, CheckCircle2, Download, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, Upload, X, XCircle } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1165,14 +1165,60 @@ function Hero({ app }: { app: AppDetail }) {
               </Badge>
             </div>
           </div>
-          <Button asChild variant="outlined" size="md">
-            <Link href={`/apps/${app.package_name}`}>
-              <Eye className="h-4 w-4" /> {t("myApps.edit.publicPage")}
-            </Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <ExportYamlButton app={app} />
+            <Button asChild variant="outlined" size="md">
+              <Link href={`/apps/${app.package_name}`}>
+                <Eye className="h-4 w-4" /> {t("myApps.edit.publicPage")}
+              </Link>
+            </Button>
+          </div>
         </div>
       </div>
     </header>
+  );
+}
+
+/** Download the F-Droid ``metadata.yml`` for this app. Lives next to the
+ *  "Page publique" CTA in the Hero — both are app-level metadata actions
+ *  that aren't part of any one Section. */
+function ExportYamlButton({ app }: { app: AppDetail }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+
+  async function download() {
+    setBusy(true);
+    try {
+      const { filename, blob } = await api.apps.exportMetadataYaml(app.id);
+      // Standard pattern for forced-download in the browser: create an
+      // object URL, anchor element, click it, revoke. ``a.download``
+      // hints the filename — the server-provided Content-Disposition
+      // wins in practice but this keeps the file named even on UAs
+      // that ignore the header.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(t("myApps.edit.exportYamlOk"));
+    } catch (e) {
+      toast.error(
+        t("myApps.edit.exportYamlFailed"),
+        e instanceof Error ? e.message : undefined,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button variant="outlined" size="md" onClick={download} disabled={busy}>
+      <Download className="h-4 w-4" />
+      {busy ? t("common.loading") : t("myApps.edit.exportYaml")}
+    </Button>
   );
 }
 
