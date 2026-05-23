@@ -375,8 +375,89 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.1.1 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.2.0 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.2.0
+
+- **Per-APK Reproducible Builds verification** — every APK row now
+  carries a four-state RB flag (`unknown` / `not_attempted` /
+  `verified` / `failed`) plus an optional reference SHA-256, the URL
+  it was sourced from, and free-form notes. Two write paths: a
+  declarative `POST /apks/{id}/reproducibility` and an automatic
+  `verify-from-url` that fetches a published hash (typically the
+  F-Droid verification server) through the same SSRF guard the
+  release fetcher uses and auto-decides verified/failed by hash
+  comparison. Surfaces as a discrete badge on `/apps/[package]` and
+  a per-APK editor on `/my-apps/[id]`. Admin-toggleable from
+  `/admin/scanning` — when off, endpoints 403 and the badge/editor
+  are hidden but historical data is preserved.
+- **CVE / SBOM scanning via Trivy** — optional `aquasec/trivy`
+  container (compose profile `trivy`) provides CycloneDX SBOM
+  extraction + vulnerability lookup for every published APK. The
+  worker talks to the trivy server in CLIENT mode so the DB stays
+  in one place. Results are private (owner / collaborator / admin
+  only) — never on the public catalogue. Per-severity counts and
+  the full CVE table show up in a side-sheet on the APK row. Admin
+  toggle on `/admin/scanning` next to ClamAV.
+- **WebAuthn / passkeys** — passwordless sign-in via FIDO2
+  authenticators, with both account-level enrolment (under
+  `/account/security`) and per-role force toggles
+  (`/admin/access` → "require passkey for admins / uploaders").
+  Forced enrolment is offered at first login after the toggle
+  flips; existing sessions stay valid. Compatible with platform
+  authenticators (Touch ID / Windows Hello) and roaming keys.
+- **Encrypted backup + restore** — `/admin/backup` ships full-repo
+  archives (DB dump + storage + keystore + assets) encrypted with a
+  key derived from the operator's passphrase. Selective restore:
+  pick any subset of the four components on the way in. Runs on
+  the arq worker so an 80 GB repo doesn't pin the API. Job history
+  lists every backup with size, components, status and a download
+  button.
+- **F-Droid `metadata.yml` export** — owners can grab a binary-only
+  `<package>.yml` for their app from the `/my-apps/[id]` Hero. The
+  file round-trips with the existing New-App YAML importer: every
+  field the importer reads is also written here, with `Builds[]`
+  emitted in F-Droid's "binary:" shape pointing at this repo's APK
+  URLs so the file can drop into an `fdroiddata` fork unchanged.
+- **`/stats` redesign** — single-page magazine spread. Variable
+  serif display (Fraunces) on the hero downloads number, masthead
+  strip + Roman-numeral chapter dividers, SVG area chart with
+  motion path-draw + hover read-out, leaderboard with proportional
+  bar fills animated on mount, and a subtle paper-grain background.
+- **Section nav URL hash on `/my-apps/[id]`** — clicks AND natural
+  scroll mirror the active section into `location.hash`, so a
+  refresh (or a shared link) lands the user where they were.
+  Settling-loop re-aligns after image-heavy sections finish
+  decoding their thumbnails.
+- **Side-sheet refactor for APK row editors** — the per-APK
+  Reproducibility / CVE-details / Notes panels used to expand
+  inline, eating vertical space and breaking the version list's
+  reading rhythm. They now open in a right-side drawer (portal +
+  motion slide-in, ESC + backdrop-close, body-scroll lock) anchored
+  to the version they belong to. Cleaner reads, more room for
+  forms and tables.
+- **Setup wizard regression fix** — the Dockerfile split (API ↔
+  worker) had stripped the JDK from the API image, breaking
+  `keytool` keystore generation with a 500. The wizard now builds
+  PKCS#12 in-process via `cryptography` (RSA-3072 + self-signed
+  X.509 + AES-256-CBC encryption). ~150 ms vs. the previous ~2 s
+  JVM cold-start; apksigner on the worker still consumes the
+  output unchanged.
+- **App icon rendering** — adaptive-icon foregrounds (most modern
+  apps) rendered with a visible rounded-square halo behind the
+  artwork in both themes. Two culprits identified: a
+  `bg-surface-2` placeholder bleeding through the PNG's alpha, and
+  `box-shadow` drawing on the rectangular bounding box instead of
+  following the alpha channel. Swapped for `filter: drop-shadow()`
+  on the `<img>` so shadows now hug the actual silhouette.
+- **Visual polish** — the active rail item on `/my-apps/[id]`
+  finally has a properly centred indicator dot, the
+  Trivy/ClamAV/RB master toggles all live on a single
+  `/admin/scanning` page, the CVE Details button opens even when a
+  scan completed with zero findings (it shows the friendly "all
+  clear" message), and the site footer drops the duplicate "All
+  apps" / "My apps" links that were already in the navbar.
 
 ### 1.1.1
 
