@@ -141,12 +141,16 @@ def _err(code: str, message: str, *, http: int = 400, retry_after: int | None = 
     return JSONResponse(status_code=http, content=body)
 
 
-def _parse_url(url: str) -> tuple[str, str]:
+def _parse_url(url: str) -> tuple[str, str] | str:
     """Pull the F-Droid repo URL and the package name out of the
     user-supplied string.
 
-    Returns ``(repo_url, package)``. Raises ``ValueError`` on a
-    malformed input — the caller maps that to a 400.
+    Returns ``(repo_url, package)`` on success, or an author-written
+    ``str`` describing the validation failure. We deliberately avoid
+    raising here so the failure messages are returned via an explicit
+    typed channel rather than via ``str(exc)`` — that pattern would
+    trigger static-analysis "stack-trace exposure" alerts even though
+    every message is hand-written.
 
     Accepts two formats:
       * ``<repo>#<package>`` — preferred, the fragment never leaks.
@@ -155,14 +159,14 @@ def _parse_url(url: str) -> tuple[str, str]:
     """
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"}:
-        raise ValueError("url must be http(s)")
+        return "url must be http(s)"
     if not parsed.hostname:
-        raise ValueError("url is missing a hostname")
+        return "url is missing a hostname"
     # Fragment form first — it's the cleanest.
     if parsed.fragment:
         pkg = parsed.fragment.strip()
         if not _PACKAGE_RE.match(pkg):
-            raise ValueError(f"invalid package id in fragment: {pkg!r}")
+            return "invalid package id in fragment"
         repo = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
         return repo, pkg
     # Query-string fallback.
@@ -172,12 +176,10 @@ def _parse_url(url: str) -> tuple[str, str]:
         if candidates:
             pkg = candidates[0].strip()
             if not _PACKAGE_RE.match(pkg):
-                raise ValueError(f"invalid package id in query: {pkg!r}")
+                return "invalid package id in query"
             repo = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
             return repo, pkg
-    raise ValueError(
-        "url must encode a package via ``#<package>`` or ``?package=<package>``"
-    )
+    return "url must encode a package via `#<package>` or `?package=<package>`"
 
 
 async def _fetch_index_v1(repo_url: str) -> dict[str, Any]:
@@ -189,36 +191,73 @@ async def _fetch_index_v1(repo_url: str) -> dict[str, Any]:
     + APK URL, both of which are then re-verified by fdroid-store: the
     backend re-parses the manifest server-side and checks the signing
     cert against its own pin.
+
+    On parse failure the underlying exception is logged with the full
+    detail (``upstream_url`` + ``exc_info=True``) but only a generic
+    message is bubbled up to the caller's HTTP response — leaking
+    stack-trace-flavoured strings to a public API would help an
+    attacker fingerprint the index format / library versions.
     """
     url = f"{repo_url.rstrip('/')}/index-v1.jar"
-    async with httpx.AsyncClient(
-        timeout=_INDEX_TIMEOUT,
-        follow_redirects=True,  # IzzyOnDroid + others 301 to cdn
-        limits=httpx.Limits(max_keepalive_connections=4),
-    ) as client:
-        async with client.stream("GET", url) as res:
-            if res.status_code != 200:
-                raise FetchError(
-                    f"index fetch returned {res.status_code}",
-                    http=502 if res.status_code >= 500 else 404,
-                    code="not_found" if res.status_code == 404 else "upstream",
-                )
-            buf = bytearray()
-            async for chunk in res.aiter_bytes(1024 * 1024):
-                buf.extend(chunk)
-                if len(buf) > _MAX_INDEX_BYTES:
-                    raise FetchError(
-                        f"index file exceeds {_MAX_INDEX_BYTES} bytes",
-                        http=502,
-                        code="upstream",
+    try:
+        async with httpx.AsyncClient(
+            timeout=_INDEX_TIMEOUT,
+            follow_redirects=True,  # IzzyOnDroid + others 301 to cdn
+            limits=httpx.Limits(max_keepalive_connections=4),
+        ) as client:
+            async with client.stream("GET", url) as res:
+                if res.status_code != 200:
+                    log.warning(
+                        "index fetch failed: upstream=%s status=%s",
+                        url,
+                        res.status_code,
                     )
+                    raise FetchError(
+                        f"index fetch returned {res.status_code}",
+                        http=502 if res.status_code >= 500 else 404,
+                        code="not_found" if res.status_code == 404 else "upstream",
+                    )
+                buf = bytearray()
+                async for chunk in res.aiter_bytes(1024 * 1024):
+                    buf.extend(chunk)
+                    if len(buf) > _MAX_INDEX_BYTES:
+                        raise FetchError(
+                            f"index file exceeds {_MAX_INDEX_BYTES} bytes",
+                            http=502,
+                            code="upstream",
+                        )
+    except httpx.HTTPError as exc:
+        # Transport-level failures (DNS / connect / timeout / read).
+        # Log the type + cause server-side; expose only a generic
+        # message — the raw exception string would leak library
+        # versions and internal paths.
+        log.warning(
+            "index transport error: upstream=%s exc_type=%s",
+            url,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        raise FetchError(
+            "upstream index could not be reached",
+            http=502,
+            code="upstream",
+        ) from exc
+
     try:
         with zipfile.ZipFile(io.BytesIO(buf)) as zf:
             with zf.open("index-v1.json") as fp:
                 return json.load(fp)
     except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as exc:
+        # Same recipe as the transport branch above: log richly,
+        # respond generically.
+        log.warning(
+            "could not parse index-v1.jar: upstream=%s exc_type=%s",
+            url,
+            type(exc).__name__,
+            exc_info=True,
+        )
         raise FetchError(
-            f"could not parse index-v1.jar: {exc}",
+            "upstream index could not be parsed",
             http=502,
             code="bad_response",
         ) from exc
@@ -298,14 +337,19 @@ async def resolve(body: dict[str, Any]) -> Any:
     if not isinstance(url, str) or not url:
         return _err("bad_request", "missing url")
 
-    try:
-        repo_url, package = _parse_url(url)
-    except ValueError as exc:
-        return _err("bad_request", str(exc))
+    parsed = _parse_url(url)
+    if isinstance(parsed, str):
+        # Author-written validation message (see _parse_url); not a
+        # library-raised exception, so safe to echo back to the caller.
+        return _err("bad_request", parsed)
+    repo_url, package = parsed
 
     try:
         index = await _fetch_index_v1(repo_url)
     except FetchError as exc:
+        # FetchError messages are author-written static strings (see
+        # ``_fetch_index_v1``) — no library-raised exception detail
+        # bubbles up to the response.
         return _err(exc.code, str(exc), http=exc.http)
 
     apk = _pick_latest_apk(index, package)

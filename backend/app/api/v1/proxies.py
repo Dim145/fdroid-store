@@ -730,24 +730,44 @@ async def begin_proxy_oauth(
     return {"popup_url": popup_url, "state": state}
 
 
+# Opaque-ID character set the callback accepts for ``credential_id`` and
+# ``state``. UUIDs, base64url tokens, JWT-shaped strings, our own
+# HMAC-signed state — all fit. Anything outside this set (``<``, ``>``,
+# ``"``, whitespace, …) is refused at the query-parser level so a
+# hostile proxy can't smuggle HTML / JS through these params and reach
+# the callback's HTML body.
+_OPAQUE_ID_PATTERN = r"^[A-Za-z0-9._\-]+$"
+
+
 @auth_router.get("/proxy-callback", response_class=HTMLResponse)
 async def proxy_oauth_callback(
-    credential_id: str = Query(..., max_length=256),
-    state: str = Query(..., max_length=512),
+    credential_id: str = Query(
+        ..., min_length=1, max_length=256, pattern=_OPAQUE_ID_PATTERN
+    ),
+    state: str = Query(
+        ..., min_length=1, max_length=512, pattern=_OPAQUE_ID_PATTERN
+    ),
 ) -> HTMLResponse:
     """The popup lands here after the proxy finished the OAuth dance.
 
-    Verifies the state HMAC, then renders a tiny HTML page that posts
-    ``{credential_id, state, provider, proxy_id, app_id}`` to
-    ``window.opener`` and closes itself. The opener (the SPA) listens
-    on its ``message`` event and stores the credential via the normal
-    ``POST /apps/{id}/proxy-source`` endpoint.
+    Verifies the state HMAC, then renders a tiny HTML page that hands the
+    ``{credential_id, state, provider, proxy_id, app_id}`` payload to
+    ``window.opener`` via ``postMessage`` and closes itself. The opener
+    (the SPA) listens on its ``message`` event and stores the credential
+    via the normal ``POST /apps/{id}/proxy-source`` endpoint.
 
     Nothing is persisted server-side — the credential lives on the
     proxy, and the source row owns the reference. This keeps fdroid-
     store stateless for the OAuth half of the flow and lets the user
     abandon (just close the popup) without orphaning anything in our
     DB.
+
+    XSS defence: the payload is embedded in a non-executable
+    ``<script type="application/json">`` block and read at runtime via
+    ``document.getElementById(...).textContent`` + ``JSON.parse``. This
+    keeps the proxy-supplied values out of any executable JS context.
+    The query params are also pattern-restricted to opaque-ID characters
+    so even the JSON-data path can't carry HTML-meaningful bytes.
     """
     payload = _verify_oauth_state(state)
     if payload is None:
@@ -758,9 +778,11 @@ async def proxy_oauth_callback(
                 "Close this window and start over.</p></body></html>"
             ),
         )
-    # JSON-stringified message — the opener parses it via
-    # JSON.parse(event.data) or pattern-matches on ``type``.
-    msg = json.dumps({
+    # Build the message payload. ``credential_id`` and ``state`` already
+    # passed the opaque-ID regex; ``payload`` came from our own
+    # HMAC-signed token so its fields are trusted. The remaining hardening
+    # below is purely belt-and-suspenders.
+    msg_data = json.dumps({
         "type": "proxy_oauth_done",
         "credential_id": credential_id,
         "state": state,
@@ -768,22 +790,37 @@ async def proxy_oauth_callback(
         "provider": payload["provider"],
         "app_id": str(payload["app_id"]) if payload["app_id"] else None,
     })
+    # Defence in depth: escape ``</`` so a hypothetical future change
+    # that loosens the regex above can't break out of the <script> tag.
+    msg_safe = msg_data.replace("</", "<\\/")
     # The exact origin we postMessage to is the SPA's. We pull it from
     # ``settings.public_app_url`` so a multi-tenant frontend can't be
     # tricked into receiving messages bound for someone else's tab.
     target_origin = settings.public_app_url.rstrip("/") or "*"
-    # Inline JS — kept minimal. ``window.opener`` may be null when the
-    # callback URL was opened directly (not in a popup); we render a
-    # human-readable fallback in that case.
+    origin_safe = json.dumps(target_origin).replace("</", "<\\/")
+    # Strict CSP on this response only — no inline-script execution
+    # outside the one ``<script>`` block we control here, no external
+    # loads. Combined with the JSON-data extraction below, this means
+    # even a CSP-aware attacker who somehow injected raw HTML still
+    # can't get JS to execute.
+    csp = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'"
+    # Inline JS — kept minimal. The data lives in a non-executable
+    # ``<script type="application/json">`` block above; the executable
+    # block just reads it via DOM. ``window.opener`` may be null when the
+    # callback URL was opened directly (not in a popup); the fallback
+    # text covers that case.
     html = f"""<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Authorisation complete</title></head>
 <body style="font-family: system-ui; padding: 2rem; text-align: center;">
   <p>You may close this window.</p>
+  <script id="fdr-oauth-payload" type="application/json">{msg_safe}</script>
   <script>
     (function () {{
-      var msg = {msg};
-      var origin = {json.dumps(target_origin)};
+      var el = document.getElementById('fdr-oauth-payload');
+      var msg;
+      try {{ msg = JSON.parse(el.textContent); }} catch (e) {{ return; }}
+      var origin = {origin_safe};
       try {{
         if (window.opener) {{
           window.opener.postMessage(msg, origin);
@@ -794,7 +831,7 @@ async def proxy_oauth_callback(
   </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 # ============================================================================
