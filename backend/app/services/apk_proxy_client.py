@@ -96,13 +96,18 @@ def _is_blocked_metadata_host(hostname: str) -> bool:
             return False
     if ip in _BLOCKED_METADATA_IPS:
         return True
-    # Anything in the IPv4 link-local 169.254/16 or the IPv6 metadata
-    # range gets the same treatment — even outside the literal IMDS IP,
-    # link-local addresses have no business being a proxy base.
-    return (
-        ip.version == 4
-        and ipaddress.ip_address("169.254.0.0") <= ip <= ipaddress.ip_address("169.254.255.255")
-    )
+    # Anything in the IPv4 link-local 169.254/16 gets the same treatment —
+    # even outside the literal IMDS IP, link-local has no business being a
+    # proxy base. ``isinstance`` is used instead of ``ip.version == 4`` so
+    # type checkers can narrow ``ip`` before the cross-version comparison
+    # (``IPv4Address <= IPv6Address`` raises ``TypeError`` at runtime).
+    if isinstance(ip, ipaddress.IPv4Address):
+        return (
+            ipaddress.IPv4Address("169.254.0.0")
+            <= ip
+            <= ipaddress.IPv4Address("169.254.255.255")
+        )
+    return False
 
 
 def _assert_proxy_url_safe(base_url: str) -> str:

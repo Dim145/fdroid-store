@@ -405,7 +405,10 @@ async def create_proxy_source(
     # never successfully answered ``/sources`` (no validation possible
     # = no source).
     catalogue = proxy.cached_sources_json or {}
-    declared = {p.get("id") for p in catalogue.get("providers", []) if isinstance(p, dict)}
+    declared = {
+        pid for p in catalogue.get("providers", [])
+        if isinstance(p, dict) and isinstance(pid := p.get("id"), str)
+    }
     if not declared:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

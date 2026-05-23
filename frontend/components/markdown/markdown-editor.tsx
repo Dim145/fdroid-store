@@ -3,8 +3,7 @@
 import * as React from "react";
 import type { Editor } from "@tiptap/react";
 import { EditorContent, useEditor } from "@tiptap/react";
-import Link from "@tiptap/extension-link";
-import Placeholder from "@tiptap/extension-placeholder";
+import { Placeholder } from "@tiptap/extensions";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import { Eye, Pencil } from "lucide-react";
@@ -96,15 +95,18 @@ export function MarkdownEditor({
         horizontalRule: false,
         codeBlock: false,
         strike: false,
-      }),
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        defaultProtocol: "https",
-        protocols: ["http", "https", "mailto", "fdroidrepos"],
-        HTMLAttributes: {
-          rel: "noopener nofollow ugc",
-          target: "_blank",
+        // v3 bundles Link inside StarterKit; also disable Underline which
+        // StarterKit added by default but the F-Droid subset doesn't support.
+        underline: false,
+        link: {
+          openOnClick: false,
+          autolink: true,
+          defaultProtocol: "https",
+          protocols: ["http", "https", "mailto", "fdroidrepos"],
+          HTMLAttributes: {
+            rel: "noopener nofollow ugc",
+            target: "_blank",
+          },
         },
       }),
       Placeholder.configure({
@@ -172,7 +174,11 @@ export function MarkdownEditor({
   React.useEffect(() => {
     if (!editor || editor.isFocused) return;
     if (getMarkdown(editor) !== value) {
-      editor.commands.setContent(value, false);
+      // v3: ``setContent`` takes an options object; the second positional
+      // boolean (``emitUpdate``) of v2 is gone. We keep ``emitUpdate: false``
+      // so an external sync doesn't trigger our ``onUpdate`` -> ``onChange``
+      // -> parent state cycle.
+      editor.commands.setContent(value, { emitUpdate: false });
     }
   }, [value, editor]);
 

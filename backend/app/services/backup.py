@@ -503,7 +503,12 @@ async def stream_encrypted_backup(
         loop = asyncio.get_running_loop()
         tar_path = await loop.run_in_executor(
             None,
-            lambda: _build_tarball(tmp_dir, repo_id=repo_id, version=backend_version),
+            lambda: _build_tarball(
+                tmp_dir,
+                repo_id=repo_id,
+                version=backend_version,
+                components=ALL_COMPONENTS,
+            ),
         )
 
         salt = secrets.token_bytes(SALT_LEN)

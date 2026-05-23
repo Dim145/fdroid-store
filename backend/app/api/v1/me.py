@@ -243,7 +243,8 @@ async def my_download_history(
                     current_latest.version_name if current_latest else None
                 ),
                 "has_update_available": (
-                    bool(last_apk and current_latest)
+                    last_apk is not None
+                    and current_latest is not None
                     and current_latest.version_code > last_apk.version_code
                 ),
                 # Coarse origin tally (web / fdroid / cli / other /

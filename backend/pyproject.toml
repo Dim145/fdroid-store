@@ -17,19 +17,26 @@ dependencies = [
     "alembic>=1.18",
     "asyncpg>=0.31",
     "psycopg2-binary>=2.9",
-    "pydantic>=2.13",
-    "pydantic-settings>=2.14",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.1",
     # passlib has been unmaintained since 2020 and breaks on Python 3.13
     # (the stdlib ``crypt`` module went away). pwdlib is the FastAPI-Users-
     # backed replacement; we keep both hashers installed so existing bcrypt
     # rows still verify while new passwords default to argon2.
-    "pwdlib[argon2,bcrypt]>=0.2",
+    "pwdlib[argon2,bcrypt]>=0.3",
     # python-jose has been abandoned; PyJWT is the FastAPI-recommended
-    # successor. 2.12.1 patches CVE-2026-32597 (``crit`` header handling).
-    "PyJWT[crypto]>=2.12.1",
-    # 0.0.20 has two CVEs (path traversal + DoS); 0.0.28 fixes both.
-    "python-multipart>=0.0.28",
-    "authlib>=1.7",
+    # successor. 2.13.0 closes five 2026 advisories: HMAC algorithm
+    # confusion via JWK-as-secret, allow-list bypass on PyJWK decode,
+    # PyJWKClient accepting file:// / data: URIs, JWKS-fetch-failure
+    # cache wipe, and a detached-form base64 DoS amplifier.
+    "PyJWT[crypto]>=2.13.0",
+    # 0.0.20 has two CVEs (path traversal + DoS); 0.0.28 fixed both.
+    # 0.0.29 hardens RFC 2231 continuation parsing on uploaded headers.
+    "python-multipart>=0.0.29",
+    # 1.7.1 patched an unvalidated-redirect-URI on InvalidScopeError in
+    # the OpenIDImplicit / OpenIDHybrid grants. We don't expose those
+    # grants, but the floor bump is free hardening.
+    "authlib>=1.7.1",
     "httpx>=0.28",
     "arq>=0.28",
     # redis-py 7.x is out, but arq 0.28 still pins ``redis<6``; the bump has
@@ -41,7 +48,7 @@ dependencies = [
     "Pillow>=12.2",
     "aiofiles>=25.1",
     "aioboto3>=15.5",
-    "email-validator>=2.2",
+    "email-validator>=2.3",
     "structlog>=25.5",
     "itsdangerous>=2.2",
     # Per-IP rate limiting for the auth endpoints. ``slowapi`` is the
@@ -51,26 +58,32 @@ dependencies = [
     "slowapi>=0.1.9",
     # Parsing pasted upstream metadata.yml (fdroiddata format) on the
     # New App page. SafeLoader only, no arbitrary type instantiation.
-    "PyYAML>=6.0",
+    "PyYAML>=6.0.3",
     # TOTP (RFC 6238) two-factor authentication.
     "pyotp>=2.9",
     # QR code rendering for the TOTP enrolment screen. Tiny pure-Python
     # dep, no native bindings.
-    "qrcode[pil]>=8.0",
+    "qrcode[pil]>=8.2",
     # WebAuthn / FIDO2 server-side: option generation, registration +
     # assertion verification. Maintained by Duo Labs, the FIDO Alliance
     # reference Python implementation. Pairs with @simplewebauthn/browser
     # on the frontend.
-    "webauthn>=2.5",
+    "webauthn>=2.7",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3",
-    "pytest-asyncio>=0.24",
+    # pytest 9 turns several long-standing deprecations into errors; the
+    # 0.x → 1.x jump in pytest-asyncio is the GA cut that stabilises the
+    # asyncio_mode="auto" surface we already use. 9.0.3 also fixes
+    # CVE-2025-71176 (insecure tmp dir, dev-only impact).
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3",
     "httpx>=0.28",
-    "ruff>=0.8",
-    "mypy>=1.13",
+    "ruff>=0.15",
+    # mypy 2 turns on --strict-bytes and --local-partial-types by default.
+    # The codebase was audited under those defaults — no opt-outs needed.
+    "mypy>=2.1",
 ]
 
 [tool.setuptools]

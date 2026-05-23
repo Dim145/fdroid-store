@@ -1244,12 +1244,12 @@ async def _apply_reproducibility(
         apk.reproducibility_status = status_override
 
     if reference_url is not None:
-        cleaned = reference_url.strip() or None
-        if cleaned and not cleaned.lower().startswith(("http://", "https://")):
+        cleaned_url = reference_url.strip() or None
+        if cleaned_url and not cleaned_url.lower().startswith(("http://", "https://")):
             raise HTTPException(
                 status_code=400, detail="reference_url must be http(s)://"
             )
-        apk.reproducibility_reference_url = cleaned
+        apk.reproducibility_reference_url = cleaned_url
 
     if notes is not None:
         apk.reproducibility_notes = (notes.strip() or None)
