@@ -904,7 +904,121 @@ export const api = {
       if (params.only_infected) qs.set("only_infected", "true");
       return apiFetch<ApkScanRow[]>(`/api/v1/admin/scans?${qs}`);
     },
+    // ─── Source proxies registry (v1.3) ──────────────────────────────
+    // See docs/proxy-protocol.md. Each proxy is a separate HTTP service
+    // the admin registers; the per-app wizard then picks providers from
+    // the cached catalogues.
+    proxies: {
+      list: () => apiFetch<ApkProxyRead[]>("/api/v1/admin/proxies"),
+      create: (payload: {
+        name: string;
+        base_url: string;
+        auth_token?: string | null;
+        enabled?: boolean;
+      }) =>
+        apiFetch<ApkProxyRead>("/api/v1/admin/proxies", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+      update: (
+        id: string,
+        payload: {
+          name?: string;
+          base_url?: string;
+          auth_token?: string | null;
+          enabled?: boolean;
+        },
+      ) =>
+        apiFetch<ApkProxyRead>(`/api/v1/admin/proxies/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        }),
+      remove: (id: string) =>
+        apiFetch<void>(`/api/v1/admin/proxies/${id}`, { method: "DELETE" }),
+      refresh: (id: string) =>
+        apiFetch<ApkProxyRead>(`/api/v1/admin/proxies/${id}/refresh`, {
+          method: "POST",
+        }),
+    },
   },
+};
+
+// ─── Source-proxy types (mirror app.schemas.apk_proxy) ──────────────────────
+
+/** One entry in a proxy's ``GET /sources`` catalogue, mirrored from
+ *  the backend schema. Drives the per-app wizard's dynamic form. */
+export type ProxyProviderDescriptor = {
+  id: string;
+  name: string;
+  description?: string | null;
+  icon_url?: string | null;
+  url_hint?: string | null;
+  url_pattern?: string | null;
+  auth_kind: "none" | "api_token" | "basic" | "oauth2";
+  auth_oauth?: { begin_path: string; scopes_hint?: string[] } | null;
+  secret_fields: Array<{
+    key: string;
+    label: string;
+    secret?: boolean;
+    required?: boolean;
+    placeholder?: string | null;
+  }>;
+  supports_search?: boolean;
+};
+
+/** Snapshot of a proxy's ``GET /sources`` response cached on the row. */
+export type ProxySourcesCatalogue = {
+  version: number;
+  name?: string | null;
+  providers: ProxyProviderDescriptor[];
+};
+
+export type ApkProxyHealthStatus =
+  | "unknown"
+  | "healthy"
+  | "unreachable"
+  | "bad_response"
+  | "auth_failed";
+
+export type ApkProxyRead = {
+  id: string;
+  name: string;
+  base_url: string;
+  enabled: boolean;
+  has_auth_token: boolean;
+  last_health_status: ApkProxyHealthStatus;
+  last_health_at: string | null;
+  last_health_error: string | null;
+  cached_sources_at: string | null;
+  cached_sources_json: ProxySourcesCatalogue | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Per-app proxy source row. Returned by /apps/{id}/proxy-source. */
+export type ApkProxySourceRead = {
+  id: string;
+  app_id: string;
+  proxy_id: string;
+  provider: string;
+  source_url: string;
+  enabled: boolean;
+  has_secrets: boolean;
+  last_release_id: string | null;
+  last_release_at: string | null;
+  last_scanned_at: string | null;
+  last_status:
+    | "idle"
+    | "up_to_date"
+    | "imported"
+    | "auth_required"
+    | "rate_limited"
+    | "error"
+    | "skipped";
+  last_error: string | null;
+  suspended_until: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type RescanResult = {
