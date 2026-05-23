@@ -18,26 +18,32 @@ import { cn } from "@/lib/utils";
 
 /* Toolbar — small, deliberate set of buttons that maps 1:1 to the F-Droid
    Markdown subset we accept. We don't expose heading / image / table buttons
-   because the renderer would strip them anyway. Each button reads its active
-   state straight from the Tiptap editor so toggling formatting on a selection
-   reflects in the UI instantly. */
+   because the renderer would strip them anyway. */
+
+export type ToolbarActionKey =
+  | "bold"
+  | "italic"
+  | "code"
+  | "bulletList"
+  | "orderedList"
+  | "blockquote"
+  | "link"
+  | "undo"
+  | "redo";
 
 type Action = {
-  /** Stable key — used for React keys + as the `data-action` attribute so the
-   *  CSS divider rules can target group boundaries. */
-  key: string;
+  key: ToolbarActionKey;
   label: string;
   shortcut: string;
   icon: React.ReactNode;
   isActive?: (e: Editor) => boolean;
   isDisabled?: (e: Editor) => boolean;
   run: (e: Editor) => void;
-  /** Optional group identifier — buttons sharing a group sit flush; a small
-   *  vertical divider appears between groups. */
+  /** Buttons sharing a group sit flush; a thin vertical divider separates groups. */
   group: "text" | "block" | "insert" | "history";
 };
 
-const ACTIONS: Action[] = [
+const ACTIONS: readonly Action[] = [
   {
     key: "bold",
     label: "Bold",
@@ -110,7 +116,9 @@ const ACTIONS: Action[] = [
     label: "Undo",
     shortcut: "⌘Z",
     icon: <Undo2 className="h-4 w-4" />,
-    isDisabled: (e) => !e.can().chain().focus().undo().run(),
+    // ``isDisabled`` for history is cached in component state (see below) —
+    // the dry-run ``editor.can().chain().focus().undo().run()`` builds a
+    // full ProseMirror transaction per call, too costly to do per render.
     run: (e) => e.chain().focus().undo().run(),
     group: "history",
   },
@@ -119,49 +127,62 @@ const ACTIONS: Action[] = [
     label: "Redo",
     shortcut: "⌘⇧Z",
     icon: <Redo2 className="h-4 w-4" />,
-    isDisabled: (e) => !e.can().chain().focus().redo().run(),
     run: (e) => e.chain().focus().redo().run(),
     group: "history",
   },
 ];
+
+export interface ToolbarProps {
+  editor: Editor;
+  /** Rendered right-aligned in the toolbar — typically the Edit/Preview tab
+   *  switch lives here. */
+  rightSlot?: React.ReactNode;
+  className?: string;
+  /** Translated accessible names per action. Missing keys fall back to the
+   *  English label baked into the action table. */
+  labels?: Partial<Record<ToolbarActionKey, string>>;
+  /** Translated ``aria-label`` for the toolbar landmark itself. */
+  ariaLabel?: string;
+  /** Translated text shown in the link-URL prompt. */
+  linkPrompt?: string;
+}
 
 export function Toolbar({
   editor,
   rightSlot,
   className,
   labels,
-}: {
-  editor: Editor;
-  /** Rendered right-aligned in the toolbar — typically the Edit/Preview tab
-   *  switch lives here. */
-  rightSlot?: React.ReactNode;
-  className?: string;
-  /** Per-button accessible names (translated by the parent). When omitted we
-   *  fall back to the English label baked into the action table. */
-  labels?: Partial<Record<string, string>>;
-}) {
-  /* Subscribe to selection + transaction events so `isActive` and `isDisabled`
-   * re-evaluate on every cursor move. Without this, the toolbar buttons look
-   * frozen as the user types — they'd only flip when the component re-renders
-   * for an unrelated reason. */
+  ariaLabel = "Formatting",
+  linkPrompt = "URL (https://… or mailto:…)",
+}: ToolbarProps) {
+  // Re-render on every transaction so ``isActive`` reflects the live
+  // cursor / mark state. ``selectionUpdate`` is redundant — every cursor
+  // move emits a transaction too, so subscribing to both would force two
+  // re-renders per arrow-key press.
   const [, force] = React.useReducer((x: number) => x + 1, 0);
+  // History state cached separately — the ``editor.can().chain().focus()
+  // .undo().run()`` dry-run that backs ``isDisabled`` builds a full
+  // ProseMirror transaction per call, far too expensive to do once per
+  // button per render.
+  const [history, setHistory] = React.useState({ canUndo: false, canRedo: false });
   React.useEffect(() => {
-    const update = () => force();
-    editor.on("selectionUpdate", update);
-    editor.on("transaction", update);
-    return () => {
-      editor.off("selectionUpdate", update);
-      editor.off("transaction", update);
+    const onTx = () => {
+      force();
+      setHistory({
+        canUndo: editor.can().chain().focus().undo().run(),
+        canRedo: editor.can().chain().focus().redo().run(),
+      });
     };
+    editor.on("transaction", onTx);
+    return () => { editor.off("transaction", onTx); };
   }, [editor]);
 
   const promptForLinkAndApply = React.useCallback(() => {
     const previous = (editor.getAttributes("link") as { href?: string }).href ?? "";
-    // Native prompt — minimal, accessible, no extra deps. The dialog is
-    // dismissed with Cancel (no-op) and an empty value unlinks the selection
-    // so users can also remove links from this single button.
-    const next = window.prompt("URL (https://… or mailto:…)", previous);
-    if (next === null) return; // cancelled
+    // Native prompt — minimal, accessible, no extra deps. Cancel = no-op;
+    // an empty value unlinks so users can remove a link from the same button.
+    const next = window.prompt(linkPrompt, previous);
+    if (next === null) return;
     const trimmed = next.trim();
     if (trimmed === "") {
       editor.chain().focus().extendMarkRange("link").unsetLink().run();
@@ -173,7 +194,7 @@ export function Toolbar({
       .extendMarkRange("link")
       .setLink({ href: trimmed })
       .run();
-  }, [editor]);
+  }, [editor, linkPrompt]);
 
   let lastGroup: Action["group"] | null = null;
 
@@ -185,13 +206,16 @@ export function Toolbar({
         className,
       )}
       role="toolbar"
-      aria-label="Formatting"
+      aria-label={ariaLabel}
     >
       {ACTIONS.map((action) => {
         const showDivider = lastGroup !== null && lastGroup !== action.group;
         lastGroup = action.group;
         const isActive = action.isActive?.(editor) ?? false;
-        const isDisabled = action.isDisabled?.(editor) ?? false;
+        const isDisabled =
+          action.key === "undo" ? !history.canUndo
+            : action.key === "redo" ? !history.canRedo
+            : action.isDisabled?.(editor) ?? false;
         const accessibleLabel = labels?.[action.key] ?? action.label;
 
         return (
@@ -206,9 +230,8 @@ export function Toolbar({
               type="button"
               onMouseDown={(e) => {
                 // Keep focus inside the editor so the formatting command
-                // applies to the live selection. Without this, clicking a
-                // toolbar button moves focus to the <button> first and the
-                // selection collapses on certain browsers.
+                // applies to the live selection; clicking the button would
+                // otherwise collapse the selection on some browsers.
                 e.preventDefault();
               }}
               onClick={() => {
@@ -223,7 +246,6 @@ export function Toolbar({
               aria-pressed={isActive}
               aria-label={accessibleLabel}
               title={`${accessibleLabel}  ·  ${action.shortcut}`}
-              data-action={action.key}
               className={cn(
                 "inline-flex h-8 w-8 items-center justify-center rounded-lg",
                 "text-ink-soft transition-all duration-150 ease-out",

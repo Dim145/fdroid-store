@@ -28,52 +28,50 @@ import { cn } from "@/lib/utils";
    parser regression can never become an XSS vector.
    ---------------------------------------------------------------------------- */
 
-const ALLOWED_TAGS = [
-  "p", "br",
-  "strong", "em", "b", "i",
-  "a",
-  "ul", "ol", "li",
-  "blockquote",
-  "code",
-];
-const ALLOWED_ATTR = ["href"];
-
-// Match marked's option shape; called once at module load.
-marked.setOptions({
-  gfm: false,    // disables tables, strikethrough, autolinks. We re-enable
-                 // manual links via the `[label](url)` form which is CommonMark.
-  breaks: true,  // single newlines become <br> — matches the Android client's
-                 // wrap-on-newline behaviour for descriptions.
+// Module-scope config — frozen so the same object identity is handed to
+// DOMPurify on every call, and ``marked`` is configured exactly once.
+const SANITIZE_CONFIG = Object.freeze({
+  ALLOWED_TAGS: [
+    "p", "br",
+    "strong", "em", "b", "i",
+    "a",
+    "ul", "ol", "li",
+    "blockquote",
+    "code",
+  ],
+  ALLOWED_ATTR: ["href"],
+  // Allow only safe URL schemes. The default DOMPurify regex covers http(s) +
+  // mailto; we extend it with ``fdroidrepos:`` so a description can deep-link
+  // into another repo install flow.
+  ALLOWED_URI_REGEXP:
+    /^(?:(?:https?|mailto|fdroidrepos):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
 });
 
-/** Convert F-Droid-compatible Markdown to a sanitised HTML fragment. */
+const ANCHOR_TAG = /<a\b([^>]*?)>/g;
+
+marked.setOptions({
+  gfm: false,
+  breaks: true,
+});
+
+/** Convert F-Droid-compatible Markdown to a sanitised HTML fragment.
+ *
+ *  Tags outside ``SANITIZE_CONFIG.ALLOWED_TAGS`` are stripped by DOMPurify
+ *  while keeping their text content — so an ``<h1>`` becomes a bare run of
+ *  text, an ``<img>`` disappears entirely (no children), and tables are
+ *  killed at the parser level via ``gfm: false`` above.
+ */
 export function renderFdroidMarkdown(markdown: string): string {
   if (!markdown || !markdown.trim()) return "";
-  // `marked.parse` is sync when `async: false` (default in v14 for non-async
-  // extensions). The cast keeps TS happy without dragging the async overload in.
+  // ``marked.parse`` is sync when ``async: false`` (default in v14 for
+  // non-async extensions). The cast trims the async overload out of TS's
+  // return-type union.
   const raw = marked.parse(markdown, { async: false }) as string;
-
-  // Strip headings + images + tables BEFORE DOMPurify so their inner text is
-  // preserved as paragraph content. DOMPurify's default mode would strip the
-  // tag but keep the children — which for an <img> means nothing, but for an
-  // <h1> means the text survives, which is exactly what we want. So we let
-  // DOMPurify handle the de-tagging via the allowlist below.
-
-  const safe = DOMPurify.sanitize(raw, {
-    ALLOWED_TAGS,
-    ALLOWED_ATTR,
-    // Only allow safe URL schemes. The default DOMPurify regex covers http(s)
-    // and mailto; we extend it with the F-Droid-specific `fdroidrepos:` so a
-    // description can link to another repo install flow.
-    ALLOWED_URI_REGEXP:
-      /^(?:(?:https?|mailto|fdroidrepos):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
-  });
-
+  const safe = DOMPurify.sanitize(raw, SANITIZE_CONFIG);
   // Force every anchor to open in a new tab with hardened rel attributes.
-  // Done on the sanitised string so we know there are no injected attributes
-  // already on the tag. (`ugc` flags this as user-generated content for SEO.)
+  // (``ugc`` flags the link as user-generated content for SEO crawlers.)
   return safe.replace(
-    /<a\b([^>]*?)>/g,
+    ANCHOR_TAG,
     (_m, attrs) => `<a${attrs} target="_blank" rel="noopener nofollow ugc">`,
   );
 }

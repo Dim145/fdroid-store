@@ -12,6 +12,7 @@ schemas in ``app.schemas.apk_proxy``.
 """
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -60,25 +61,77 @@ class ApkProxyError(RuntimeError):
         self.retry_after = retry_after
 
 
-def _assert_proxy_url_safe(base_url: str) -> str:
-    """Refuse base URLs that resolve to RFC1918 / metadata IPs / link-
-    local space. The proxy itself can still be on the compose network
-    (its hostname resolves to a private docker IP) — admins explicitly
-    opt-in by toggling a ``allow_private_network`` flag on the proxy
-    row... but we don't ship that knob yet. For now: same rules as the
-    forge fetcher (which means the proxy must be on a routable IP, or
-    on the compose ``172.x.x.x`` network reachable from the worker).
+# Cloud-metadata endpoints. AWS / GCP / Azure / OpenStack / Alibaba all
+# converge on 169.254.169.254 (and the IPv6 fd00:ec2::254). Blocked
+# explicitly even though we still allow other RFC1918 addresses (sidecar
+# deployments typically resolve to 172.16-31.x.x on the compose network).
+_BLOCKED_METADATA_HOSTNAMES = frozenset({
+    "metadata.google.internal",
+})
+_BLOCKED_METADATA_IPS = frozenset({
+    ipaddress.ip_address("169.254.169.254"),
+    ipaddress.ip_address("fd00:ec2::254"),
+})
 
-    We deliberately allow private addresses here because the typical
-    deployment is a sidecar on the same compose network. The SSRF
-    guard still fires on the ``apk_url`` the proxy hands back —
-    that's the actual exfiltration surface.
+
+def _is_blocked_metadata_host(hostname: str) -> bool:
+    """Return True if ``hostname`` is on the cloud-metadata blocklist.
+
+    Accepts hostnames, dotted IPv4, IPv6, AND IPv4 in its weird-but-legal
+    forms (decimal ``2852039166``, hex ``0xa9fea9fe``, trailing dot).
+    ``ipaddress.ip_address`` is the only stdlib parser that normalises
+    all of them to the same numeric value; we feed it whatever shape the
+    URL produced.
+    """
+    lower = hostname.lower().rstrip(".")
+    if lower in _BLOCKED_METADATA_HOSTNAMES:
+        return True
+    try:
+        ip = ipaddress.ip_address(int(lower, 0) if lower.startswith(("0x", "0o")) else lower)
+    except (ValueError, TypeError):
+        try:
+            # Plain integer forms like ``2852039166``.
+            ip = ipaddress.ip_address(int(lower))
+        except (ValueError, TypeError):
+            return False
+    if ip in _BLOCKED_METADATA_IPS:
+        return True
+    # Anything in the IPv4 link-local 169.254/16 or the IPv6 metadata
+    # range gets the same treatment — even outside the literal IMDS IP,
+    # link-local addresses have no business being a proxy base.
+    return (
+        ip.version == 4
+        and ipaddress.ip_address("169.254.0.0") <= ip <= ipaddress.ip_address("169.254.255.255")
+    )
+
+
+def _assert_proxy_url_safe(base_url: str) -> str:
+    """Validate the admin-supplied ``base_url`` before any HTTP I/O.
+
+    RFC1918 is allowed (the typical deployment is a sidecar on the same
+    compose network — see ``proxy-fdroid``). What we DO refuse:
+      * non-http(s) schemes
+      * URLs missing a hostname
+      * ``user:pass@host`` userinfo (proxy auth runs through a separate
+        ``Authorization`` header; userinfo in URLs has been a confused-
+        deputy footgun in the past)
+      * the cloud-metadata addresses themselves (see
+        :data:`_BLOCKED_METADATA_HOSTS`) — no legitimate proxy is hosted
+        on the IMDS endpoint, and forbidding it stops an admin (or anyone
+        who escalates) from using the proxy registration form to leak
+        cloud-instance credentials via ``last_health_error``.
     """
     parsed = urlsplit(base_url)
     if parsed.scheme not in {"http", "https"}:
         raise ApkProxyError(f"Proxy base_url must be http(s): {base_url!r}")
     if not parsed.hostname:
         raise ApkProxyError(f"Proxy base_url is missing a hostname: {base_url!r}")
+    if parsed.username or parsed.password:
+        raise ApkProxyError("Proxy base_url must not embed userinfo")
+    if _is_blocked_metadata_host(parsed.hostname):
+        raise ApkProxyError(
+            "Proxy base_url is on the cloud-metadata blocklist",
+        )
     return base_url.rstrip("/")
 
 

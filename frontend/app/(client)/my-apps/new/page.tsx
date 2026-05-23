@@ -72,6 +72,18 @@ function NewAppInner() {
   useEffect(() => {
     pxCredentialIdRef.current = pxCredentialId;
   }, [pxCredentialId]);
+  // Active popup-close watcher id. Cleared on unmount or before a
+  // re-trigger so we don't leak a 700 ms interval if the user navigates
+  // away mid-OAuth.
+  const pxWatcherRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (pxWatcherRef.current !== null) {
+        window.clearInterval(pxWatcherRef.current);
+        pxWatcherRef.current = null;
+      }
+    };
+  }, []);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -258,9 +270,15 @@ function NewAppInner() {
         setError(t("myApps.edit.proxySources.popupBlocked"));
         return;
       }
-      const closeWatcher = window.setInterval(() => {
+      if (pxWatcherRef.current !== null) {
+        window.clearInterval(pxWatcherRef.current);
+      }
+      pxWatcherRef.current = window.setInterval(() => {
         if (!popup.closed) return;
-        window.clearInterval(closeWatcher);
+        if (pxWatcherRef.current !== null) {
+          window.clearInterval(pxWatcherRef.current);
+          pxWatcherRef.current = null;
+        }
         if (!pxCredentialIdRef.current) {
           setPxOauthBusy(false);
           setError(t("myApps.edit.proxySources.popupClosed"));

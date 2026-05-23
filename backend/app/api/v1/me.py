@@ -4,11 +4,12 @@ import uuid as uuid_module
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user
+from app.core.rate_limit import limiter
 from app.core.security import hash_password, verify_password
 from app.core.user_agent import classify_user_agent
 from app.models.apk import Apk, ApkStatus
@@ -420,7 +421,9 @@ def _iso(d: datetime | None) -> str | None:
 
 
 @router.get("/export")
+@limiter.limit("2/minute")
 async def export_my_data(
+    request: Request,
     user: Annotated[User, Depends(get_current_user)],
     db: DbSession,
 ) -> Response:

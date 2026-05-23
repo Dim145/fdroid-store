@@ -731,13 +731,19 @@ async def begin_proxy_oauth(
     return {"popup_url": popup_url, "state": state}
 
 
-# Opaque-ID character set the callback accepts for ``credential_id`` and
-# ``state``. UUIDs, base64url tokens, JWT-shaped strings, our own
-# HMAC-signed state — all fit. Anything outside this set (``<``, ``>``,
-# ``"``, whitespace, …) is refused at the query-parser level so a
-# hostile proxy can't smuggle HTML / JS through these params and reach
-# the callback's HTML body.
+# Opaque-ID charset for ``credential_id`` and ``state``. UUIDs, base64url,
+# JWT-shaped values and our HMAC-signed state all fit; HTML-meaningful bytes
+# (``<>"`` whitespace …) are rejected at the FastAPI validator layer so
+# they never reach the callback's HTML body.
 _OPAQUE_ID_PATTERN = r"^[A-Za-z0-9._\-]+$"
+
+# CSP for the callback's HTML response. Only the inline ``<script>`` we ship
+# here may execute; no external loads.
+_CALLBACK_CSP = (
+    "default-src 'none'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'unsafe-inline'"
+)
 
 
 @auth_router.get("/proxy-callback", response_class=HTMLResponse)
@@ -757,18 +763,17 @@ async def proxy_oauth_callback(
     (the SPA) listens on its ``message`` event and stores the credential
     via the normal ``POST /apps/{id}/proxy-source`` endpoint.
 
-    Nothing is persisted server-side — the credential lives on the
-    proxy, and the source row owns the reference. This keeps fdroid-
-    store stateless for the OAuth half of the flow and lets the user
-    abandon (just close the popup) without orphaning anything in our
-    DB.
+    Nothing is persisted server-side — the credential lives on the proxy,
+    and the source row owns the reference. This keeps fdroid-store
+    stateless for the OAuth half of the flow and lets the user abandon
+    (just close the popup) without orphaning anything in our DB.
 
-    XSS defence: the payload is embedded in a non-executable
-    ``<script type="application/json">`` block and read at runtime via
-    ``document.getElementById(...).textContent`` + ``JSON.parse``. This
-    keeps the proxy-supplied values out of any executable JS context.
-    The query params are also pattern-restricted to opaque-ID characters
-    so even the JSON-data path can't carry HTML-meaningful bytes.
+    XSS defence: the payload is embedded in a ``data-payload`` attribute,
+    HTML-escaped via :func:`html.escape`; the inline ``<script>`` reads
+    it back through ``element.dataset.payload``. The query params are
+    also charset-restricted (see :data:`_OPAQUE_ID_PATTERN`) so even
+    without the escape there's no way for HTML-meaningful bytes to reach
+    the body.
     """
     payload = _verify_oauth_state(state)
     if payload is None:
@@ -779,17 +784,6 @@ async def proxy_oauth_callback(
                 "Close this window and start over.</p></body></html>"
             ),
         )
-    # Build the message payload. The state HMAC already authenticated
-    # the inputs (any tampering returns 400 above), and the opaque-ID
-    # regex on the query params rejects HTML-meaningful characters at
-    # the FastAPI validator layer.
-    #
-    # XSS hardening: the payload is serialised to JSON then written into
-    # an HTML attribute via ``html.escape(..., quote=True)`` — the
-    # canonical Python sanitiser for HTML-attribute contexts. The
-    # executable ``<script>`` block then reads it back via
-    # ``element.dataset.payload``. Static analysers (CodeQL py/reflective-
-    # xss) recognise ``html.escape`` as a barrier on this taint path.
     msg_data = json.dumps({
         "type": "proxy_oauth_done",
         "credential_id": credential_id,
@@ -798,28 +792,11 @@ async def proxy_oauth_callback(
         "provider": payload["provider"],
         "app_id": str(payload["app_id"]) if payload["app_id"] else None,
     })
-    # The exact origin we postMessage to is the SPA's. We pull it from
-    # ``settings.public_app_url`` so a multi-tenant frontend can't be
-    # tricked into receiving messages bound for someone else's tab.
+    # Pinning the postMessage origin to the SPA's own URL stops a
+    # multi-tenant frontend from receiving messages bound for another tab.
     target_origin = settings.public_app_url.rstrip("/") or "*"
-    # HTML-attribute-escape both values. Even if a future refactor
-    # loosens the query-param regex, the only way for these strings
-    # to influence the page is via the ``data-*`` attribute they live
-    # in, and ``html.escape`` neutralises ``<>"'&``.
     msg_attr = html.escape(msg_data, quote=True)
     origin_attr = html.escape(target_origin, quote=True)
-    # Strict CSP on this response only — no external loads, no eval,
-    # no inline-script execution outside the one script tag we control
-    # here. Combined with the data-attribute extraction below, this
-    # means even a hypothetical injection somewhere else in the body
-    # can't get JS to execute.
-    csp = (
-        "default-src 'none'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'unsafe-inline'"
-    )
-    # All non-static substitutions go through ``html.escape`` above —
-    # the f-string body below contains no user-derived literals.
     page = (
         '<!doctype html>'
         '<html lang="en">'
@@ -842,7 +819,9 @@ async def proxy_oauth_callback(
         '</script>'
         '</body></html>'
     )
-    return HTMLResponse(content=page, headers={"Content-Security-Policy": csp})
+    return HTMLResponse(
+        content=page, headers={"Content-Security-Policy": _CALLBACK_CSP}
+    )
 
 
 # ============================================================================

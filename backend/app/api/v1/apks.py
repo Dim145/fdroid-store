@@ -499,15 +499,29 @@ async def inspect_github(
 
     # Pull the repo-level metadata in parallel with the asset download —
     # best-effort, so a missing/private repo description doesn't break
-    # the inspect flow.
+    # the inspect flow. ``return_exceptions=True`` is critical: without
+    # it, a (rare) raise from ``fetch_repo_metadata`` would cancel
+    # ``download_asset`` mid-stream, and the unlink in the outer
+    # ``finally`` would never see the partial tmp file.
     import asyncio as _asyncio
 
-    repo_meta_task = _asyncio.create_task(
-        fetch_repo_metadata(repo, provider=provider, base_url=base_url, token=inspect_token)
+    dl_result, repo_meta = await _asyncio.gather(
+        download_asset(asset),
+        fetch_repo_metadata(
+            repo, provider=provider, base_url=base_url, token=inspect_token
+        ),
+        return_exceptions=True,
     )
-
-    tmp_path = await download_asset(asset)
-    repo_meta = await repo_meta_task
+    if isinstance(repo_meta, BaseException):
+        # Best-effort: log but don't fail the inspect on a metadata miss.
+        log.warning(
+            "fetch_repo_metadata raised; falling back to None",
+            exc_info=(type(repo_meta), repo_meta, repo_meta.__traceback__),
+        )
+        repo_meta = None
+    if isinstance(dl_result, BaseException):
+        raise dl_result
+    tmp_path = dl_result
     try:
         meta = await parse_or_400(tmp_path)
         try:

@@ -66,6 +66,7 @@
     "acceptsMarkdown": "Coller du Markdown ou du HTML accepté",
     "helpHint": "Tapez, collez depuis un document, ou utilisez la barre d'outils. Gras, italique, listes, citations et liens sont conservés ; titres, images et tableaux sont retirés pour rester compatibles avec le client F-Droid.",
     "toolbar": {
+      "ariaLabel": "Mise en forme",
       "bold": "Gras",
       "italic": "Italique",
       "code": "Code inline",
@@ -73,6 +74,7 @@
       "orderedList": "Liste numérotée",
       "quote": "Citation",
       "link": "Lien",
+      "linkPrompt": "URL (https://… ou mailto:…)",
       "undo": "Annuler",
       "redo": "Rétablir"
     }

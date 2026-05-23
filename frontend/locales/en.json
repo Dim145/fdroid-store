@@ -66,6 +66,7 @@
     "acceptsMarkdown": "Markdown & HTML paste supported",
     "helpHint": "Type, paste from a doc, or use the toolbar. Bold, italic, lists, quotes and links are kept; headings, images and tables are stripped to match the F-Droid client.",
     "toolbar": {
+      "ariaLabel": "Formatting",
       "bold": "Bold",
       "italic": "Italic",
       "code": "Inline code",
@@ -73,6 +74,7 @@
       "orderedList": "Numbered list",
       "quote": "Quote",
       "link": "Link",
+      "linkPrompt": "URL (https://… or mailto:…)",
       "undo": "Undo",
       "redo": "Redo"
     }

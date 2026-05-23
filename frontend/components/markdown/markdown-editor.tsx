@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import type { Editor } from "@tiptap/react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -12,7 +13,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 import { MarkdownView } from "./markdown-view";
-import { Toolbar } from "./toolbar";
+import { Toolbar, type ToolbarActionKey } from "./toolbar";
 
 /* ----------------------------------------------------------------------------
    <MarkdownEditor>
@@ -27,11 +28,6 @@ import { Toolbar } from "./toolbar";
    inline HTML are stripped on paste so what the user sees in the editor is
    exactly what every F-Droid client will display.
 
-   The toolbar is grouped (text → block → insert → history) with a tab switch
-   on the right that flips the surface from Edit mode to a read-only Preview
-   that uses the *same* renderer as the public app page. That guarantees
-   the author can never be surprised at publish time.
-
    Paste behaviour:
      • Markdown text  → kept as-is (tiptap-markdown parses it on input).
      • HTML (e.g. from a Notion / Google Doc paste) → parsed by ProseMirror
@@ -39,7 +35,14 @@ import { Toolbar } from "./toolbar";
        support survives. Anything else is dropped silently.
    ---------------------------------------------------------------------------- */
 
-const HARD_MAX = 20_000; // matches the textarea cap previously enforced.
+const HARD_MAX = 20_000;
+
+/** ``tiptap-markdown`` registers a serialiser at ``editor.storage.markdown``.
+ *  Centralising the cast here keeps the typing dance out of the call sites. */
+function getMarkdown(editor: Editor): string {
+  type WithMarkdown = { markdown?: { getMarkdown: () => string } };
+  return (editor.storage as WithMarkdown).markdown?.getMarkdown() ?? "";
+}
 
 export type MarkdownEditorProps = {
   /** Current Markdown value. Treated as a controlled prop. */
@@ -68,18 +71,23 @@ export function MarkdownEditor({
 }: MarkdownEditorProps) {
   const { t } = useTranslation();
   const [mode, setMode] = React.useState<"edit" | "preview">("edit");
-  const [mounted, setMounted] = React.useState(false);
 
-  // Tiptap mutates the DOM on first render; on Next.js' streaming server-side
-  // pass that would mismatch the client hydration. Mount-detection lets us
-  // render an inert textarea-shaped placeholder for the first paint so the
-  // layout doesn't jump when the editor takes over.
-  React.useEffect(() => setMounted(true), []);
+  // ``onUpdate`` captures its environment at editor-construction time. We
+  // route ``onChange`` and ``maxLength`` through refs so a parent that
+  // passes a new inline lambda on every render (the typical pattern with
+  // <LocalizationsEditor> swapping rows) still gets every keystroke —
+  // otherwise the closure freezes at mount and edits silently vanish.
+  const onChangeRef = React.useRef(onChange);
+  const maxLengthRef = React.useRef(maxLength);
+  React.useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  React.useEffect(() => { maxLengthRef.current = maxLength; }, [maxLength]);
 
-  const editor = useEditor({
-    immediatelyRender: false,
-    editable: !disabled,
-    extensions: [
+  // Extensions + editorProps are memoised so Tiptap doesn't tear down the
+  // editor on every render. Without this, every keystroke re-runs
+  // ``editor.setOptions`` and re-applies ``view.setProps`` — heavy when
+  // multiple editors are mounted (one per locale in <LocalizationsEditor>).
+  const extensions = React.useMemo(
+    () => [
       StarterKit.configure({
         // Disable everything that isn't part of the F-Droid subset. Anything
         // we leave enabled here ALSO has to be allowed in <MarkdownView> or
@@ -88,8 +96,6 @@ export function MarkdownEditor({
         horizontalRule: false,
         codeBlock: false,
         strike: false,
-        // Keep: paragraph, bold, italic, code (inline), bulletList,
-        // orderedList, listItem, blockquote, hardBreak, history.
       }),
       Link.configure({
         openOnClick: false,
@@ -103,77 +109,101 @@ export function MarkdownEditor({
       }),
       Placeholder.configure({
         placeholder: placeholder ?? "",
-        // ``float-left + h-0`` is Tiptap's canonical recipe but on Firefox /
-        // some Chromium versions it leaves the empty paragraph's caret
-        // clipped to a barely-visible sliver at the top-left — the
-        // placeholder's float occupies the same baseline. Absolute
-        // positioning takes the placeholder out of flow entirely so the
-        // caret renders at its natural width + height. ``relative`` on the
-        // empty paragraph is what gives the absolute child a
-        // containing block.
         emptyEditorClass: "is-editor-empty",
       }),
       Markdown.configure({
-        html: false,           // never accept raw HTML through the markdown bridge
+        html: false,
         tightLists: true,
         bulletListMarker: "-",
-        linkify: false,        // we already enabled `autolink` on the Link ext
-        breaks: true,          // single newlines preserved as <br> on output
-        transformPastedText: true, // paste of "**foo**" becomes bold immediately
-        transformCopiedText: true, // copy gives Markdown back to the OS clipboard
+        linkify: false,
+        breaks: true,
+        transformPastedText: true,
+        transformCopiedText: true,
       }),
     ],
-    content: value,
-    editorProps: {
-      attributes: {
-        id: id ?? "",
-        role: "textbox",
-        "aria-multiline": "true",
-        // The `prose-md` class shares styling with MarkdownView so the editor
-        // surface looks pixel-identical to the public page.
-        class: cn(
-          "prose-md tiptap-content min-h-[var(--tiptap-min-h)] focus:outline-none",
-        ),
-      },
-    },
+    [placeholder],
+  );
+
+  const editorAttrs = React.useMemo(
+    () => ({
+      id: id ?? "",
+      role: "textbox",
+      "aria-multiline": "true",
+      // ``prose-md`` is shared with MarkdownView so the editor surface looks
+      // pixel-identical to the public page.
+      class: cn(
+        "prose-md tiptap-content min-h-[var(--tiptap-min-h)] focus:outline-none",
+      ),
+    }),
+    [id],
+  );
+
+  const editorProps = React.useMemo(
+    () => ({ attributes: editorAttrs }),
+    [editorAttrs],
+  );
+
+  // ``content`` is the INITIAL doc only. Tiptap stores it on options but
+  // doesn't reset the live doc when it changes — and we don't want it to
+  // (the effect below handles external value changes with an
+  // ``isFocused`` guard). Capture once via ref so this never appears
+  // in the options diff and triggers a redundant ``view.updateState``.
+  const initialContentRef = React.useRef(value);
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    // Drop legacy "re-render the host component on every transaction" — we
+    // don't read editor state during render. The Toolbar subscribes
+    // directly to the events it cares about.
+    shouldRerenderOnTransaction: false,
+    editable: !disabled,
+    extensions,
+    content: initialContentRef.current,
+    editorProps,
     onUpdate({ editor }) {
-      // `tiptap-markdown` registers `editor.storage.markdown` on init.
-      // The cast trims the explicit typing dance for what is a tiny lookup.
-      const md =
-        (editor.storage as { markdown?: { getMarkdown: () => string } }).markdown?.getMarkdown() ?? "";
-      onChange(md.slice(0, maxLength));
+      onChangeRef.current(getMarkdown(editor).slice(0, maxLengthRef.current));
     },
   });
 
-  // Keep the editor in sync when `value` is updated externally (e.g. the form
-  // resets after a successful save). We only push downstream when the prop
-  // diverges from what the editor currently holds, otherwise every keystroke
-  // would round-trip and the cursor would jump to the end. `tiptap-markdown`
-  // auto-detects markdown vs HTML strings inside ``setContent``, so we just
-  // hand it the raw value.
+  // Sync external ``value`` changes back into the editor (e.g. a form reset
+  // after save). The ``isFocused`` guard avoids resetting content while the
+  // user is typing — that would jump the cursor to the end on any parent
+  // re-render that happens to carry a slightly-normalised value.
   React.useEffect(() => {
-    if (!editor) return;
-    const current =
-      (editor.storage as { markdown?: { getMarkdown: () => string } }).markdown?.getMarkdown() ?? "";
-    if (current !== value) {
-      // Tiptap v2 signature: setContent(content, emitUpdate?, parseOptions?).
-      // We pass `emitUpdate: false` so our own React effect doesn't loop.
+    if (!editor || editor.isFocused) return;
+    if (getMarkdown(editor) !== value) {
       editor.commands.setContent(value, false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only react to value changes
   }, [value, editor]);
 
-  // Re-run editability when the prop flips (e.g. while a save is pending).
   React.useEffect(() => {
     editor?.setEditable(!disabled);
   }, [editor, disabled]);
 
+  // Stable label map keyed by ToolbarActionKey — re-derived only on language
+  // change, not per render.
+  const toolbarLabels = React.useMemo<Partial<Record<ToolbarActionKey, string>>>(
+    () => ({
+      bold: t("markdown.toolbar.bold"),
+      italic: t("markdown.toolbar.italic"),
+      code: t("markdown.toolbar.code"),
+      bulletList: t("markdown.toolbar.bulletList"),
+      orderedList: t("markdown.toolbar.orderedList"),
+      blockquote: t("markdown.toolbar.quote"),
+      link: t("markdown.toolbar.link"),
+      undo: t("markdown.toolbar.undo"),
+      redo: t("markdown.toolbar.redo"),
+    }),
+    [t],
+  );
+
   const charCount = value.length;
   const overLimitSoon = charCount > maxLength * 0.9;
 
-  // Before mount, render a static placeholder with the same outer shape so the
-  // form layout doesn't shift when the editor hydrates.
-  if (!mounted || !editor) {
+  // SSR / pre-mount: ``useEditor({ immediatelyRender: false })`` returns
+  // ``null`` until the client picks it up. Render an inert shape so the
+  // surrounding form layout doesn't jump when the editor hydrates.
+  if (!editor) {
     return (
       <div
         className={cn(
@@ -203,17 +233,9 @@ export function MarkdownEditor({
     >
       <Toolbar
         editor={editor}
-        labels={{
-          bold: t("markdown.toolbar.bold"),
-          italic: t("markdown.toolbar.italic"),
-          code: t("markdown.toolbar.code"),
-          bulletList: t("markdown.toolbar.bulletList"),
-          orderedList: t("markdown.toolbar.orderedList"),
-          blockquote: t("markdown.toolbar.quote"),
-          link: t("markdown.toolbar.link"),
-          undo: t("markdown.toolbar.undo"),
-          redo: t("markdown.toolbar.redo"),
-        }}
+        labels={toolbarLabels}
+        ariaLabel={t("markdown.toolbar.ariaLabel")}
+        linkPrompt={t("markdown.toolbar.linkPrompt")}
         rightSlot={
           <div
             role="tablist"
@@ -236,24 +258,22 @@ export function MarkdownEditor({
         }
       />
 
-      <div className="relative">
-        {mode === "edit" ? (
-          <EditorContent
-            editor={editor}
-            className="px-4 py-3 [&_.tiptap-content]:max-h-[28rem] [&_.tiptap-content]:overflow-y-auto"
-          />
-        ) : (
-          <div className="px-4 py-3">
-            {value.trim() ? (
-              <MarkdownView markdown={value} />
-            ) : (
-              <p className="italic text-ink-mute">
-                {placeholder || t("markdown.previewEmpty")}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
+      {mode === "edit" ? (
+        <EditorContent
+          editor={editor}
+          className="px-4 py-3 [&_.tiptap-content]:max-h-[28rem] [&_.tiptap-content]:overflow-y-auto"
+        />
+      ) : (
+        <div className="px-4 py-3">
+          {value.trim() ? (
+            <MarkdownView markdown={value} />
+          ) : (
+            <p className="italic text-ink-mute">
+              {placeholder || t("markdown.previewEmpty")}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-3 border-t border-outline-soft px-3 py-1.5 text-[11px]">
         <span

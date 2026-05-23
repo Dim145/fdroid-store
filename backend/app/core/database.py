@@ -78,10 +78,10 @@ async def get_db() -> AsyncIterator[AsyncSession]:
             except Exception:
                 pass
     finally:
+        # Close once, swallow connection-already-gone errors (backup-restore
+        # tears down the pool mid-request). Re-raising here would mask the
+        # actual request exception that started the unwind.
         try:
             await session.close()
         except Exception:
             pass
-            raise
-        finally:
-            await session.close()

@@ -15,15 +15,19 @@ thing fits in one FastAPI app + a single ``httpx`` call per resolve.
 """
 from __future__ import annotations
 
+import asyncio
+import hmac
 import io
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 import zipfile
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qs, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -78,10 +82,7 @@ def require_auth(authorization: str | None = Header(default=None)) -> None:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
     token = authorization[len("Bearer "):].strip()
-    # Constant-time-ish compare — Python's == on str isn't constant-time
-    # but the resulting timing leak is bounded by the secret length and
-    # this isn't a credential-extraction attack surface we worry about.
-    if token != SHARED_SECRET:
+    if not hmac.compare_digest(token.encode(), SHARED_SECRET.encode()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad token")
 
 
@@ -141,16 +142,59 @@ def _err(code: str, message: str, *, http: int = 400, retry_after: int | None = 
     return JSONResponse(status_code=http, content=body)
 
 
-def _parse_url(url: str) -> tuple[str, str] | str:
+# Hosts that resolve to any of these CIDRs are refused — RFC 1918, loopback,
+# link-local, IPv4/v6 multicast, the IPv6 ULA range, and the cloud-metadata
+# 169.254.169.254 / fd00:ec2:: families.
+_BLOCKED_CIDRS = tuple(
+    ipaddress.ip_network(c)
+    for c in (
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "100.64.0.0/10",
+        "224.0.0.0/4",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+        "fd00:ec2::/32",
+    )
+)
+
+
+def _ip_blocked(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return any(ip in net for net in _BLOCKED_CIDRS)
+
+
+async def _hostname_resolves_to_blocked(host: str) -> bool:
+    """Refuse hostnames whose A/AAAA records resolve to a blocked range.
+
+    ``socket.getaddrinfo`` is synchronous and can stall on a slow / failing
+    DNS resolver — we delegate it to the loop's default thread pool so a
+    DNS hiccup can't freeze the whole uvicorn worker.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return True
+    return any(_ip_blocked(addr[4][0]) for addr in infos)
+
+
+async def _parse_url(url: str) -> tuple[str, str] | str:
     """Pull the F-Droid repo URL and the package name out of the
     user-supplied string.
 
-    Returns ``(repo_url, package)`` on success, or an author-written
-    ``str`` describing the validation failure. We deliberately avoid
-    raising here so the failure messages are returned via an explicit
-    typed channel rather than via ``str(exc)`` — that pattern would
-    trigger static-analysis "stack-trace exposure" alerts even though
-    every message is hand-written.
+    Returns ``(repo_url, package)`` on success, or an explanatory
+    ``str`` on validation failure (caller maps the string to a 400).
+    The string-error channel keeps every user-facing message in a
+    typed return — there's no ``str(exc)`` path that could leak
+    library-raised exception detail.
 
     Accepts two formats:
       * ``<repo>#<package>`` — preferred, the fragment never leaks.
@@ -162,6 +206,11 @@ def _parse_url(url: str) -> tuple[str, str] | str:
         return "url must be http(s)"
     if not parsed.hostname:
         return "url is missing a hostname"
+    if parsed.username or parsed.password:
+        return "userinfo not allowed in url"
+    host = parsed.hostname
+    if await _hostname_resolves_to_blocked(host):
+        return "url resolves to a blocked network range"
     # Fragment form first — it's the cleanest.
     if parsed.fragment:
         pkg = parsed.fragment.strip()
@@ -182,34 +231,77 @@ def _parse_url(url: str) -> tuple[str, str] | str:
     return "url must encode a package via `#<package>` or `?package=<package>`"
 
 
+async def _safe_get_following_redirects(
+    client: httpx.AsyncClient, url: str, *, max_hops: int = 5
+) -> httpx.Response:
+    """Issue a streaming GET, walking up to ``max_hops`` redirects with
+    the SSRF guard re-applied to every ``Location`` target. Returns the
+    final response with its body NOT yet consumed — caller iterates
+    ``aiter_bytes()`` and is responsible for closing via ``aclose()``.
+
+    Combining the walk with the body fetch means the no-redirect happy
+    path costs exactly one round trip (vs. HEAD-then-GET, which doubles
+    it and breaks on mirrors that return 405 to HEAD).
+    """
+    request = client.build_request("GET", url)
+    for _ in range(max_hops + 1):
+        response = await client.send(request, stream=True)
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return response
+        # Drain + close so the connection is reusable for the next hop.
+        await response.aclose()
+        loc = response.headers.get("location")
+        if not loc:
+            raise FetchError(
+                "redirect with no Location header",
+                http=502, code="bad_response",
+            )
+        nxt_url = urljoin(str(request.url), loc)
+        nxt = urlsplit(nxt_url)
+        if nxt.scheme not in {"http", "https"}:
+            raise FetchError(
+                "redirect to non-http(s) scheme",
+                http=502, code="bad_response",
+            )
+        if not nxt.hostname or await _hostname_resolves_to_blocked(nxt.hostname):
+            raise FetchError(
+                "redirect resolves to a blocked network range",
+                http=502, code="bad_response",
+            )
+        request = client.build_request("GET", nxt_url)
+    raise FetchError("too many redirects", http=502, code="bad_response")
+
+
 async def _fetch_index_v1(repo_url: str) -> dict[str, Any]:
     """Fetch ``<repo>/index-v1.jar``, open it as a ZIP, return the parsed
     ``index-v1.json`` payload.
 
-    We deliberately do NOT verify the JAR signature here — the F-Droid
-    client does that on the device. The proxy just needs the metadata
-    + APK URL, both of which are then re-verified by fdroid-store: the
-    backend re-parses the manifest server-side and checks the signing
-    cert against its own pin.
+    The JAR signature is verified by the F-Droid client on the device,
+    and the APK signer cert is re-pinned by fdroid-store at ingest time —
+    so we don't re-verify here.
 
-    On parse failure the underlying exception is logged with the full
-    detail (``upstream_url`` + ``exc_info=True``) but only a generic
-    message is bubbled up to the caller's HTTP response — leaking
-    stack-trace-flavoured strings to a public API would help an
-    attacker fingerprint the index format / library versions.
+    Failures are logged with full detail (``exc_info=True``); only a
+    generic message reaches the HTTP response (see
+    :data:`_FETCH_ERR_MESSAGES`) so we don't help an attacker fingerprint
+    the index format or library versions.
     """
     url = f"{repo_url.rstrip('/')}/index-v1.jar"
     try:
         async with httpx.AsyncClient(
             timeout=_INDEX_TIMEOUT,
-            follow_redirects=True,  # IzzyOnDroid + others 301 to cdn
+            follow_redirects=False,
             limits=httpx.Limits(max_keepalive_connections=4),
         ) as client:
-            async with client.stream("GET", url) as res:
+            # IzzyOnDroid + others 301 to a CDN. The helper walks redirects
+            # manually so the SSRF guard re-runs against every Location
+            # header — ``follow_redirects=True`` would happily chase a 302
+            # to an RFC1918 IP or the cloud-metadata service.
+            res = await _safe_get_following_redirects(client, url)
+            try:
                 if res.status_code != 200:
                     log.warning(
                         "index fetch failed: upstream=%s status=%s",
-                        url,
+                        res.request.url,
                         res.status_code,
                     )
                     raise FetchError(
@@ -224,13 +316,11 @@ async def _fetch_index_v1(repo_url: str) -> dict[str, Any]:
                         raise FetchError(
                             f"index file exceeds {_MAX_INDEX_BYTES} bytes",
                             http=502,
-                            code="upstream",
+                            code="too_large",
                         )
+            finally:
+                await res.aclose()
     except httpx.HTTPError as exc:
-        # Transport-level failures (DNS / connect / timeout / read).
-        # Log the type + cause server-side; expose only a generic
-        # message — the raw exception string would leak library
-        # versions and internal paths.
         log.warning(
             "index transport error: upstream=%s exc_type=%s",
             url,
@@ -248,8 +338,6 @@ async def _fetch_index_v1(repo_url: str) -> dict[str, Any]:
             with zf.open("index-v1.json") as fp:
                 return json.load(fp)
     except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as exc:
-        # Same recipe as the transport branch above: log richly,
-        # respond generically.
         log.warning(
             "could not parse index-v1.jar: upstream=%s exc_type=%s",
             url,
@@ -327,13 +415,12 @@ class FetchError(Exception):
         self.code = code
 
 
-# User-facing error messages keyed by FetchError.code. Static strings
-# only — what the caller sees if their /resolve request hits one of
-# the upstream-fetch failure modes. The richer detail (which library
-# raised, with traceback) is in the server logs.
+# User-facing error messages keyed by FetchError.code. Static strings —
+# the user-visible message never carries exception-derived text.
 _FETCH_ERR_MESSAGES: dict[str, str] = {
     "not_found": "upstream index not found",
     "upstream": "upstream index could not be reached",
+    "too_large": "upstream index exceeds the configured size limit",
     "bad_response": "upstream index could not be parsed",
 }
 
@@ -353,27 +440,21 @@ async def resolve(body: dict[str, Any]) -> Any:
     if not isinstance(url, str) or not url:
         return _err("bad_request", "missing url")
 
-    parsed = _parse_url(url)
+    parsed = await _parse_url(url)
     if isinstance(parsed, str):
-        # Author-written validation message (see _parse_url); not a
-        # library-raised exception, so safe to echo back to the caller.
         return _err("bad_request", parsed)
     repo_url, package = parsed
 
     try:
         index = await _fetch_index_v1(repo_url)
     except FetchError as exc:
-        # The FetchError messages are already author-written static
-        # strings (see ``_fetch_index_v1``), but static analysers
-        # (CodeQL py/stack-trace-exposure) still mark ``str(exc)`` as
-        # a tainted source because the value originates from an
-        # ``Exception`` object. We break the visible taint flow by
-        # routing the user-facing message through a static dict keyed
-        # on ``exc.code`` — the lookup result is constant data, not
-        # exception-derived. Operators retain full traceback context
-        # in the structured server logs already emitted at the throw
-        # site.
-        return _err(exc.code, _FETCH_ERR_MESSAGES.get(exc.code, "upstream error"), http=exc.http)
+        # Look up the user-visible message by code — the dict value is
+        # constant data, so ``str(exc)`` never reaches the response.
+        return _err(
+            exc.code,
+            _FETCH_ERR_MESSAGES.get(exc.code, "upstream error"),
+            http=exc.http,
+        )
 
     apk = _pick_latest_apk(index, package)
     if apk is None:
@@ -415,10 +496,17 @@ async def resolve(body: dict[str, Any]) -> Any:
         )
 
     # Take the SHA-256 hash from the index for the optional verifier.
+    # The hex-only regex catches garbage / accidentally-padded strings —
+    # without it, a malformed hash would propagate to the backend and stamp
+    # every future scan of this source as ERROR (sha mismatch).
     hash_kind = apk.get("hashType")
     hash_hex = apk.get("hash")
     sha256_hint: str | None = None
-    if hash_kind == "sha256" and isinstance(hash_hex, str) and len(hash_hex) == 64:
+    if (
+        hash_kind == "sha256"
+        and isinstance(hash_hex, str)
+        and re.fullmatch(r"[0-9a-fA-F]{64}", hash_hex)
+    ):
         sha256_hint = hash_hex.lower()
 
     size_bytes: int | None = None

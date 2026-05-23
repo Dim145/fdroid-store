@@ -579,11 +579,21 @@ function AddSourceSheet({
   useEffect(() => {
     credentialIdRef.current = credentialId;
   }, [credentialId]);
+  // Live id of the popup-close watcher so we can clear it on unmount or
+  // when the sheet closes — otherwise a user that abandons OAuth and
+  // navigates away leaves a 700 ms interval firing setState forever.
+  const watcherRef = useRef<number | null>(null);
 
   // Reset everything when the sheet re-opens. Without this, picking a
   // proxy → opening the sheet again would keep the previous selection.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      if (watcherRef.current !== null) {
+        window.clearInterval(watcherRef.current);
+        watcherRef.current = null;
+      }
+      return;
+    }
     setStep("proxy");
     setPickedProxy(null);
     setPickedProvider(null);
@@ -594,6 +604,19 @@ function AddSourceSheet({
     setOauthBusy(false);
     setSubmitting(false);
   }, [open]);
+
+  // Unmount-safety net. If the parent unmounts this whole sub-tree while
+  // an OAuth flow is in flight, the interval above wouldn't be cleared
+  // by the ``open=false`` branch (the cleanup runs but ``open`` was true
+  // up to that moment). This cleanup catches the unmount path.
+  useEffect(() => {
+    return () => {
+      if (watcherRef.current !== null) {
+        window.clearInterval(watcherRef.current);
+        watcherRef.current = null;
+      }
+    };
+  }, []);
 
   // postMessage listener for the OAuth popup. We mount it ONCE per sheet
   // open and tear it down on close. The state guard is what protects us
@@ -666,14 +689,21 @@ function AddSourceSheet({
         toast.error(t("myApps.edit.proxySources.popupBlocked"));
         return;
       }
-      // If the user closes the popup without finishing, we won't ever
-      // see a postMessage. Watch the window.closed flag so the spinner
-      // doesn't hang forever. The ref mirror is what gives us the latest
-      // credential at fire time — closing over the state binding would
-      // freeze it at popup-open and miss messages that arrived since.
-      const closeWatcher = window.setInterval(() => {
+      // Clear any prior watcher (the user can rapidly retry by clicking
+      // Connect again before closing the previous popup).
+      if (watcherRef.current !== null) {
+        window.clearInterval(watcherRef.current);
+      }
+      // Watch the popup's ``closed`` flag so an abandoned dance doesn't
+      // hang the spinner forever. The credential-id ref carries the
+      // latest message-handler result; closing over state would freeze
+      // it at popup-open.
+      watcherRef.current = window.setInterval(() => {
         if (!popup.closed) return;
-        window.clearInterval(closeWatcher);
+        if (watcherRef.current !== null) {
+          window.clearInterval(watcherRef.current);
+          watcherRef.current = null;
+        }
         if (!credentialIdRef.current) {
           setOauthBusy(false);
           toast.error(t("myApps.edit.proxySources.popupClosed"));

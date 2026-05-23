@@ -316,42 +316,13 @@
   border-radius: 4px;
 }
 /* Hard breaks (Shift+Enter inside a paragraph) get a tiny visual gap.
-   The ``:not(.ProseMirror-trailingBreak)`` exclusion is critical: Tiptap
-   inserts ``<br class="ProseMirror-trailingBreak">`` into every empty
-   paragraph so the line has height, and the browser positions the caret
-   relative to that break. Applying ``display: block; margin-top``
-   to that managed break breaks the caret rendering on empty lines
-   (visible as a stray horizontal sliver instead of a vertical caret). */
+   The ``:not(.ProseMirror-trailingBreak)`` exclusion leaves Tiptap's
+   managed break (inserted into every empty paragraph for line-height)
+   alone — overriding its display would clip the caret on empty lines. */
 .prose-md br:not(.ProseMirror-trailingBreak) {
   content: "";
   display: block;
   margin-top: 0.2em;
-}
-
-/* Tiptap empty-editor placeholder. The Placeholder extension adds the
-   ``is-editor-empty`` class to the first paragraph when the editor is
-   empty; we render the placeholder text via a ``:before`` pseudo so it
-   doesn't interfere with ProseMirror's selection / caret model.
-
-   Absolute positioning (rather than Tiptap's stock ``float: left;
-   height: 0``) keeps the caret crisp — the floated variant clipped the
-   caret to a 1-2 px sliver on the leading edge of the line in some
-   browsers because the float occupied the same baseline. The empty
-   ``<p>`` keeps its natural line-height + caret; the placeholder rides
-   on top as an absolutely-positioned overlay. */
-.prose-md .is-editor-empty:first-child {
-  position: relative;
-}
-.prose-md .is-editor-empty:first-child::before {
-  content: attr(data-placeholder);
-  position: absolute;
-  inset-inline-start: 0;
-  inset-block-start: 0;
-  color: rgb(var(--ink-mute));
-  pointer-events: none;
-  /* Prevent the placeholder from being selected / triggering text
-     cursor on hover — both belong to the editor's empty paragraph. */
-  user-select: none;
 }
 
 /* Line-clamp variant: collapses the rendered description to N lines on the

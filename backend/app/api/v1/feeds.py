@@ -23,6 +23,7 @@ Private apps never appear.
 from __future__ import annotations
 
 import html
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -67,8 +68,15 @@ def _wants_inline_xml(request: Request) -> bool:
     return "text/html" in accept and not feedy
 
 
+# XML 1.0 forbids most C0 control characters (everything 0x00-0x1F except
+# tab, LF, CR). ``html.escape`` doesn't strip them, so an uploader who
+# slips a NUL byte into ``whats_new`` would break every strict feed reader
+# subscribed to their app. Drop them before escaping.
+_XML_INVALID_CHARS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
 def _xml_escape(text: str | None) -> str:
-    return html.escape(text or "", quote=True)
+    return html.escape(_XML_INVALID_CHARS.sub("", text or ""), quote=True)
 
 
 async def _repo_base(db) -> str:
