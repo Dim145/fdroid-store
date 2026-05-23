@@ -27,6 +27,7 @@ from app.models.app import App, AppStatus, AppVisibility, Category, Localization
 from app.models.apk import ApkStatus
 from app.models.audit import DownloadEvent
 from app.models.user import User, UserRole
+from app.schemas.apk_proxy import AppCreateFromProxy
 from app.schemas.app import (
     AppCreate,
     AppCreateFromGithub,
@@ -617,6 +618,237 @@ async def create_app_with_github_source(
         # also hydrate ``localizations`` because AppDetail iterates it
         # during serialisation and a lazy load inside an async context
         # would raise MissingGreenlet.
+        result = (
+            await db.execute(
+                select(App)
+                .execution_options(populate_existing=True)
+                .options(
+                    selectinload(App.categories),
+                    selectinload(App.apks),
+                    selectinload(App.owner),
+                    selectinload(App.screenshots),
+                    selectinload(App.localizations),
+                )
+                .where(App.id == app.id)
+            )
+        ).scalar_one()
+        out = AppDetail.model_validate(result)
+        out.owner_username = result.owner.username if result.owner else None
+        _attach_media_token(out, result, user)
+        return out
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/with-proxy-source", response_model=AppDetail, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/minute")
+async def create_app_with_proxy_source(
+    request: Request,
+    payload: AppCreateFromProxy,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_uploader)],
+) -> AppDetail:
+    """Create an App + first APK + ApkProxySource in one shot.
+
+    Mirror of :func:`create_app_with_github_source` but the APK comes
+    from a configured proxy (F-Droid mirror, Patreon, kemono.cr, …).
+    The proxy is re-resolved + re-downloaded server-side so the client
+    can't smuggle a tampered binary through the inspect response.
+
+    After creation the daily proxy cron will keep this app in sync with
+    upstream the same way it does for sources attached via the per-app
+    wizard.
+    """
+    import json as _json
+    from datetime import UTC as _UTC, datetime as _dt
+
+    from app.models.apk_proxy import (
+        ApkProxy,
+        ApkProxyHealthStatus,
+        ApkProxySource,
+        ApkProxySourceStatus,
+    )
+    from app.schemas.apk_proxy import ResolveResponse
+    from app.services.apk_proxy_client import ApkProxyError, resolve
+    from app.services.apk_proxy_download import download_apk, verify_sha256_hint
+    from app.services.crypto import encrypt as _encrypt
+    from app.services.quotas import ensure_can_create_app, ensure_can_upload_apk
+
+    # ---- 1. Validate proxy + provider ---------------------------------
+    proxy = (
+        await db.execute(select(ApkProxy).where(ApkProxy.id == payload.proxy_id))
+    ).scalar_one_or_none()
+    if proxy is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Proxy not found",
+        )
+    if not proxy.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That proxy is disabled.",
+        )
+    if proxy.last_health_status != ApkProxyHealthStatus.HEALTHY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That proxy is not healthy. Ask an admin to fix or refresh it.",
+        )
+    catalogue = proxy.cached_sources_json or {}
+    providers = catalogue.get("providers", []) if isinstance(catalogue, dict) else []
+    if not any(
+        isinstance(p, dict) and p.get("id") == payload.provider for p in providers
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Provider {payload.provider!r} is not in this proxy's catalogue. "
+                "Refresh the proxy or pick a different one."
+            ),
+        )
+
+    await ensure_can_create_app(db, user)
+
+    # ---- 2. Resolve + download ---------------------------------------
+    try:
+        resolved: ResolveResponse | None = await resolve(
+            proxy,
+            provider=payload.provider,
+            url=str(payload.source_url),
+            last_release_id=None,  # New-app flow: always a fresh resolve.
+            secrets=payload.secrets or {},
+        )
+    except ApkProxyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Proxy {proxy.name!r} returned no release for {payload.source_url!r}."
+            ),
+        )
+
+    max_bytes = await _apk_size_cap_bytes(db)
+    if (
+        resolved.apk_size_bytes is not None
+        and resolved.apk_size_bytes > max_bytes
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Proxy advertised {resolved.apk_size_bytes} B; "
+                f"the configured cap is {max_bytes} B."
+            ),
+        )
+    try:
+        tmp_path = await download_apk(
+            apk_url=str(resolved.apk_url),
+            headers=resolved.apk_headers,
+            max_bytes=max_bytes,
+        )
+    except ApkProxyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Download failed: {exc}",
+        ) from exc
+
+    try:
+        # ---- 3. Quota + AV scan + parse + cross-checks ------------------
+        await ensure_can_upload_apk(db, user, incoming_size_bytes=tmp_path.stat().st_size)
+        from app.api.v1.apks import _maybe_scan_upload as _apks_scan
+
+        await _apks_scan(db, tmp_path=tmp_path)
+        if resolved.apk_sha256_hint:
+            try:
+                verify_sha256_hint(tmp_path, resolved.apk_sha256_hint)
+            except ApkProxyError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(exc),
+                ) from exc
+        meta = await parse_or_400(tmp_path)
+        if not _PACKAGE_NAME_RE.match(meta.package_name):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="parsed package name is not a valid Android package id",
+            )
+        if meta.version_code != resolved.version_code:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Manifest versionCode {meta.version_code} != "
+                    f"proxy-advertised {resolved.version_code}"
+                ),
+            )
+        if (
+            await db.execute(select(App).where(App.package_name == meta.package_name))
+        ).scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Package {meta.package_name} already exists",
+            )
+
+        # ---- 4. Create App + Apk row ---------------------------------
+        # Proxy resolve doesn't return repo-level metadata, so the
+        # listing fields fall back to the user's input only (no GitHub-
+        # style auto-fill). If they leave a field blank, it stays blank.
+        app = App(
+            package_name=meta.package_name,
+            name=payload.name,
+            summary=payload.summary,
+            description=payload.description,
+            license=payload.license,
+            website=str(payload.website) if payload.website else None,
+            source_code=str(payload.source_code) if payload.source_code else None,
+            issue_tracker=str(payload.issue_tracker) if payload.issue_tracker else None,
+            author_name=payload.author_name,
+            visibility=payload.visibility,
+            status=AppStatus.DRAFT,
+            owner_id=user.id,
+            apks=[],
+            screenshots=[],
+            localizations=[],
+        )
+        db.add(app)
+        await db.flush()
+
+        apk = await attach_apk_to_app(
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+        )
+        from app.services.apk_eviction import evict_oldest_if_needed
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+
+        # ---- 5. Wire the persistent ApkProxySource ------------------
+        # Snapshot the just-imported release so the cron sees it as
+        # up_to_date next tick instead of re-importing.
+        db.add(
+            ApkProxySource(
+                app_id=app.id,
+                proxy_id=proxy.id,
+                provider=payload.provider,
+                source_url=str(payload.source_url),
+                # Encrypt the (now-validated) secrets blob. Empty dict =
+                # NULL on disk so the row reads as "no auth configured".
+                secrets_encrypted=(
+                    _encrypt(_json.dumps(payload.secrets, sort_keys=True))
+                    if payload.secrets
+                    else None
+                ),
+                enabled=True,
+                last_release_id=resolved.release_id,
+                last_release_at=resolved.published_at or _dt.now(_UTC),
+                last_scanned_at=_dt.now(_UTC),
+                last_status=ApkProxySourceStatus.IMPORTED,
+                created_by=user.id,
+            )
+        )
+
+        if apk.status == ApkStatus.PUBLISHED:
+            await enqueue_reindex()
+
+        # ---- 6. Reload with eager relationships for the response ----
         result = (
             await db.execute(
                 select(App)

@@ -22,22 +22,17 @@ the admin/jobs UI can group both source families under the same
 from __future__ import annotations
 
 import json
-import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
-import httpx
-from arq import cron
 from arq.connections import RedisSettings
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.core.logging import configure_logging, get_logger
+from app.core.logging import get_logger
 from app.models.apk import ApkStatus
 from app.models.apk_proxy import (
     ApkProxy,
@@ -48,6 +43,7 @@ from app.models.app import App
 from app.models.user import User
 from app.schemas.apk_proxy import ResolveResponse
 from app.services.apk_proxy_client import ApkProxyError, resolve
+from app.services.apk_proxy_download import download_apk, verify_sha256_hint
 from app.services.crypto import decrypt as fernet_decrypt
 
 log = get_logger(__name__)
@@ -106,117 +102,6 @@ def _decrypt_secrets(src: ApkProxySource) -> dict[str, str]:
     # Coerce everything to str — the protocol declares
     # ``secrets: dict[str, str]``.
     return {str(k): str(v) for k, v in parsed.items()}
-
-
-def _assert_apk_url_safe(url: str) -> None:
-    """SSRF guard on the proxy-supplied ``apk_url``. Refuses RFC 1918 /
-    loopback / link-local / metadata-IP destinations regardless of who
-    supplied the URL — the trust boundary with the proxy is treated the
-    same as the trust boundary with any third-party forge.
-    """
-    from app.services.github_releases import _is_private_ip, _resolves_to_blocked
-    import ipaddress
-
-    parsed = urlsplit(url)
-    scheme = (parsed.scheme or "").lower()
-    if scheme not in {"http", "https"}:
-        raise ApkProxyError(f"apk_url must be http(s): {url!r}", code="bad_response")
-    host = (parsed.hostname or "").strip()
-    if not host:
-        raise ApkProxyError(f"apk_url is missing a hostname: {url!r}", code="bad_response")
-    try:
-        as_ip = ipaddress.ip_address(host)
-        if _is_private_ip(str(as_ip)):
-            raise ApkProxyError(
-                f"apk_url resolves to a blocked range: {host}",
-                code="bad_response",
-            )
-    except ValueError:
-        if _resolves_to_blocked(host):
-            raise ApkProxyError(
-                f"apk_url resolves to a blocked range: {host}",
-                code="bad_response",
-            )
-
-
-async def _download_apk(
-    *,
-    apk_url: str,
-    headers: dict[str, str] | None,
-    max_bytes: int,
-) -> Path:
-    """Stream the APK from ``apk_url`` to a tempfile.
-
-    ``max_bytes`` is the admin-configured upload cap — the download is
-    aborted (and the partial tempfile unlinked) the moment we go over.
-    A proxy that lies about ``apk_size_bytes`` can't exhaust disk.
-
-    Returns the path; caller is responsible for ``unlink(missing_ok=True)``.
-    """
-    _assert_apk_url_safe(apk_url)
-    req_headers: dict[str, str] = {"User-Agent": "fdroid-store/1.2"}
-    if headers:
-        # Forward only string values; refuse anything else (a hostile
-        # proxy can't smuggle bytes / control characters via the headers).
-        for k, v in headers.items():
-            if isinstance(k, str) and isinstance(v, str):
-                req_headers[k] = v
-    timeout = httpx.Timeout(180.0, connect=15.0)
-    path: Path | None = None
-    total = 0
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".apk", delete=False) as tmp:
-            path = Path(tmp.name)
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                follow_redirects=False,
-            ) as client:
-                async with client.stream("GET", apk_url, headers=req_headers) as res:
-                    if res.status_code != 200:
-                        raise ApkProxyError(
-                            f"apk_url returned {res.status_code}",
-                            status_code=res.status_code,
-                            code="upstream",
-                        )
-                    async for chunk in res.aiter_bytes(1024 * 1024):
-                        if not chunk:
-                            continue
-                        total += len(chunk)
-                        if total > max_bytes:
-                            raise ApkProxyError(
-                                f"APK exceeds the configured {max_bytes} byte limit",
-                                code="upstream",
-                            )
-                        tmp.write(chunk)
-    except Exception:
-        if path is not None:
-            path.unlink(missing_ok=True)
-        raise
-    return path
-
-
-def _verify_sha256_hint(path: Path, hint: str) -> None:
-    """Recompute SHA-256 over the downloaded file; raise on mismatch.
-
-    The hint is optional in the protocol; when supplied, mismatches
-    almost certainly mean the proxy↔upstream link is compromised or the
-    artefact was retransformed in transit.
-    """
-    import hashlib
-
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        while True:
-            chunk = fh.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    got = h.hexdigest()
-    if got.lower() != hint.lower():
-        raise ApkProxyError(
-            f"apk_sha256_hint mismatch: declared {hint}, downloaded {got}",
-            code="bad_response",
-        )
 
 
 # ============================================================================
@@ -411,7 +296,7 @@ async def fetch_apk_proxy_source(ctx: dict, source_id: str) -> dict:
             return {"status": "error", "error": "apk_size_over_cap"}
 
         try:
-            tmp_path = await _download_apk(
+            tmp_path = await download_apk(
                 apk_url=str(resolved.apk_url),
                 headers=resolved.apk_headers,
                 max_bytes=max_bytes,
@@ -428,7 +313,7 @@ async def fetch_apk_proxy_source(ctx: dict, source_id: str) -> dict:
         # ---- 3. SHA-256 verification (when hinted) ------------------
         if resolved.apk_sha256_hint:
             try:
-                _verify_sha256_hint(tmp_path, resolved.apk_sha256_hint)
+                verify_sha256_hint(tmp_path, resolved.apk_sha256_hint)
             except ApkProxyError as exc:
                 tmp_path.unlink(missing_ok=True)
                 await _mark_error(

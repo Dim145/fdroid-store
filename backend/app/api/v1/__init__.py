@@ -47,7 +47,12 @@ api_router.include_router(stats.router, prefix="/stats", tags=["stats"])
 api_router.include_router(webauthn.me_router, prefix="/me/webauthn", tags=["webauthn"])
 api_router.include_router(webauthn.auth_router, prefix="/auth/webauthn", tags=["webauthn"])
 # Source-proxy registry + per-app source binding + popup OAuth return.
-# Three sibling routers in proxies.py for clean prefix separation.
+# Four sibling routers in proxies.py for clean prefix separation:
+#   * admin_router  — /admin/proxies          (admin CRUD)
+#   * public_router — /proxies                (uploader-readable wizard catalogue)
+#   * per_app_router — /apps/{id}/proxy-source (binding + manual scan)
+#   * auth_router   — /auth/proxy-callback    (popup OAuth return)
 api_router.include_router(proxies.admin_router, prefix="/admin/proxies", tags=["proxies"])
+api_router.include_router(proxies.public_router, prefix="/proxies", tags=["proxies"])
 api_router.include_router(proxies.per_app_router, prefix="/apps", tags=["proxies"])
 api_router.include_router(proxies.auth_router, prefix="/auth", tags=["proxies"])

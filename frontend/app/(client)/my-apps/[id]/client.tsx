@@ -29,6 +29,7 @@ import { AuthGuard } from "@/components/auth-guard";
 import { CollaboratorsSection } from "@/components/collaborators-section";
 import { DeployTokensSection } from "@/components/deploy-tokens-section";
 import { GithubSourceSection } from "@/components/github-source-section";
+import { ProxySourcesSection } from "@/components/proxy-sources-section";
 import { LocalizationsEditor } from "@/components/localizations-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -605,6 +606,7 @@ function ManageAppInner() {
     ...(latest ? [{ id: "permissions", label: t("myApps.edit.sections.permissions") }] : []),
     { id: "versions", label: t("myApps.edit.sections.versions") },
     { id: "github", label: t("myApps.edit.sections.githubSource") },
+    { id: "proxy-sources", label: t("myApps.edit.sections.proxySources") },
     { id: "ci", label: t("myApps.edit.sections.deployTokens") },
     { id: "collaborators", label: t("myApps.edit.sections.collaborators") },
   ];
@@ -1076,6 +1078,16 @@ function ManageAppInner() {
         subtitle={t("myApps.edit.sections.githubSourceSubtitle")}
       >
         <GithubSourceSection appId={app.id} onImported={() => void load()} />
+      </Section>
+
+      {/* ──── Proxy-driven sources (F-Droid mirror, Patreon, kemono, …) ──── */}
+      <Section
+        id="proxy-sources"
+        step={stepOf("proxy-sources")}
+        title={t("myApps.edit.sections.proxySources")}
+        subtitle={t("myApps.edit.sections.proxySourcesSubtitle")}
+      >
+        <ProxySourcesSection appId={app.id} onImported={() => void load()} />
       </Section>
 
       {/* ──── CI deploy tokens ──── */}

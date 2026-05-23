@@ -453,6 +453,27 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    /** Probe a configured proxy: resolves + downloads + parses, returns
+     *  metadata WITHOUT writing to the DB. Used by the New App page's
+     *  "From proxy" mode to preview what's about to be imported. */
+    inspectProxySource: (payload: {
+      proxy_id: string;
+      provider: string;
+      source_url: string;
+      secrets?: Record<string, string>;
+    }) =>
+      apiFetch<ProxyApkInspect>("/api/v1/apks/inspect-proxy-source", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    /** Create the App + first APK + ApkProxySource in a single call.
+     *  Re-resolves + re-downloads server-side so the client can't
+     *  smuggle a tampered binary through the inspect response. */
+    createWithProxySource: (payload: AppCreateFromProxyPayload) =>
+      apiFetch<AppDetail>("/api/v1/apps/with-proxy-source", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     deleteApk: (apkId: string) =>
       apiFetch<void>(`/api/v1/apks/${apkId}`, { method: "DELETE" }),
     // Signed, time-limited URL the browser can hit directly via <a href>
@@ -831,6 +852,64 @@ export const api = {
       ),
   },
 
+  // ---------- Source proxies (uploader-readable catalogue) ----------
+  // Mirrors ``GET /api/v1/proxies``: returns only enabled + healthy
+  // proxies that have a non-empty cached catalogue, so the per-app
+  // wizard never offers an unusable option. The admin variant lives
+  // under ``api.admin.proxies`` and surfaces unhealthy rows too.
+  //
+  // The public schema is ``ApkProxyPublicRead`` — slimmed to
+  // ``{id, name, cached_sources_json}`` so the ``base_url`` (which
+  // may reveal internal hostnames or custom ports) stays admin-only.
+  proxies: {
+    listAvailable: () => apiFetch<ApkProxyPublicRead[]>("/api/v1/proxies"),
+    /** Mint a popup URL for the New App page (no app id yet). The
+     *  per-app wizard uses ``api.proxySources.oauthBegin`` instead;
+     *  both return ``{popup_url, state}`` so the SPA's postMessage
+     *  listener can be the same. */
+    beginOAuthNewApp: (proxyId: string, provider: string) =>
+      apiFetch<{ popup_url: string; state: string }>(
+        `/api/v1/proxies/${proxyId}/oauth-begin`,
+        { method: "POST", body: JSON.stringify({ provider }) },
+      ),
+  },
+
+  // ---------- Per-app proxy sources ----------
+  // Wraps ``/api/v1/apps/{id}/proxy-source[...]``. Each app can hold
+  // multiple sources (one per provider) — unlike the singleton-style
+  // ``githubSource`` endpoints, all mutations carry the source id.
+  proxySources: {
+    list: (appId: string) =>
+      apiFetch<ApkProxySourceRead[]>(`/api/v1/apps/${appId}/proxy-source`),
+    create: (appId: string, payload: ProxySourceCreatePayload) =>
+      apiFetch<ApkProxySourceRead>(`/api/v1/apps/${appId}/proxy-source`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    update: (appId: string, sourceId: string, payload: ProxySourceUpdatePayload) =>
+      apiFetch<ApkProxySourceRead>(
+        `/api/v1/apps/${appId}/proxy-source/${sourceId}`,
+        { method: "PATCH", body: JSON.stringify(payload) },
+      ),
+    remove: (appId: string, sourceId: string) =>
+      apiFetch<void>(`/api/v1/apps/${appId}/proxy-source/${sourceId}`, {
+        method: "DELETE",
+      }),
+    scanNow: (appId: string, sourceId: string) =>
+      apiFetch<{ queued: boolean; source_id: string }>(
+        `/api/v1/apps/${appId}/proxy-source/${sourceId}/scan`,
+        { method: "POST" },
+      ),
+    /** Mint the popup URL for an OAuth provider. The caller opens
+     *  ``window.open(popup_url)`` and listens for a postMessage
+     *  carrying ``{ type: "proxy_oauth_done", credential_id, state }``. */
+    oauthBegin: (appId: string, payload: { proxy_id: string; provider: string }) =>
+      apiFetch<{ popup_url: string; state: string }>(
+        `/api/v1/apps/${appId}/proxy-source/oauth-begin`,
+        { method: "POST", body: JSON.stringify(payload) },
+      ),
+  },
+
   // ---------- Upstream metadata.yml import ----------
   importMetadata: (yamlSource: string) =>
     apiFetch<MetadataImportResult>("/api/v1/apps/import-metadata", {
@@ -995,6 +1074,18 @@ export type ApkProxyRead = {
   updated_at: string;
 };
 
+/** Uploader-facing slice of a proxy row. The admin schema
+ *  (:type:`ApkProxyRead`) carries ``base_url``, health detail, and
+ *  timestamps; this slim shape is what ``GET /api/v1/proxies`` returns
+ *  on non-admin paths so the proxy's URL never leaks past the admin
+ *  page. ``id`` + ``name`` are enough to drive the per-app wizard,
+ *  the cached catalogue feeds the provider picker. */
+export type ApkProxyPublicRead = {
+  id: string;
+  name: string;
+  cached_sources_json: ProxySourcesCatalogue | null;
+};
+
 /** Per-app proxy source row. Returned by /apps/{id}/proxy-source. */
 export type ApkProxySourceRead = {
   id: string;
@@ -1019,6 +1110,29 @@ export type ApkProxySourceRead = {
   suspended_until: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** Body for ``POST /apps/{id}/proxy-source``. ``secrets`` shape is
+ *  defined by the chosen provider's ``secret_fields`` declaration; for
+ *  ``oauth2`` providers it's a single ``{credential_id: "<uuid>"}``
+ *  collected from the popup callback. */
+export type ProxySourceCreatePayload = {
+  proxy_id: string;
+  provider: string;
+  source_url: string;
+  secrets?: Record<string, string>;
+  enabled?: boolean;
+};
+
+/** Body for ``PATCH /apps/{id}/proxy-source/{sid}``. Three semantics:
+ *    * key absent → leave alone
+ *    * ``secrets: {...}`` → replace
+ *    * ``secrets: {}`` → clear (next scan will return ``auth_required``)
+ */
+export type ProxySourceUpdatePayload = {
+  source_url?: string;
+  secrets?: Record<string, string>;
+  enabled?: boolean;
 };
 
 export type RescanResult = {
@@ -1260,6 +1374,53 @@ export type AppCreateFromGithubPayload =
     /** Per-source PAT, persisted alongside the source. */
     access_token?: string | null;
   };
+
+/** Result returned by ``POST /apks/inspect-proxy-source`` — mirrors
+ *  ``GithubApkInspect`` on the APK side, plus the proxy-source context
+ *  needed to wire the persistent ApkProxySource row at create time. */
+export type ProxyApkInspect = {
+  // APK metadata (identical to ApkInspect minus staging_token)
+  package_name: string;
+  app_name: string | null;
+  version_code: number;
+  version_name: string;
+  min_sdk: number | null;
+  target_sdk: number | null;
+  sha256: string;
+  size_bytes: number;
+  signer_sha256: string;
+  permissions: string[];
+  native_code: string[];
+  has_icon: boolean;
+  detected_anti_features: Record<string, string[]>;
+  // Proxy context
+  proxy_id: string;
+  proxy_name: string;
+  provider: string;
+  provider_name: string;
+  source_url: string;
+  release_id: string;
+  release_published_at: string | null;
+};
+
+/** Payload for ``POST /apps/with-proxy-source`` — listing fields plus
+ *  the proxy descriptor (proxy_id / provider / source_url / secrets).
+ *  Package name comes from the parsed APK server-side. */
+export type AppCreateFromProxyPayload = {
+  name: string;
+  summary?: string;
+  description?: string;
+  license?: string;
+  website?: string;
+  source_code?: string;
+  issue_tracker?: string;
+  author_name?: string;
+  visibility?: "public" | "private";
+  proxy_id: string;
+  provider: string;
+  source_url: string;
+  secrets?: Record<string, string>;
+};
 
 /** Result returned by ``POST /apks/inspect-github`` — same fields as
  *  ``ApkInspect`` plus the GitHub context AND the repo-level metadata

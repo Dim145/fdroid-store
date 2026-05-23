@@ -65,6 +65,27 @@ class ApkProxyRead(BaseModel):
     updated_at: datetime
 
 
+class ApkProxyPublicRead(BaseModel):
+    """Uploader-facing view of a proxy. Slimmed down from
+    :class:`ApkProxyRead` so non-admin pages don't leak operational
+    detail: the ``base_url`` (which can reveal internal hostnames /
+    custom ports), the ``has_auth_token`` flag, ``created_by``, and
+    every ``last_health_*`` / ``cached_sources_at`` / timestamp field
+    stay admin-only.
+
+    The cached catalogue (``cached_sources_json``) IS exposed because
+    the per-app wizard reads provider descriptors out of it — but the
+    public endpoint already filters to enabled + healthy + non-empty
+    catalogue, so the only catalogues uploaders see are usable ones.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    cached_sources_json: dict[str, Any] | None
+
+
 # ---------------------------------------------------------------------------
 # Proxy catalogue (``GET /sources`` shape, used to validate the response)
 # ---------------------------------------------------------------------------
@@ -194,3 +215,84 @@ class ApkProxySourceUpdate(BaseModel):
     source_url: HttpUrl | None = None
     secrets: dict[str, str] | None = None
     enabled: bool | None = None
+
+
+# ---------------------------------------------------------------------------
+# /apps/inspect-proxy-source + /apps/with-proxy-source (new-app flow)
+# ---------------------------------------------------------------------------
+
+
+class ProxyInspectRequest(BaseModel):
+    """Body for ``POST /api/v1/apks/inspect-proxy-source``.
+
+    Same shape as :class:`ApkProxySourceCreate` minus the listing fields:
+    the user pastes a URL + secrets, the backend calls the proxy's
+    ``/resolve``, downloads the APK, parses the manifest, and returns
+    enough metadata for the New App page to render a preview without
+    writing anything to the DB.
+    """
+
+    proxy_id: uuid.UUID
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_-]+$")
+    source_url: HttpUrl
+    secrets: dict[str, str] = Field(default_factory=dict)
+
+
+class ProxyApkInspect(BaseModel):
+    """Response from ``POST /api/v1/apks/inspect-proxy-source``.
+
+    Mirrors :class:`GithubApkInspect` field-for-field on the APK side so
+    the New App page can reuse the same preview card, plus a tail of
+    proxy-context fields (``release_id``, ``provider`` name, ...) the
+    second create call needs to wire back up to the persistent source row.
+    """
+
+    # APK metadata (identical to ApkInspect)
+    package_name: str
+    app_name: str | None
+    version_code: int
+    version_name: str
+    min_sdk: int | None
+    target_sdk: int | None
+    sha256: str
+    size_bytes: int
+    signer_sha256: str
+    permissions: list[str]
+    native_code: list[str]
+    has_icon: bool
+    detected_anti_features: dict[str, list[str]]
+    # Proxy context — needed by the with-proxy-source call AND surfaced
+    # by the preview card so the user sees what they're about to attach.
+    proxy_id: uuid.UUID
+    proxy_name: str
+    provider: str
+    provider_name: str
+    source_url: str
+    release_id: str
+    release_published_at: datetime | None
+
+
+class AppCreateFromProxy(BaseModel):
+    """Body for ``POST /api/v1/apps/with-proxy-source``.
+
+    Combines the App listing fields (mirroring :class:`AppCreate`) with
+    the proxy-source descriptor (proxy_id / provider / source_url /
+    secrets). The backend re-resolves + re-downloads server-side — the
+    inspect-time response is advisory only.
+    """
+
+    # Listing
+    name: str = Field(min_length=1, max_length=255)
+    summary: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=4096)
+    license: str | None = Field(default=None, max_length=64)
+    website: HttpUrl | None = None
+    source_code: HttpUrl | None = None
+    issue_tracker: HttpUrl | None = None
+    author_name: str | None = Field(default=None, max_length=128)
+    visibility: Literal["public", "private"] = "public"
+    # Proxy descriptor
+    proxy_id: uuid.UUID
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_-]+$")
+    source_url: HttpUrl
+    secrets: dict[str, str] = Field(default_factory=dict)

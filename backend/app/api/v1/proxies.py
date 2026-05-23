@@ -41,6 +41,7 @@ from app.models.app import App
 from app.models.user import User
 from app.schemas.apk_proxy import (
     ApkProxyCreate,
+    ApkProxyPublicRead,
     ApkProxyRead,
     ApkProxySourceCreate,
     ApkProxySourceRead,
@@ -60,6 +61,7 @@ from app.services.crypto import decrypt as fernet_decrypt, encrypt as fernet_enc
 admin_router = APIRouter()
 per_app_router = APIRouter()
 auth_router = APIRouter()
+public_router = APIRouter()
 
 log = get_logger(__name__)
 
@@ -793,3 +795,109 @@ async def proxy_oauth_callback(
 </body>
 </html>"""
     return HTMLResponse(content=html)
+
+
+# ============================================================================
+# PUBLIC (uploader-readable) — /proxies
+# ============================================================================
+#
+# The per-app wizard needs to render the catalogue of proxies the user
+# can bind a source to. Non-admins can't see /admin/proxies (and
+# shouldn't — admin metadata like ``created_by`` / ``last_health_error``
+# carries operational detail they don't need). This endpoint returns
+# the subset of fields the wizard renders, filtered to proxies that
+# are actually usable (enabled + healthy + catalogue cached).
+
+
+@public_router.get("", response_model=list[ApkProxyPublicRead])
+async def list_available_proxies(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_uploader)],
+) -> list[ApkProxyPublicRead]:
+    """List proxies the uploader can pick from in the per-app wizard.
+
+    Filters to ``enabled=true`` AND ``last_health_status=healthy`` AND
+    a non-empty ``cached_sources_json.providers[]``. A proxy that's
+    misconfigured or temporarily unreachable simply doesn't appear —
+    the admin sees the failure on /admin/proxies, the uploader sees a
+    shorter list.
+
+    Returns the slimmed :class:`ApkProxyPublicRead` shape: just
+    ``{id, name, cached_sources_json}``. The ``base_url`` is admin-only
+    because it can reveal internal hostnames / custom ports / private
+    network paths the operator doesn't want uploaders to see. The
+    proxy is reached server-side; nothing the uploader does requires
+    knowing its URL."""
+    rows = (
+        await db.execute(
+            select(ApkProxy)
+            .where(ApkProxy.enabled.is_(True))
+            .where(ApkProxy.last_health_status == ApkProxyHealthStatus.HEALTHY)
+            .order_by(ApkProxy.name.asc())
+        )
+    ).scalars().all()
+    return [
+        ApkProxyPublicRead.model_validate(p)
+        for p in rows
+        if (p.cached_sources_json or {}).get("providers")
+    ]
+
+
+@public_router.post("/{proxy_id}/oauth-begin", response_model=dict)
+async def begin_proxy_oauth_new_app(
+    proxy_id: uuid.UUID,
+    body: dict,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_uploader)],
+) -> dict:
+    """Mint a popup URL for the New App page's "From proxy" flow.
+
+    Per-app variant (``POST /apps/{id}/proxy-source/oauth-begin``) requires
+    an app id — but the New App page can't have one yet. This sibling
+    endpoint signs a state with ``app_id=None`` so the callback flow
+    still HMAC-verifies, and crucially the ``popup_url`` is built
+    server-side so the proxy's ``base_url`` never leaks to the browser.
+
+    Body: ``{"provider": "<id>"}``. The proxy + provider are validated
+    against the cached catalogue the same way the per-app endpoint
+    does.
+    """
+    try:
+        provider = str(body.get("provider"))
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="provider is required",
+        )
+    proxy = await _load_proxy_or_404(db, proxy_id)
+    if not proxy.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That proxy is disabled.",
+        )
+    catalogue = proxy.cached_sources_json or {}
+    providers = catalogue.get("providers", []) if isinstance(catalogue, dict) else []
+    descriptor = next(
+        (p for p in providers if isinstance(p, dict) and p.get("id") == provider),
+        None,
+    )
+    if descriptor is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Provider {provider!r} not found on proxy {proxy.name!r}",
+        )
+    if descriptor.get("auth_kind") != "oauth2":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Provider {provider!r} does not declare oauth2",
+        )
+    begin_path = (descriptor.get("auth_oauth") or {}).get("begin_path") or f"/auth/{provider}/begin"
+    state = _sign_oauth_state(
+        user_id=user.id, proxy_id=proxy.id, provider=provider, app_id=None
+    )
+    return_to = f"{settings.public_api_url.rstrip('/')}/api/v1/auth/proxy-callback"
+    popup_url = (
+        f"{proxy.base_url.rstrip('/')}{begin_path}"
+        f"?return_to={return_to}&state={state}"
+    )
+    return {"popup_url": popup_url, "state": state}

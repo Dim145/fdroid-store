@@ -22,6 +22,10 @@ from app.models.app import App, AppStatus, AppVisibility
 from app.models.package_signer import PackageSignerPin
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
+from app.schemas.apk_proxy import (
+    ProxyApkInspect,
+    ProxyInspectRequest,
+)
 from app.schemas.app import (
     ApkInspect,
     ApkRead,
@@ -537,6 +541,182 @@ async def inspect_github(
             repo_homepage=repo_meta.homepage if repo_meta else None,
             repo_license_spdx=repo_meta.license_spdx if repo_meta else None,
             repo_owner_login=repo_meta.owner_login if repo_meta else None,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/inspect-proxy-source", response_model=ProxyApkInspect)
+@limiter.limit("10/minute")
+async def inspect_proxy_source(
+    request: Request,
+    payload: ProxyInspectRequest,
+    db: DbSession,
+    user: Annotated[User, Depends(get_current_uploader)],
+) -> ProxyApkInspect:
+    """Probe a proxy source: call ``/resolve``, download the APK, parse
+    its metadata. No DB writes.
+
+    Powers the "From proxy" mode of the New App page so the operator
+    sees what they're about to import (package name, signer, version)
+    before committing. The created-by side of the flow lives at
+    ``POST /apps/with-proxy-source``, which re-resolves + re-downloads —
+    nothing is staged between the two calls so the proxy is free to mint
+    a fresh signed URL each time.
+    """
+    from app.models.apk_proxy import ApkProxy, ApkProxyHealthStatus
+    from app.schemas.apk_proxy import ResolveResponse
+    from app.services.apk_proxy_client import ApkProxyError, resolve
+    from app.services.apk_proxy_download import download_apk, verify_sha256_hint
+
+    # 1. Resolve the proxy row, validate provider against its cached
+    #    catalogue. Uploaders see only healthy + enabled proxies in the
+    #    UI, so an unauthorised one reaching this endpoint is either a
+    #    stale wizard or a curl-savvy caller — either way, refuse.
+    proxy = (
+        await db.execute(select(ApkProxy).where(ApkProxy.id == payload.proxy_id))
+    ).scalar_one_or_none()
+    if proxy is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Proxy not found",
+        )
+    if not proxy.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That proxy is disabled.",
+        )
+    if proxy.last_health_status != ApkProxyHealthStatus.HEALTHY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "That proxy is not healthy. "
+                "Ask an admin to fix or refresh it."
+            ),
+        )
+    catalogue = proxy.cached_sources_json or {}
+    providers = catalogue.get("providers", []) if isinstance(catalogue, dict) else []
+    descriptor = next(
+        (p for p in providers if isinstance(p, dict) and p.get("id") == payload.provider),
+        None,
+    )
+    if descriptor is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Provider {payload.provider!r} is not in this proxy's catalogue. "
+                "Refresh the proxy or pick a different one."
+            ),
+        )
+
+    # 2. Resolve + download. We treat ``ApkProxyError`` as a 422 (the
+    #    request shape was fine but the upstream said no) just like
+    #    inspect_github maps GithubReleaseError.
+    try:
+        resolved: ResolveResponse | None = await resolve(
+            proxy,
+            provider=payload.provider,
+            url=str(payload.source_url),
+            last_release_id=None,  # Always a fresh resolve for inspect.
+            secrets=payload.secrets or {},
+        )
+    except ApkProxyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if resolved is None:
+        # 304 from the proxy means "no change since last_release_id" —
+        # but we passed None, so a 304 here is a protocol bug. Treat as
+        # "no APK available" with the same 422 the absence-of-release
+        # path uses.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Proxy {proxy.name!r} returned no release for {payload.source_url!r}. "
+                "Double-check the URL or pick a different source."
+            ),
+        )
+
+    # 3. Pre-flight size cap then stream the bytes.
+    max_bytes = await _apk_size_cap_bytes(db)
+    if (
+        resolved.apk_size_bytes is not None
+        and resolved.apk_size_bytes > max_bytes
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Proxy advertised {resolved.apk_size_bytes} B; "
+                f"the configured cap is {max_bytes} B. "
+                "Ask an admin to raise upload_max_apk_mb or split the build."
+            ),
+        )
+    try:
+        tmp_path = await download_apk(
+            apk_url=str(resolved.apk_url),
+            headers=resolved.apk_headers,
+            max_bytes=max_bytes,
+        )
+    except ApkProxyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Download failed: {exc}",
+        ) from exc
+
+    try:
+        # 4. SHA-256 check + parse + anti-feature scan. The mismatch
+        #    audit row is written by the worker on the cron path; here
+        #    we just refuse the inspect — the user can fix and retry.
+        if resolved.apk_sha256_hint:
+            try:
+                verify_sha256_hint(tmp_path, resolved.apk_sha256_hint)
+            except ApkProxyError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(exc),
+                ) from exc
+        meta = await parse_or_400(tmp_path)
+        # Belt-and-suspenders: the manifest version_code MUST agree with
+        # the proxy's advertised value. A mismatch is either a buggy /
+        # hostile proxy or a tampered download. Same check the worker
+        # runs on the cron path, plus a 422 here so the operator finds
+        # out before the create call.
+        if meta.version_code != resolved.version_code:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Manifest versionCode {meta.version_code} != "
+                    f"proxy-advertised {resolved.version_code}"
+                ),
+            )
+        try:
+            from app.fdroid.anti_feature_scan import scan_apk, summarise
+
+            detected = summarise(scan_apk(tmp_path))
+        except Exception:  # noqa: BLE001
+            detected = {}
+        return ProxyApkInspect(
+            package_name=meta.package_name,
+            app_name=meta.app_name,
+            version_code=meta.version_code,
+            version_name=meta.version_name,
+            min_sdk=meta.min_sdk,
+            target_sdk=meta.target_sdk,
+            sha256=meta.sha256,
+            size_bytes=meta.size_bytes,
+            signer_sha256=meta.signer_sha256,
+            permissions=meta.permissions,
+            native_code=meta.native_code,
+            has_icon=bool(meta.icon_data),
+            detected_anti_features=detected,
+            proxy_id=proxy.id,
+            proxy_name=proxy.name,
+            provider=payload.provider,
+            provider_name=str(descriptor.get("name") or payload.provider),
+            source_url=str(payload.source_url),
+            release_id=resolved.release_id,
+            release_published_at=resolved.published_at,
         )
     finally:
         tmp_path.unlink(missing_ok=True)

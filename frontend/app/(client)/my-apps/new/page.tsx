@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronRight, FileCode2, GitBranch, ShieldAlert, Upload } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, FileCode2, GitBranch, KeyRound, Loader2, Plug, ShieldAlert, Upload } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import { AuthGuard } from "@/components/auth-guard";
@@ -12,10 +12,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { api, type ApkInspect, type GithubApkInspect, type GithubProvider } from "@/lib/api";
+import {
+  API_URL,
+  api,
+  type ApkInspect,
+  type ApkProxyPublicRead,
+  type GithubApkInspect,
+  type GithubProvider,
+  type ProxyApkInspect,
+  type ProxyProviderDescriptor,
+} from "@/lib/api";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 
-type SourceMode = "apk" | "github";
+type SourceMode = "apk" | "github" | "proxy";
 
 function NewAppInner() {
   const { t } = useTranslation();
@@ -37,6 +46,32 @@ function NewAppInner() {
   const [ghAdvancedOpen, setGhAdvancedOpen] = useState(false);
   const [ghValidating, setGhValidating] = useState(false);
   const [ghInspect, setGhInspect] = useState<GithubApkInspect | null>(null);
+
+  // ---------- Proxy path state ----------
+  // Catalogue of healthy proxies, loaded on mount when mode flips to
+  // ``proxy`` so the page boot doesn't pay the round-trip if the user
+  // never picks the third tab. The wizard state mirrors the in-app
+  // ProxySourcesSection — three sub-steps inside Step 01.
+  const [pxProxies, setPxProxies] = useState<ApkProxyPublicRead[] | null>(null);
+  const [pxLoadingProxies, setPxLoadingProxies] = useState(false);
+  const [pxStep, setPxStep] = useState<"proxy" | "provider" | "form">("proxy");
+  const [pxProxy, setPxProxy] = useState<ApkProxyPublicRead | null>(null);
+  const [pxProvider, setPxProvider] = useState<ProxyProviderDescriptor | null>(null);
+  const [pxSourceUrl, setPxSourceUrl] = useState("");
+  const [pxSecrets, setPxSecrets] = useState<Record<string, string>>({});
+  const [pxCredentialId, setPxCredentialId] = useState<string | null>(null);
+  const [pxOauthBusy, setPxOauthBusy] = useState(false);
+  const [pxValidating, setPxValidating] = useState(false);
+  const [pxInspect, setPxInspect] = useState<ProxyApkInspect | null>(null);
+  // OAuth state HMAC — ref because it's only read inside the message
+  // handler; same recipe as ProxySourcesSection (calling setters inside
+  // an updater is a React anti-pattern).
+  const pxOauthStateRef = useRef<string | null>(null);
+  // Mirror of pxCredentialId for the popup-close watcher.
+  const pxCredentialIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    pxCredentialIdRef.current = pxCredentialId;
+  }, [pxCredentialId]);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -149,9 +184,140 @@ function NewAppInner() {
     }
   }
 
-  // Source has been validated (either an APK is parsed or a repo has
-  // a confirmed downloadable release). Drives the submit button.
-  const sourceReady = mode === "apk" ? !!(file && inspect) : !!ghInspect;
+  // ---------- Proxy-mode helpers ----------
+  const loadProxies = useCallback(async () => {
+    if (pxProxies !== null) return;
+    setPxLoadingProxies(true);
+    try {
+      const list = await api.proxies.listAvailable();
+      setPxProxies(list);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("myApps.new.proxy.loadFailed"));
+      setPxProxies([]);
+    } finally {
+      setPxLoadingProxies(false);
+    }
+  }, [pxProxies, t]);
+
+  // postMessage listener for the OAuth popup — mounted whenever we're
+  // in proxy mode + on the form step + the picked provider is oauth2.
+  useEffect(() => {
+    if (mode !== "proxy" || pxStep !== "form" || pxProvider?.auth_kind !== "oauth2") {
+      return;
+    }
+    function onMessage(event: MessageEvent) {
+      const apiOrigin = API_URL
+        ? new URL(API_URL).origin
+        : window.location.origin;
+      if (event.origin !== window.location.origin && event.origin !== apiOrigin) {
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+      } catch {
+        return;
+      }
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        (parsed as { type?: unknown }).type !== "proxy_oauth_done"
+      ) {
+        return;
+      }
+      const msg = parsed as { type: string; credential_id?: string; state?: string };
+      if (!pxOauthStateRef.current || msg.state !== pxOauthStateRef.current) {
+        return;
+      }
+      setPxCredentialId(msg.credential_id ?? null);
+      setPxOauthBusy(false);
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [mode, pxStep, pxProvider?.auth_kind]);
+
+  async function pxBeginOAuth() {
+    if (!pxProxy || !pxProvider) return;
+    // On /my-apps/new the app doesn't exist yet, so we use the
+    // ``POST /api/v1/proxies/{id}/oauth-begin`` sibling of the per-app
+    // endpoint (which requires an app id). Both mint an HMAC-signed
+    // state server-side and return the fully-formed popup URL — the
+    // proxy's ``base_url`` therefore never leaks past the admin page.
+    setPxOauthBusy(true);
+    setPxCredentialId(null);
+    try {
+      const resp = await api.proxies.beginOAuthNewApp(pxProxy.id, pxProvider.id);
+      pxOauthStateRef.current = resp.state;
+      const popup = window.open(
+        resp.popup_url,
+        "proxy-oauth",
+        "width=600,height=720,scrollbars=yes,resizable=yes,noopener=no",
+      );
+      if (!popup) {
+        setPxOauthBusy(false);
+        setError(t("myApps.edit.proxySources.popupBlocked"));
+        return;
+      }
+      const closeWatcher = window.setInterval(() => {
+        if (!popup.closed) return;
+        window.clearInterval(closeWatcher);
+        if (!pxCredentialIdRef.current) {
+          setPxOauthBusy(false);
+          setError(t("myApps.edit.proxySources.popupClosed"));
+        }
+      }, 700);
+    } catch (e) {
+      setPxOauthBusy(false);
+      setError(e instanceof Error ? e.message : t("myApps.edit.proxySources.oauthBeginFailed"));
+    }
+  }
+
+  async function onValidateProxy() {
+    if (!pxProxy || !pxProvider) return;
+    if (!pxSourceUrl.trim()) return;
+    setError(null);
+    setPxInspect(null);
+    setPxValidating(true);
+    try {
+      // Build secrets payload matching the provider's auth_kind.
+      let secretsPayload: Record<string, string> = {};
+      if (pxProvider.auth_kind === "oauth2") {
+        if (!pxCredentialId) {
+          setError(t("myApps.new.proxy.oauthFirst"));
+          return;
+        }
+        secretsPayload = { credential_id: pxCredentialId };
+      } else if (pxProvider.auth_kind !== "none") {
+        for (const f of pxProvider.secret_fields) {
+          const v = (pxSecrets[f.key] ?? "").trim();
+          if (v) secretsPayload[f.key] = v;
+        }
+      }
+      const info = await api.apps.inspectProxySource({
+        proxy_id: pxProxy.id,
+        provider: pxProvider.id,
+        source_url: pxSourceUrl.trim(),
+        secrets: secretsPayload,
+      });
+      setPxInspect(info);
+      // Pre-fill the Listing form with what the parsed APK gave us.
+      // Same don't-clobber rule as the GitHub path.
+      if (!packageName) setPackageName(info.package_name);
+      if (!name && info.app_name) setName(info.app_name);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("myApps.new.proxy.validateFailed"));
+    } finally {
+      setPxValidating(false);
+    }
+  }
+
+  // Source has been validated. Drives the submit button.
+  const sourceReady =
+    mode === "apk"
+      ? !!(file && inspect)
+      : mode === "github"
+        ? !!ghInspect
+        : !!pxInspect;
 
   function switchMode(next: SourceMode) {
     if (next === mode) return;
@@ -159,12 +325,20 @@ function NewAppInner() {
     setError(null);
     // Clearing the inspect state forces the user to re-validate after
     // switching, so the submit button can never be hot for the wrong
-    // source. Keeps both pre-fill paths honest.
+    // source. Keeps the three pre-fill paths honest.
     if (next === "apk") {
       setGhInspect(null);
+      setPxInspect(null);
+    } else if (next === "github") {
+      setFile(null);
+      setInspect(null);
+      setPxInspect(null);
     } else {
       setFile(null);
       setInspect(null);
+      setGhInspect(null);
+      // Lazy-load the proxy catalogue on first flip.
+      void loadProxies();
     }
   }
 
@@ -217,14 +391,59 @@ function NewAppInner() {
       }
       return;
     }
-    // GitHub mode
-    if (!ghInspect) {
-      setError(t("myApps.new.github.validateFirst"));
+    if (mode === "github") {
+      if (!ghInspect) {
+        setError(t("myApps.new.github.validateFirst"));
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const created = await api.apps.createWithGithub({
+          name,
+          summary: summary || undefined,
+          description: description || undefined,
+          license: license || undefined,
+          website: website || undefined,
+          source_code: sourceCode || undefined,
+          issue_tracker: issueTracker || undefined,
+          author_name: authorName || undefined,
+          visibility,
+          repo: ghInspect.repo,
+          provider: ghProvider,
+          base_url: ghBaseUrl.trim() || null,
+          asset_pattern: ghPattern.trim() || null,
+          include_prereleases: ghPrereleases,
+          access_token: ghToken.trim() || null,
+        });
+        router.replace(`/my-apps/${created.id}`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t("myApps.new.createFailed"));
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+    // Proxy mode
+    if (!pxInspect || !pxProxy || !pxProvider) {
+      setError(t("myApps.new.proxy.validateFirst"));
       return;
     }
     setSubmitting(true);
     try {
-      const created = await api.apps.createWithGithub({
+      // Re-build the same secrets payload we sent at inspect time so
+      // the persistent ApkProxySource row is created with the right
+      // credentials. ``oauth2`` → ``credential_id``, ``api_token`` /
+      // ``basic`` → the declared secret_fields.
+      let secretsPayload: Record<string, string> = {};
+      if (pxProvider.auth_kind === "oauth2" && pxCredentialId) {
+        secretsPayload = { credential_id: pxCredentialId };
+      } else if (pxProvider.auth_kind !== "none") {
+        for (const f of pxProvider.secret_fields) {
+          const v = (pxSecrets[f.key] ?? "").trim();
+          if (v) secretsPayload[f.key] = v;
+        }
+      }
+      const created = await api.apps.createWithProxySource({
         name,
         summary: summary || undefined,
         description: description || undefined,
@@ -234,12 +453,10 @@ function NewAppInner() {
         issue_tracker: issueTracker || undefined,
         author_name: authorName || undefined,
         visibility,
-        repo: ghInspect.repo,
-        provider: ghProvider,
-        base_url: ghBaseUrl.trim() || null,
-        asset_pattern: ghPattern.trim() || null,
-        include_prereleases: ghPrereleases,
-        access_token: ghToken.trim() || null,
+        proxy_id: pxProxy.id,
+        provider: pxProvider.id,
+        source_url: pxSourceUrl.trim(),
+        secrets: secretsPayload,
       });
       router.replace(`/my-apps/${created.id}`);
     } catch (e) {
@@ -301,9 +518,15 @@ function NewAppInner() {
               icon={<GitBranch className="h-3.5 w-3.5" />}
               label={t("myApps.new.modeGithub")}
             />
+            <ModeTab
+              active={mode === "proxy"}
+              onClick={() => switchMode("proxy")}
+              icon={<Plug className="h-3.5 w-3.5" />}
+              label={t("myApps.new.modeProxy")}
+            />
           </div>
 
-          {mode === "apk" ? (
+          {mode === "apk" && (
             <div className="mt-5">
               <label className="block">
                 <div className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-outline px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5">
@@ -341,7 +564,9 @@ function NewAppInner() {
                 <ApkInspectCard inspect={inspect} />
               )}
             </div>
-          ) : (
+          )}
+
+          {mode === "github" && (
             <div className="mt-5 space-y-4">
               <p className="text-xs leading-relaxed text-ink-soft">
                 <Trans
@@ -496,6 +721,44 @@ function NewAppInner() {
 
               {ghInspect && <GithubInspectCard inspect={ghInspect} />}
             </div>
+          )}
+
+          {mode === "proxy" && (
+            <ProxyModeBody
+              proxies={pxProxies}
+              loadingProxies={pxLoadingProxies}
+              step={pxStep}
+              setStep={setPxStep}
+              pickedProxy={pxProxy}
+              setPickedProxy={(p) => {
+                setPxProxy(p);
+                setPxInspect(null);
+              }}
+              pickedProvider={pxProvider}
+              setPickedProvider={(p) => {
+                setPxProvider(p);
+                setPxSecrets({});
+                setPxCredentialId(null);
+                pxOauthStateRef.current = null;
+                setPxInspect(null);
+              }}
+              sourceUrl={pxSourceUrl}
+              setSourceUrl={(v) => {
+                setPxSourceUrl(v);
+                setPxInspect(null);
+              }}
+              secrets={pxSecrets}
+              setSecrets={(s) => {
+                setPxSecrets(s);
+                setPxInspect(null);
+              }}
+              credentialId={pxCredentialId}
+              oauthBusy={pxOauthBusy}
+              onBeginOAuth={pxBeginOAuth}
+              validating={pxValidating}
+              onValidate={onValidateProxy}
+              inspect={pxInspect}
+            />
           )}
         </DraftPanel>
 
@@ -821,8 +1084,11 @@ function ReadyTray({
   const { t } = useTranslation();
   let status: string;
   if (submitting) status = t("myApps.new.publishing");
-  else if (!hasSource)
-    status = mode === "github" ? t("myApps.new.github.validateFirst") : t("myApps.new.pickFirst");
+  else if (!hasSource) {
+    if (mode === "github") status = t("myApps.new.github.validateFirst");
+    else if (mode === "proxy") status = t("myApps.new.proxy.validateFirst");
+    else status = t("myApps.new.pickFirst");
+  }
   else if (!hasIdentity) status = t("myApps.new.needIdentity");
   else status = t("myApps.new.ready");
 
@@ -1009,6 +1275,491 @@ function GithubInspectCard({ inspect }: { inspect: GithubApkInspect }) {
     </div>
   );
 }
+
+/* ============================================================================
+ * Proxy mode — inline 3-step wizard (proxy → provider → form) embedded in
+ * Step 01 of the New App page. Mirrors ProxySourcesSection's wizard but
+ * inline rather than in a Sheet (the page already provides DraftPanel
+ * chrome) and finished off with a Validate button that calls
+ * /apks/inspect-proxy-source.
+ * ============================================================================ */
+
+
+function ProxyModeBody({
+  proxies,
+  loadingProxies,
+  step,
+  setStep,
+  pickedProxy,
+  setPickedProxy,
+  pickedProvider,
+  setPickedProvider,
+  sourceUrl,
+  setSourceUrl,
+  secrets,
+  setSecrets,
+  credentialId,
+  oauthBusy,
+  onBeginOAuth,
+  validating,
+  onValidate,
+  inspect,
+}: {
+  proxies: ApkProxyPublicRead[] | null;
+  loadingProxies: boolean;
+  step: "proxy" | "provider" | "form";
+  setStep: (s: "proxy" | "provider" | "form") => void;
+  pickedProxy: ApkProxyPublicRead | null;
+  setPickedProxy: (p: ApkProxyPublicRead | null) => void;
+  pickedProvider: ProxyProviderDescriptor | null;
+  setPickedProvider: (p: ProxyProviderDescriptor | null) => void;
+  sourceUrl: string;
+  setSourceUrl: (v: string) => void;
+  secrets: Record<string, string>;
+  setSecrets: (s: Record<string, string>) => void;
+  credentialId: string | null;
+  oauthBusy: boolean;
+  onBeginOAuth: () => void;
+  validating: boolean;
+  onValidate: () => void;
+  inspect: ProxyApkInspect | null;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="mt-5 space-y-4">
+      <p className="text-xs leading-relaxed text-ink-soft">
+        {t("myApps.new.proxy.intro")}
+      </p>
+
+      <ProxyStepBar step={step} />
+
+      {step === "proxy" && (
+        <ProxyPickerInline
+          proxies={proxies}
+          loading={loadingProxies}
+          onPick={(p) => {
+            setPickedProxy(p);
+            setStep("provider");
+          }}
+        />
+      )}
+
+      {step === "provider" && pickedProxy && (
+        <>
+          <ProviderPickerInline
+            proxy={pickedProxy}
+            onPick={(p) => {
+              setPickedProvider(p);
+              setStep("form");
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setPickedProxy(null);
+              setStep("proxy");
+            }}
+            className="text-xs font-medium text-ink-mute hover:text-ink"
+          >
+            ← {t("myApps.new.proxy.backToProxy")}
+          </button>
+        </>
+      )}
+
+      {step === "form" && pickedProxy && pickedProvider && (
+        <ProxyFormInline
+          proxy={pickedProxy}
+          provider={pickedProvider}
+          sourceUrl={sourceUrl}
+          setSourceUrl={setSourceUrl}
+          secrets={secrets}
+          setSecrets={setSecrets}
+          credentialId={credentialId}
+          oauthBusy={oauthBusy}
+          onBeginOAuth={onBeginOAuth}
+          onBack={() => {
+            setPickedProvider(null);
+            setStep("provider");
+          }}
+          validating={validating}
+          onValidate={onValidate}
+          canValidate={
+            sourceUrl.trim().length > 0 &&
+            (pickedProvider.auth_kind !== "oauth2" || !!credentialId) &&
+            !pickedProvider.secret_fields.some(
+              (f) => f.required && !(secrets[f.key] ?? "").trim(),
+            )
+          }
+        />
+      )}
+
+      {inspect && <ProxyInspectCard inspect={inspect} />}
+    </div>
+  );
+}
+
+
+function ProxyStepBar({ step }: { step: "proxy" | "provider" | "form" }) {
+  const { t } = useTranslation();
+  const steps: { id: "proxy" | "provider" | "form"; label: string }[] = [
+    { id: "proxy", label: t("myApps.edit.proxySources.wizard.stepProxy") },
+    { id: "provider", label: t("myApps.edit.proxySources.wizard.stepProvider") },
+    { id: "form", label: t("myApps.edit.proxySources.wizard.stepForm") },
+  ];
+  const activeIdx = steps.findIndex((s) => s.id === step);
+  return (
+    <ol className="flex flex-wrap items-center gap-2">
+      {steps.map((s, i) => {
+        const done = i < activeIdx;
+        const active = i === activeIdx;
+        return (
+          <li key={s.id} className="flex items-center gap-2">
+            <span
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded-pill font-mono text-[10px] font-semibold",
+                active && "bg-primary text-primary-fg",
+                done && "bg-primary-container text-primary-on-container",
+                !active && !done && "bg-surface-2 text-ink-mute",
+              )}
+            >
+              {String(i + 1).padStart(2, "0")}
+            </span>
+            <span className={cn("text-xs font-medium", active ? "text-ink" : "text-ink-mute")}>
+              {s.label}
+            </span>
+            {i < steps.length - 1 && (
+              <span aria-hidden className="ml-1 h-px w-6 bg-outline-soft" />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+
+function ProxyPickerInline({
+  proxies,
+  loading,
+  onPick,
+}: {
+  proxies: ApkProxyPublicRead[] | null;
+  loading: boolean;
+  onPick: (p: ApkProxyPublicRead) => void;
+}) {
+  const { t } = useTranslation();
+  if (loading || proxies === null) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-ink-mute">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        {t("common.loading")}
+      </div>
+    );
+  }
+  if (proxies.length === 0) {
+    return (
+      <div className="rounded-2xl border border-outline-soft bg-surface-2 px-4 py-3 text-sm text-ink-mute">
+        {t("myApps.new.proxy.noProxies")}
+      </div>
+    );
+  }
+  return (
+    <ul className="space-y-2">
+      {proxies.map((p) => {
+        const providerCount = p.cached_sources_json?.providers.length ?? 0;
+        return (
+          <li key={p.id}>
+            <button
+              type="button"
+              onClick={() => onPick(p)}
+              className="group flex w-full items-start gap-3 rounded-2xl border border-outline-soft bg-surface px-4 py-3 text-left transition-colors hover:border-primary/50 hover:bg-primary-container/15"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface-2 text-ink-soft group-hover:bg-primary/15 group-hover:text-primary">
+                <Plug className="h-4 w-4" strokeWidth={2.2} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-semibold text-ink">{p.name}</span>
+                  <Badge variant="outline">
+                    {t("myApps.edit.proxySources.wizard.providersCount", { count: providerCount })}
+                  </Badge>
+                </div>
+                {/* base_url stays admin-only — see /admin/proxies. */}
+              </div>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+
+function ProviderPickerInline({
+  proxy,
+  onPick,
+}: {
+  proxy: ApkProxyPublicRead;
+  onPick: (p: ProxyProviderDescriptor) => void;
+}) {
+  const { t } = useTranslation();
+  const providers = proxy.cached_sources_json?.providers ?? [];
+  if (providers.length === 0) {
+    return (
+      <div className="rounded-2xl border border-outline-soft bg-surface-2 px-4 py-3 text-sm text-ink-mute">
+        {t("myApps.edit.proxySources.wizard.providerEmpty")}
+      </div>
+    );
+  }
+  return (
+    <ul className="space-y-2">
+      {providers.map((p) => (
+        <li key={p.id}>
+          <button
+            type="button"
+            onClick={() => onPick(p)}
+            className="group flex w-full items-start gap-3 rounded-2xl border border-outline-soft bg-surface px-4 py-3 text-left transition-colors hover:border-primary/50 hover:bg-primary-container/15"
+          >
+            {p.icon_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={p.icon_url}
+                alt=""
+                className="mt-0.5 h-9 w-9 shrink-0 rounded-pill border border-outline-soft bg-surface object-cover"
+                loading="lazy"
+              />
+            ) : (
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-pill bg-surface-2 text-ink-soft">
+                <Plug className="h-4 w-4" />
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm font-semibold text-ink">{p.name}</span>
+                <Badge variant={p.auth_kind === "oauth2" ? "primary" : "outline"}>
+                  {t(`myApps.edit.proxySources.authKind.${p.auth_kind}`)}
+                </Badge>
+              </div>
+              {p.description && (
+                <p className="mt-0.5 text-xs leading-relaxed text-ink-mute">{p.description}</p>
+              )}
+            </div>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+
+function ProxyFormInline({
+  proxy,
+  provider,
+  sourceUrl,
+  setSourceUrl,
+  secrets,
+  setSecrets,
+  credentialId,
+  oauthBusy,
+  onBeginOAuth,
+  onBack,
+  validating,
+  onValidate,
+  canValidate,
+}: {
+  proxy: ApkProxyPublicRead;
+  provider: ProxyProviderDescriptor;
+  sourceUrl: string;
+  setSourceUrl: (v: string) => void;
+  secrets: Record<string, string>;
+  setSecrets: (s: Record<string, string>) => void;
+  credentialId: string | null;
+  oauthBusy: boolean;
+  onBeginOAuth: () => void;
+  onBack: () => void;
+  validating: boolean;
+  onValidate: () => void;
+  canValidate: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-outline-soft bg-surface-2/40 p-4">
+        <p className="text-sm leading-relaxed text-ink-soft">
+          {provider.description ?? t("myApps.edit.proxySources.wizard.formIntro", { name: provider.name })}
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="px-url" className="text-sm font-medium text-ink-soft">
+          {t("myApps.edit.proxySources.wizard.urlLabel")}
+        </Label>
+        <Input
+          id="px-url"
+          type="url"
+          value={sourceUrl}
+          onChange={(e) => setSourceUrl(e.target.value)}
+          placeholder={provider.url_hint ?? "https://"}
+          className="font-mono"
+        />
+        {provider.url_pattern && (
+          <p className="text-[11px] leading-relaxed text-ink-mute">
+            {t("myApps.edit.proxySources.wizard.urlPatternHint", { pattern: provider.url_pattern })}
+          </p>
+        )}
+      </div>
+
+      {provider.auth_kind === "none" && (
+        <div className="rounded-2xl border border-outline-soft bg-surface-2 px-3 py-2.5 text-xs text-ink-mute">
+          {t("myApps.edit.proxySources.wizard.authNone")}
+        </div>
+      )}
+
+      {(provider.auth_kind === "api_token" || provider.auth_kind === "basic") && (
+        <div className="space-y-3">
+          {provider.secret_fields.map((f) => (
+            <div key={f.key} className="space-y-1.5">
+              <Label
+                htmlFor={`px-secret-${f.key}`}
+                className="text-xs font-medium uppercase tracking-wider text-ink-mute"
+              >
+                {f.label}
+                {f.required && <span className="ml-1 text-danger">*</span>}
+              </Label>
+              <Input
+                id={`px-secret-${f.key}`}
+                type={f.secret ? "password" : "text"}
+                autoComplete="off"
+                value={secrets[f.key] ?? ""}
+                onChange={(e) => setSecrets({ ...secrets, [f.key]: e.target.value })}
+                placeholder={f.placeholder ?? undefined}
+                className="font-mono"
+              />
+            </div>
+          ))}
+          <p className="text-[11px] leading-relaxed text-ink-mute">
+            {t("myApps.edit.proxySources.wizard.secretsHint", { proxy: proxy.name })}
+          </p>
+        </div>
+      )}
+
+      {provider.auth_kind === "oauth2" && (
+        <div className="space-y-2">
+          {credentialId ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-primary/30 bg-primary-container/30 px-3 py-2.5">
+              <CheckCircle2 className="h-4 w-4 text-primary" />
+              <span className="text-xs font-medium text-primary-on-container">
+                {t("myApps.edit.proxySources.wizard.oauthConnected")}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onBeginOAuth}
+                disabled={oauthBusy}
+                className="ml-auto"
+              >
+                {t("myApps.edit.proxySources.wizard.oauthReconnect")}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="outlined"
+              onClick={onBeginOAuth}
+              disabled={oauthBusy}
+            >
+              {oauthBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <KeyRound className="h-3.5 w-3.5" />
+              )}
+              {oauthBusy
+                ? t("myApps.edit.proxySources.wizard.oauthWaiting")
+                : t("myApps.edit.proxySources.wizard.oauthConnect", { name: provider.name })}
+            </Button>
+          )}
+          <p className="text-[11px] leading-relaxed text-ink-mute">
+            {t("myApps.edit.proxySources.wizard.oauthBody", { proxy: proxy.name })}
+          </p>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-outline-soft pt-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-xs font-medium text-ink-mute hover:text-ink"
+        >
+          ← {t("myApps.new.proxy.backToProvider")}
+        </button>
+        <Button
+          type="button"
+          variant="filled"
+          onClick={onValidate}
+          disabled={validating || !canValidate}
+        >
+          {validating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {validating ? t("myApps.new.proxy.validating") : t("myApps.new.proxy.validate")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
+/** Preview card after a successful inspect-proxy-source — shows the
+ *  resolved release context above the parsed-APK card (same recipe as
+ *  GithubInspectCard). */
+function ProxyInspectCard({ inspect }: { inspect: ProxyApkInspect }) {
+  const { t } = useTranslation();
+  // Adapt the wide ProxyApkInspect shape into the narrower ApkInspect
+  // ApkInspectCard expects (the proxy variant doesn't have a staging
+  // token — we just stub it as null since the card never reads that
+  // field).
+  const apk: ApkInspect = {
+    package_name: inspect.package_name,
+    app_name: inspect.app_name,
+    version_code: inspect.version_code,
+    version_name: inspect.version_name,
+    min_sdk: inspect.min_sdk,
+    target_sdk: inspect.target_sdk,
+    sha256: inspect.sha256,
+    size_bytes: inspect.size_bytes,
+    signer_sha256: inspect.signer_sha256,
+    permissions: inspect.permissions,
+    native_code: inspect.native_code,
+    has_icon: inspect.has_icon,
+    detected_anti_features: inspect.detected_anti_features,
+    staging_token: null,
+  };
+  return (
+    <div className="mt-5 space-y-4">
+      <div className="rounded-2xl border border-primary/30 bg-primary-container/30 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary-on-container">
+              <Plug className="h-3.5 w-3.5" />
+              {t("myApps.new.proxy.resolved")}
+            </div>
+            <div className="mt-1 flex flex-wrap items-baseline gap-2">
+              <span className="text-sm font-semibold text-ink">{inspect.provider_name}</span>
+              <span className="text-ink-mute">·</span>
+              <span className="font-mono text-sm text-primary">{inspect.release_id}</span>
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-ink-mute">
+              {inspect.proxy_name} · {formatBytes(inspect.size_bytes)}
+              {inspect.release_published_at ? ` · ${formatDate(inspect.release_published_at)}` : ""}
+            </div>
+          </div>
+        </div>
+      </div>
+      <ApkInspectCard inspect={apk} />
+    </div>
+  );
+}
+
 
 export default function NewAppPage() {
   return (
