@@ -54,9 +54,14 @@
     "auto": "Auto",
     "manual": "Manual"
   },
+  "meta": {
+    "docTitle": "fdroid-store — your private app shelf",
+    "description": "A self-hosted F-Droid repository with a modern app-store interface. Browse, install, and ship Android apps with full control."
+  },
   "header": {
     "homeAriaLabel": "fdroid-store home",
     "brand": "fdroid-store",
+    "searchShortcutHint": "Search shortcut: Ctrl + K",
     "nav": {
       "apps": "Apps",
       "myApps": "My apps"
@@ -224,6 +229,9 @@
     "editorsPick": "Editor's pick",
     "topPicks": "Top picks",
     "topPicksSubtitle": "Curated highlights from the catalogue",
+    "compactTitle_one": "{{count}} app on the shelf",
+    "compactTitle_other": "{{count}} apps on the shelf",
+    "compactSubtitle": "Every app in the repo, at a glance.",
     "recentlyUpdated": "Recently updated",
     "recentlyUpdatedSubtitle": "Freshest releases shipped",
     "categoriesTitle": "Categories",
@@ -290,6 +298,7 @@
     "screenshotsCount_one": "{{count}} screenshot",
     "screenshotsCount_other": "{{count}} screenshots",
     "feedAtom": "Subscribe (Atom)",
+    "noMetadata": "No links provided by the uploader yet.",
     "feedAtomTitle": "Subscribe to this app's release feed. Add the URL to your feed reader to get notified on every new version. Private apps require an API key (HTTP Basic auth).",
     "lightbox": {
       "openIndex": "Screenshot {{index}} of {{total}}",
@@ -1574,6 +1583,9 @@
       "recentDownloads": "Recent downloads",
       "last20": "Last 20 events",
       "noDownloads": "No downloads yet.",
+      "noDownloadsBody": "Installs will show up here as soon as an F-Droid client pulls an APK from this repo.",
+      "noDownloadsManageApps": "Manage apps",
+      "noDownloadsRepoUrl": "View repo URL",
       "deletedApp": "deleted app",
       "deletedUser": "deleted user",
       "anon": "anon"

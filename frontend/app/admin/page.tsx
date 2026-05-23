@@ -1,6 +1,7 @@
 "use client";
 
-import { Activity, Download, Package, RefreshCw, Users } from "lucide-react";
+import { Activity, AppWindow, Download, Inbox, Package, RefreshCw, Settings2, Users } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -59,7 +60,39 @@ export default function AdminDashboardPage() {
         </div>
         <ul className="divide-y divide-outline-soft">
           {stats?.recent_downloads.length === 0 && (
-            <li className="py-6 italic text-ink-mute">{t("admin.overview.noDownloads")}</li>
+            // The dashboard sits empty until the *first* install — that can be
+            // hours after the repo is set up. Rather than a bald "nothing to
+            // see here" line, give the admin two concrete next steps: tidy
+            // the catalogue, or grab the repo URL to subscribe a client. Both
+            // are one click away from the side nav, but surfacing them inline
+            // shortens the loop while the dashboard is still cold.
+            <li className="flex flex-col items-start gap-4 py-8 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-pill bg-surface-2 text-ink-mute">
+                  <Inbox className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">{t("admin.overview.noDownloads")}</div>
+                  <p className="mt-0.5 max-w-md text-xs text-ink-soft">
+                    {t("admin.overview.noDownloadsBody")}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 sm:shrink-0">
+                <Button asChild variant="tonal" size="sm">
+                  <Link href="/admin/apps">
+                    <AppWindow className="h-3.5 w-3.5" />
+                    {t("admin.overview.noDownloadsManageApps")}
+                  </Link>
+                </Button>
+                <Button asChild variant="outlined" size="sm">
+                  <Link href="/admin/repo">
+                    <Settings2 className="h-3.5 w-3.5" />
+                    {t("admin.overview.noDownloadsRepoUrl")}
+                  </Link>
+                </Button>
+              </div>
+            </li>
           )}
           {stats?.recent_downloads.map((d) => (
             <li key={d.id} className="flex items-center justify-between gap-3 py-2.5 text-xs">

@@ -98,15 +98,24 @@ function Browse() {
 
   return (
     <div>
-      {/* ──── Title ──── */}
+      {/* ──── Title ────
+       *  The shelf-size count is the most useful single piece of metadata
+       *  about the catalogue — it tells the visitor whether to expect a
+       *  handful of apps or a deep archive. Promoting it to the kicker
+       *  line (with a tabular-nums chip so the number sits visually
+       *  steady next to the label) puts it where the eye lands first,
+       *  instead of buried in a muted line under the H1. */}
       <header className="mb-6">
-        <div className="eyebrow">{t("apps.eyebrow")}</div>
+        <div className="eyebrow flex items-center gap-2">
+          <span>{t("apps.eyebrow")}</span>
+          <span aria-hidden className="text-ink-mute">·</span>
+          <span className="rounded-pill bg-surface-2 px-2 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-ink-soft">
+            {t("apps.titleCount", { count: apps.length })}
+          </span>
+        </div>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink md:text-4xl">
           {t("apps.title")}
         </h1>
-        <p className="mt-1 text-ink-mute">
-          {t("apps.titleCount", { count: apps.length })}
-        </p>
       </header>
 
       {/* ──── Toolbar ──── */}

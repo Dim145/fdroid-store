@@ -41,7 +41,20 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </div>
               {NAV.map((item) => {
                 const Icon = item.icon;
-                const active = pathname === item.href;
+                // ``trailingSlash: true`` means the live ``pathname`` is
+                // ``/admin/``, but the nav config uses ``/admin`` — strip the
+                // trailing slash (except for the root) before comparing so
+                // the Overview tab actually lights up when the user is on it.
+                const here = (pathname || "/").replace(/\/+$/, "") || "/";
+                const target = item.href.replace(/\/+$/, "") || "/";
+                // The Overview tab matches the exact ``/admin`` path only —
+                // every sub-page (``/admin/apps``, ``/admin/jobs``…) starts
+                // with ``/admin``, so a ``startsWith`` rule would keep the
+                // Overview row highlighted forever.
+                const active =
+                  target === "/admin"
+                    ? here === "/admin"
+                    : here === target || here.startsWith(`${target}/`);
                 return (
                   <Link
                     key={item.href}

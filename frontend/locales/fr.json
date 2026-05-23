@@ -54,9 +54,14 @@
     "auto": "Auto",
     "manual": "Manuel"
   },
+  "meta": {
+    "docTitle": "fdroid-store — ton étagère d'apps privée",
+    "description": "Un dépôt F-Droid auto-hébergé avec une interface moderne d'app store. Parcours, installe et publie des apps Android avec un contrôle total."
+  },
   "header": {
     "homeAriaLabel": "Accueil fdroid-store",
     "brand": "fdroid-store",
+    "searchShortcutHint": "Raccourci de recherche : Ctrl + K",
     "nav": {
       "apps": "Applications",
       "myApps": "Mes apps"
@@ -224,6 +229,9 @@
     "editorsPick": "Choix de l'éditeur",
     "topPicks": "Sélection",
     "topPicksSubtitle": "Mises en avant du catalogue",
+    "compactTitle_one": "{{count}} app sur l'étagère",
+    "compactTitle_other": "{{count}} apps sur l'étagère",
+    "compactSubtitle": "Toutes les apps du dépôt, d'un coup d'œil.",
     "recentlyUpdated": "Mises à jour récentes",
     "recentlyUpdatedSubtitle": "Les sorties les plus fraîches",
     "categoriesTitle": "Catégories",
@@ -290,6 +298,7 @@
     "screenshotsCount_one": "{{count}} capture",
     "screenshotsCount_other": "{{count}} captures",
     "feedAtom": "S'abonner (Atom)",
+    "noMetadata": "L'uploader n'a pas encore renseigné de liens.",
     "feedAtomTitle": "S'abonner au flux des versions de cette app. Ajoute l'URL à ton lecteur RSS pour être notifié à chaque nouvelle version. Les apps privées nécessitent une clé d'API (HTTP Basic).",
     "lightbox": {
       "openIndex": "Capture {{index}} sur {{total}}",
@@ -1574,6 +1583,9 @@
       "recentDownloads": "Téléchargements récents",
       "last20": "20 derniers événements",
       "noDownloads": "Aucun téléchargement pour l'instant.",
+      "noDownloadsBody": "Les installations apparaîtront ici dès qu'un client F-Droid récupérera un APK depuis ce dépôt.",
+      "noDownloadsManageApps": "Gérer les apps",
+      "noDownloadsRepoUrl": "Voir l'URL du dépôt",
       "deletedApp": "app supprimée",
       "deletedUser": "utilisateur supprimé",
       "anon": "anon"

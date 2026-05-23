@@ -4,7 +4,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { History as HistoryIcon, LayoutGrid, LogOut, Menu, Search, ShieldCheck, Sparkles, User as UserIcon, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -28,6 +28,24 @@ const PRIMARY_NAV: readonly NavItem[] = [
   { href: "/my-apps", labelKey: "header.nav.myApps", icon: LayoutGrid, authOnly: true, uploaderOnly: true },
 ] as const;
 
+/** Treat the ``/`` key as "open the search" only when the user *isn't*
+ *  already typing somewhere else — otherwise pressing ``/`` mid-comment
+ *  would yank focus out of a textarea, which is the canonical
+ *  GitHub-shortcut gotcha. */
+function isTypingInTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    const type = (target as HTMLInputElement).type;
+    // ``search``-typed inputs *are* the search field — pressing ``/``
+    // inside one should produce a literal slash, so bail out too.
+    return type !== "button" && type !== "checkbox" && type !== "radio" && type !== "submit";
+  }
+  return false;
+}
+
 /* M3 top app bar — sticky, surface-tinted, hosts brand + nav + search +
  * theme toggle + auth. Mobile collapses the secondary actions into a
  * slide-down sheet. */
@@ -38,6 +56,50 @@ export function SiteHeader() {
   const { user, logout } = useAuth();
   const [searchValue, setSearchValue] = useState("");
   const [drawer, setDrawer] = useState(false);
+  // Track Mac vs. PC so the hint pill shows ``⌘K`` or ``Ctrl K``
+  // appropriately. Hydrated on the client after mount — defaults to
+  // ``ctrl`` during SSR/static export, which is also a reasonable
+  // fallback on unknown platforms.
+  const [isMac, setIsMac] = useState(false);
+  useEffect(() => {
+    if (typeof navigator !== "undefined") {
+      setIsMac(/Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent));
+    }
+  }, []);
+  const desktopSearchRef = useRef<HTMLInputElement>(null);
+  const mobileSearchRef = useRef<HTMLInputElement>(null);
+
+  // Global ⌘K / Ctrl+K listener — pulls focus into whichever search
+  // field is visible. Falls back to the mobile drawer when the desktop
+  // input is hidden (md: breakpoint). Also handles the bare ``/`` key
+  // (à la GitHub) but only when nothing else is being typed into.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      const shortcut = mod && (e.key === "k" || e.key === "K");
+      const slash =
+        e.key === "/" &&
+        !e.metaKey && !e.ctrlKey && !e.altKey &&
+        !isTypingInTextField(e.target);
+      if (!shortcut && !slash) return;
+      e.preventDefault();
+      const desk = desktopSearchRef.current;
+      if (desk && desk.offsetParent !== null) {
+        desk.focus();
+        desk.select();
+        return;
+      }
+      // Mobile path: open the drawer, then focus the input on the next
+      // tick so it's actually mounted when we ask for focus.
+      setDrawer(true);
+      window.setTimeout(() => {
+        mobileSearchRef.current?.focus();
+        mobileSearchRef.current?.select();
+      }, 0);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isMac]);
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
@@ -99,12 +161,29 @@ export function SiteHeader() {
           <label className="group flex w-full items-center gap-2 rounded-pill border border-outline-soft bg-surface-2 px-4 py-2 transition-colors focus-within:border-primary focus-within:bg-surface">
             <Search className="h-4 w-4 text-ink-mute" strokeWidth={2.2} />
             <input
+              ref={desktopSearchRef}
               type="search"
               placeholder={t("header.search")}
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
+              aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
               className="w-full bg-transparent text-sm outline-none placeholder:text-ink-mute"
             />
+            {/* Keyboard-shortcut hint. Hidden from screen readers
+                (``aria-hidden``) because the input itself already
+                advertises the shortcut via ``aria-keyshortcuts``. The
+                pill is invisible on focus so it doesn't fight the
+                caret for attention while the user is typing. */}
+            <kbd
+              aria-hidden
+              title={t("header.searchShortcutHint", {
+                defaultValue: "Search shortcut: Ctrl + K",
+              })}
+              className="hidden shrink-0 select-none items-center gap-0.5 rounded-md border border-outline-soft bg-surface px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-mute group-focus-within:invisible lg:inline-flex"
+            >
+              <span>{isMac ? "⌘" : "Ctrl"}</span>
+              <span>K</span>
+            </kbd>
           </label>
         </form>
 
@@ -217,6 +296,7 @@ export function SiteHeader() {
               <label className="flex w-full items-center gap-2 rounded-pill border border-outline-soft bg-surface-2 px-4 py-2 focus-within:border-primary">
                 <Search className="h-4 w-4 text-ink-mute" />
                 <input
+                  ref={mobileSearchRef}
                   type="search"
                   placeholder={t("common.search")}
                   value={searchValue}

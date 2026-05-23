@@ -14,7 +14,23 @@ import { cn } from "@/lib/utils";
  *   icon      — square slot for an icon-only button
  *
  * Sizes follow M3 height tokens with a "pill" variant for the iconic
- * Install CTA. */
+ * Install CTA.
+ *
+ * Sizing conventions (keep new screens aligned with these):
+ *   xl   — only for the cross-page Install pill on the public app detail.
+ *   lg   — the *single* primary CTA in a page header / hero (e.g.
+ *          ``Trigger reindex`` on /admin, ``Invite`` on /admin/users,
+ *          ``Subscribe with F-Droid`` on the home repo CTA).
+ *   md   — every other primary action: form submits, drawer actions,
+ *          inline toolbars. This is the default — don't pass ``size``
+ *          unless you have a reason.
+ *   sm   — dense row actions (publish/reject on a pending APK row,
+ *          inline destructive controls). Never the only CTA on a page.
+ *
+ * The eye-test for ``lg`` vs ``md``: if you cropped the button out of the
+ * page, would you still read it as "the thing the user is here to do"?
+ * That's ``lg``. Anything else is ``md``.
+ */
 const buttonVariants = cva(
   [
     "relative inline-flex items-center justify-center gap-2 font-medium",

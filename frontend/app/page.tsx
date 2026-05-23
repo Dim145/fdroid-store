@@ -64,7 +64,16 @@ export default function Home() {
         ),
     [apps],
   );
-  const hero = freshest[0];
+  // Below this threshold the multi-section layout (hero · top picks
+  // rail · recently-updated list) looks half-empty: the same 1–5 apps
+  // get re-rendered three times, the hero "Editor's pick" reads as
+  // theatrical for what is in practice "the only app we have", and the
+  // page wastes most of the fold on whitespace. Drop straight into a
+  // single tile grid until the catalogue has enough density to support
+  // the storefront treatment.
+  const COMPACT_THRESHOLD = 5;
+  const compactMode = freshest.length > 0 && freshest.length <= COMPACT_THRESHOLD;
+  const hero = compactMode ? undefined : freshest[0];
   const topPicks = freshest.slice(0, 12);
   const recentlyUpdated = freshest.slice(0, 8);
 
@@ -129,12 +138,37 @@ export default function Home() {
           <section className="animate-fade-up">
             <FeatureHero app={hero} kicker={t("home.editorsPick")} />
           </section>
-        ) : (
+        ) : freshest.length === 0 ? (
           <EmptyShelf />
+        ) : null}
+
+        {/* ──── Compact small-shelf view ────
+         *  Catalogue is non-empty but tiny: show every app once, in a
+         *  single grid that fills the fold without ceremony. Tile size
+         *  matches the regular "Top picks" rail so the page doesn't
+         *  feel visually re-skinned past the threshold. */}
+        {compactMode && (
+          <Section
+            title={t("home.compactTitle", {
+              count: freshest.length,
+              defaultValue: "{{count}} apps on the shelf",
+            })}
+            subtitle={t("home.compactSubtitle", {
+              defaultValue: "Every app in the repo, right here.",
+            })}
+            href="/apps"
+            delay={60}
+          >
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {freshest.map((app) => (
+                <AppCard key={app.id} app={app} variant="tile" />
+              ))}
+            </div>
+          </Section>
         )}
 
         {/* ──── Top picks (tiles) ──── */}
-        {topPicks.length > 0 && (
+        {!compactMode && topPicks.length > 0 && (
           <Section
             title={t("home.topPicks")}
             subtitle={t("home.topPicksSubtitle")}
@@ -150,7 +184,7 @@ export default function Home() {
         )}
 
         {/* ──── Recently updated (list rows) ──── */}
-        {recentlyUpdated.length > 0 && (
+        {!compactMode && recentlyUpdated.length > 0 && (
           <Section
             title={t("home.recentlyUpdated")}
             subtitle={t("home.recentlyUpdatedSubtitle")}

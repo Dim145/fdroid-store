@@ -122,6 +122,16 @@ server {
     location /u/ {
         try_files $uri $uri/index.html /u/__dynamic/index.html;
     }
+    # The admin Apps & APKs view ships a single ``/admin/apps/[package]/``
+    # placeholder route which client-redirects to ``/admin/apps?app=<pkg>``.
+    # Without this block, ``/admin/apps/org.foo.bar/`` would fall through
+    # to the catch-all below and serve the home page — shared admin
+    # deeplinks 404'd in practice. Order matters: the more specific
+    # ``/admin/apps/`` prefix must come before the bare ``/admin/`` (and
+    # before the default ``/``) location to win the regex match.
+    location /admin/apps/ {
+        try_files $uri $uri/index.html /admin/apps/__dynamic/index.html;
+    }
 
     # Default: serve the file if it exists, otherwise its index.html, then
     # fall back to the SPA root.

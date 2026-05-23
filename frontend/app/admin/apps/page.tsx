@@ -16,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { AppIcon } from "@/components/app-icon";
@@ -38,12 +38,80 @@ type FilterKey = "all" | StatusKey;
 /* -------------------------------------------------------------------------- */
 
 export default function AdminAppsPage() {
+  return <AdminAppsPageInner />;
+}
+
+function AdminAppsPageInner() {
   const { t } = useTranslation();
+  // The drawer is identified in the URL by package name (stable, shareable)
+  // rather than app UUID — the URL ``?app=org.foo.bar`` survives renames,
+  // index rebuilds, and works as a copy/pasted deeplink without leaking
+  // internal IDs.
+  //
+  // We keep the *canonical* state in React (``openPkg``) rather than in
+  // ``useSearchParams``: under ``output: "export"`` + ``trailingSlash``,
+  // ``router.replace`` to the same pathname doesn't always notify
+  // ``useSearchParams`` subscribers — which left a reloaded
+  // ``?app=<pkg>`` URL unable to close the drawer (every Escape /
+  // click-outside / X call fired ``router.replace`` to a no-op URL, and
+  // the search-params hook never re-rendered).
+  //
+  // The URL is still kept in sync — but via ``history.replaceState``,
+  // which is a synchronous DOM-level update unrelated to Next's router.
+  const [openPkg, setOpenPkg] = useState<string | null>(null);
   const [apps, setApps] = useState<AppDetail[] | null>(null);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [openId, setOpenId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Pick up the URL value once the route mounts. We read ``window.location``
+  // directly instead of ``useSearchParams`` because the latter is empty at
+  // the first render tick under ``output: "export"`` (params are baked into
+  // the URL, not into the prerendered HTML), and only fills in after
+  // hydration — by which point we've already missed the chance to set
+  // the initial state without an extra render.
+  //
+  // Also listen to ``popstate`` so the back/forward buttons restore the
+  // drawer state instead of leaving the URL and the open state out of
+  // sync.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sync = () => {
+      const p = new URLSearchParams(window.location.search).get("app");
+      setOpenPkg(p);
+    };
+    sync();
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+
+  // Map ``openPkg`` → app id once the list has loaded.
+  const openId = useMemo(() => {
+    if (!openPkg || !apps) return null;
+    const hit = apps.find((a) => a.package_name === openPkg);
+    return hit?.id ?? null;
+  }, [openPkg, apps]);
+
+  const setOpenId = useCallback(
+    (id: string | null) => {
+      const hit = id && apps ? apps.find((a) => a.id === id) : null;
+      const nextPkg = hit ? hit.package_name : null;
+      // Local state is the source of truth — flip it first so the
+      // drawer closes on the very next render, regardless of whether
+      // the URL update is observed by React.
+      setOpenPkg(nextPkg);
+      // Mirror to the URL for shareable / reloadable deeplinks. We use
+      // the browser's history API directly so the change is a pure DOM
+      // update, no Next.js navigation involved.
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        if (nextPkg) url.searchParams.set("app", nextPkg);
+        else url.searchParams.delete("app");
+        window.history.replaceState(null, "", url.toString());
+      }
+    },
+    [apps],
+  );
 
   async function refresh() {
     try {
@@ -535,6 +603,13 @@ function Sheet({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Remember which element opened the sheet so we can restore focus
+  // when it closes — without this, the user's keyboard focus ends up
+  // on ``<body>`` after dismissal and the next Tab starts from the top
+  // of the page.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
@@ -547,6 +622,74 @@ function Sheet({
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
   }, [open]);
+
+  // Focus trap. When the sheet opens, grab the first focusable element
+  // inside the panel; when the user tabs out, loop back. When it
+  // closes, give focus back to whatever the user was on before.
+  //
+  // Implemented at this level rather than via a library because we
+  // only need the bare minimum: ``Tab`` / ``Shift+Tab`` wrapping, plus
+  // the focus restoration on close. The dialog already handles
+  // Escape + click-outside.
+  useEffect(() => {
+    if (!open) return;
+    lastFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    function focusables(): HTMLElement[] {
+      const root = panelRef.current;
+      if (!root) return [];
+      const sel =
+        'a[href],area[href],button:not([disabled]),' +
+        'input:not([disabled]):not([type="hidden"]),' +
+        'select:not([disabled]),textarea:not([disabled]),' +
+        '[tabindex]:not([tabindex="-1"])';
+      return Array.from(root.querySelectorAll<HTMLElement>(sel)).filter(
+        (el) => el.offsetParent !== null || el === document.activeElement,
+      );
+    }
+
+    // Defer one tick so React has time to render the panel children.
+    const raf = requestAnimationFrame(() => {
+      const first = focusables()[0];
+      first?.focus();
+    });
+
+    function onTab(e: KeyboardEvent) {
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey) {
+        if (active === first || !panelRef.current?.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (active === last || !panelRef.current?.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    window.addEventListener("keydown", onTab);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("keydown", onTab);
+      // Restore caller's focus on close so screen-reader users don't
+      // get parked at the top of the page.
+      const back = lastFocusedRef.current;
+      if (back && document.contains(back)) {
+        back.focus();
+      }
+    };
+  }, [open]);
+
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50">
@@ -554,11 +697,21 @@ function Sheet({
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 animate-fade-in bg-black/40 backdrop-blur-[2px]"
+        // Bumped from ``bg-black/40`` + ``backdrop-blur-[2px]`` — at
+        // the previous opacity the moderation list behind the sheet
+        // was still legible enough that the modal didn't read as
+        // *modal*. /60 + a stronger blur gives the standard "the
+        // rest of the page is paused" cue without going opaque.
+        className="absolute inset-0 animate-fade-in bg-black/60 backdrop-blur-sm"
       />
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
+        // ``tabIndex={-1}`` lets ``ref.focus()`` work as a fallback
+        // when no interactive child exists yet (e.g. during the
+        // initial render before children mount).
+        tabIndex={-1}
         className="absolute right-0 top-0 flex h-full w-[min(560px,100vw)] animate-slide-in-right flex-col overflow-y-auto border-l border-outline-soft bg-surface shadow-e3"
       >
         {children}

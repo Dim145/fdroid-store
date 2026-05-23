@@ -433,26 +433,56 @@ export default function AppDetailClient() {
 
         <aside>
           <h2 className="section-title mb-3">{t("appDetail.info")}</h2>
-          <dl className="surface divide-y divide-outline-soft">
-            <SpecRow icon={<Globe className="h-4 w-4" />} label={t("appDetail.fields.website")} value={app.website} link={app.website} />
-            <SpecRow icon={<GitBranch className="h-4 w-4" />} label={t("appDetail.fields.source")} value={app.source_code} link={app.source_code} />
-            <SpecRow icon={<Bug className="h-4 w-4" />} label={t("appDetail.fields.issues")} value={app.issue_tracker} link={app.issue_tracker} />
-            <SpecRow icon={<Languages className="h-4 w-4" />} label={t("appDetail.fields.translate")} value={app.translation} link={app.translation} />
-            <SpecRow icon={<Mail className="h-4 w-4" />} label={t("appDetail.fields.author")} value={app.author_email} link={app.author_email ? `mailto:${app.author_email}` : null} />
-            <SpecRow label={t("appDetail.fields.license")} value={app.license} />
-            <SpecRow label={t("appDetail.fields.added")} value={formatDate(app.created_at)} />
-            {/* Per-app release feed — sits inside the Info block so it
-                reads as "yet another sub-link of the app" alongside
-                Website / Source / Issues. Public apps work anonymously;
-                private apps trigger a Basic-auth prompt in the feed
-                reader (the backend sends ``WWW-Authenticate``). */}
-            <SpecRow
-              icon={<Rss className="h-4 w-4" />}
-              label={t("appDetail.fields.feed")}
-              value={t("appDetail.feedAtom")}
-              link={`/api/v1/feed/apps/${encodeURIComponent(app.package_name)}`}
-            />
-          </dl>
+          {/* The Infos sidebar used to render a column of "—" placeholders
+              when an uploader hadn't filled metadata, which made an
+              otherwise-clean page look broken. We now group the rows by
+              whether they're "uploader-provided" (links, license, author
+              — these vanish individually via ``SpecRow``) versus "always
+              there" (Added timestamp, RSS feed). When *no* uploader rows
+              are present we show a single muted hint instead, so the
+              sidebar still has a body but doesn't pretend to be data-rich. */}
+          {(() => {
+            const hasMetadata = !!(
+              (app.website && app.website.trim()) ||
+              (app.source_code && app.source_code.trim()) ||
+              (app.issue_tracker && app.issue_tracker.trim()) ||
+              (app.translation && app.translation.trim()) ||
+              (app.author_email && app.author_email.trim()) ||
+              (app.license && app.license.trim())
+            );
+            return (
+              <dl className="surface divide-y divide-outline-soft">
+                {hasMetadata ? (
+                  <>
+                    <SpecRow icon={<Globe className="h-4 w-4" />} label={t("appDetail.fields.website")} value={app.website} link={app.website} />
+                    <SpecRow icon={<GitBranch className="h-4 w-4" />} label={t("appDetail.fields.source")} value={app.source_code} link={app.source_code} />
+                    <SpecRow icon={<Bug className="h-4 w-4" />} label={t("appDetail.fields.issues")} value={app.issue_tracker} link={app.issue_tracker} />
+                    <SpecRow icon={<Languages className="h-4 w-4" />} label={t("appDetail.fields.translate")} value={app.translation} link={app.translation} />
+                    <SpecRow icon={<Mail className="h-4 w-4" />} label={t("appDetail.fields.author")} value={app.author_email} link={app.author_email ? `mailto:${app.author_email}` : null} />
+                    <SpecRow label={t("appDetail.fields.license")} value={app.license} />
+                  </>
+                ) : (
+                  <div className="px-5 py-4 text-xs italic text-ink-mute">
+                    {t("appDetail.noMetadata", {
+                      defaultValue: "No links provided by the uploader yet.",
+                    })}
+                  </div>
+                )}
+                <SpecRow label={t("appDetail.fields.added")} value={formatDate(app.created_at)} />
+                {/* Per-app release feed — sits inside the Info block so it
+                    reads as "yet another sub-link of the app" alongside
+                    Website / Source / Issues. Public apps work anonymously;
+                    private apps trigger a Basic-auth prompt in the feed
+                    reader (the backend sends ``WWW-Authenticate``). */}
+                <SpecRow
+                  icon={<Rss className="h-4 w-4" />}
+                  label={t("appDetail.fields.feed")}
+                  value={t("appDetail.feedAtom")}
+                  link={`/api/v1/feed/apps/${encodeURIComponent(app.package_name)}`}
+                />
+              </dl>
+            );
+          })()}
           {(app.donate || app.liberapay || app.bitcoin || app.open_collective) && (
             <div className="surface mt-3 p-5">
               <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-wider text-ink-mute">
@@ -664,6 +694,11 @@ function SpecRow({
   value: string | null | undefined;
   link?: string | null;
 }) {
+  // Empty rows used to render a single ``—`` placeholder, which on a
+  // sparsely-filled listing turned the entire Infos sidebar into eight
+  // lines of nothing. Skip them at the leaf: the parent decides whether
+  // the whole panel is worth showing (see ``InfoPanel`` below).
+  if (!value || !value.trim()) return null;
   const safeLink = link && _SAFE_LINK_RE.test(link) ? link : null;
   return (
     <div className="flex items-center gap-3 px-5 py-3 text-sm">
@@ -672,22 +707,18 @@ function SpecRow({
         {label}
       </div>
       <div className="min-w-0 flex-1 truncate text-ink">
-        {value ? (
-          safeLink ? (
-            <a
-              href={safeLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-primary hover:underline"
-            >
-              <span className="truncate">{value}</span>
-              <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={2.4} />
-            </a>
-          ) : (
-            value
-          )
+        {safeLink ? (
+          <a
+            href={safeLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-primary hover:underline"
+          >
+            <span className="truncate">{value}</span>
+            <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={2.4} />
+          </a>
         ) : (
-          <span className="text-ink-mute">—</span>
+          value
         )}
       </div>
     </div>

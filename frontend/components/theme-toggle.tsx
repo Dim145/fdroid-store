@@ -1,81 +1,56 @@
 "use client";
 
-import { Moon, Sun, MonitorSmartphone } from "lucide-react";
-import { useState } from "react";
+import { Moon, MonitorSmartphone, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useTheme } from "@/components/theme-provider";
-import { cn } from "@/lib/utils";
 
-/* Material 3-style segmented toggle for theme preference. Shows three states:
- * light · system · dark. Persists via the ThemeProvider. The segment for the
- * currently-selected preference is filled; the others are ghost icons. */
+/* Single-button theme toggle. Cycles light → system → dark → light…
+ *
+ * Replaces the previous three-segment control, which ate ~110px of header
+ * real estate for three buttons most users never touch. The cycling pill
+ * keeps the same three preferences reachable in 1–2 clicks, surfaces the
+ * current one via the icon, and meets the 40×40 touch-target floor that
+ * the segmented version missed on mobile. */
+type Pref = "light" | "system" | "dark";
+const ORDER: readonly Pref[] = ["light", "system", "dark"];
+
 export function ThemeToggle() {
   const { t } = useTranslation();
   const { preference, setPreference } = useTheme();
-  const [open, setOpen] = useState(false);
 
-  return (
-    <div
-      className={cn(
-        "relative inline-flex h-9 items-center rounded-pill border border-outline bg-surface p-0.5 text-ink-soft transition-colors",
-      )}
-      role="group"
-      aria-label={t("theme.label")}
-    >
-      <Segment
-        active={preference === "light"}
-        onClick={() => setPreference("light")}
-        label={t("theme.light")}
-      >
-        <Sun className="h-3.5 w-3.5" strokeWidth={2.2} />
-      </Segment>
-      <Segment
-        active={preference === "system"}
-        onClick={() => setPreference("system")}
-        label={t("theme.system")}
-      >
-        <MonitorSmartphone className="h-3.5 w-3.5" strokeWidth={2.2} />
-      </Segment>
-      <Segment
-        active={preference === "dark"}
-        onClick={() => setPreference("dark")}
-        label={t("theme.dark")}
-      >
-        <Moon className="h-3.5 w-3.5" strokeWidth={2.2} />
-      </Segment>
-      {/* Keep hook in scope for future menu state. */}
-      <span className="sr-only" aria-hidden>{open ? "" : ""}</span>
-      <span aria-hidden onClick={() => setOpen(false)} />
-    </div>
-  );
-}
+  const idx = ORDER.indexOf(preference as Pref);
+  const next = ORDER[(idx + 1) % ORDER.length];
 
-function Segment({
-  active,
-  label,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+  // Localised name of the preference we'd land on if clicked — surfaced
+  // as an aria label and tooltip so users (and screen readers) know
+  // ahead of time what the click does.
+  const nextLabel = t(`theme.${next}`);
+  const currentLabel = t(`theme.${preference}`);
+
+  const Icon =
+    preference === "light" ? Sun
+      : preference === "dark" ? Moon
+        : MonitorSmartphone;
+
   return (
     <button
       type="button"
-      onClick={onClick}
-      aria-label={label}
-      aria-pressed={active}
-      className={cn(
-        "inline-flex h-7 w-7 items-center justify-center rounded-pill text-current transition-all",
-        active
-          ? "bg-primary text-primary-fg"
-          : "hover:bg-surface-2 hover:text-ink",
-      )}
+      onClick={() => setPreference(next)}
+      aria-label={t("theme.cycleAria", {
+        current: currentLabel,
+        next: nextLabel,
+        defaultValue: `Theme: ${currentLabel}. Click to switch to ${nextLabel}.`,
+      })}
+      title={t("theme.cycleTooltip", {
+        next: nextLabel,
+        defaultValue: `Switch to ${nextLabel} theme`,
+      })}
+      // The 40×40 hit area matches the user-menu pill next to it, so the
+      // two read as one row of icon-buttons rather than a mismatched pair.
+      className="inline-flex h-10 w-10 items-center justify-center rounded-pill border border-outline-soft bg-surface text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
     >
-      {children}
+      <Icon className="h-4 w-4" strokeWidth={2.2} />
     </button>
   );
 }
