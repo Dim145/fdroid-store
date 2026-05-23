@@ -518,7 +518,7 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
         <!-- 13 source proxies -->
         <section class="doc-section" id="source-proxies">
           <h2><span class="num">13</span>Source proxies (opt-in)</h2>
-          <p>For APK sources that don't fit the forge model (F-Droid mirrors, Patreon, kemono.cr, private artefact registries…), fdroid-store delegates to external <em>source proxy</em> services. The proxy speaks <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">a small v1 HTTP protocol</a> over Bearer auth; the proxy author owns the scraping / ToS / legal burden, and you only run the proxies you actually want.</p>
+          <p>For APK sources that don't fit the forge model (F-Droid mirrors, Patreon, private artefact registries…), fdroid-store delegates to external <em>source proxy</em> services. The proxy speaks <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">a small v1 HTTP protocol</a> over Bearer auth; the proxy author owns the scraping / ToS / legal burden, and you only run the proxies you actually want.</p>
 
           <h3>Reference F-Droid proxy</h3>
           <p>A reference implementation that fetches APKs from any F-Droid-compatible repo (f-droid.org, IzzyOnDroid, Guardian Project, another fdroid-store…) ships in the compose stack behind the <code>proxy-fdroid</code> profile. Off by default.</p>

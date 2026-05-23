@@ -40,14 +40,14 @@ import { cn, formatDate } from "@/lib/utils";
  *
  * The companion to ``GithubSourceSection`` for anything that isn't a Git forge:
  * a user picks one of the admin-registered proxies, then one of that proxy's
- * declared providers (F-Droid mirror, Patreon, kemono.cr, …), pastes the
- * upstream URL, and fills whatever auth the provider asks for (nothing, API
- * token, OAuth popup, …). The worker then polls /resolve on a daily cron
- * and imports new releases the same way it does GitHub ones.
+ * declared providers (F-Droid mirror, Patreon, private artefact registry, …),
+ * pastes the upstream URL, and fills whatever auth the provider asks for
+ * (nothing, API token, OAuth popup, …). The worker then polls /resolve on a
+ * daily cron and imports new releases the same way it does GitHub ones.
  *
  * Unlike GitHub source which is a singleton per app, an app can hold multiple
- * proxy sources (one per provider) — e.g. a kemono mirror + a Patreon early-
- * access feed both pointing at the same author.
+ * proxy sources (one per provider) — e.g. an F-Droid mirror + a Patreon
+ * early-access feed both pointing at the same package.
  * ============================================================================ */
 
 

@@ -1080,7 +1080,7 @@ function ManageAppInner() {
         <GithubSourceSection appId={app.id} onImported={() => void load()} />
       </Section>
 
-      {/* ──── Proxy-driven sources (F-Droid mirror, Patreon, kemono, …) ──── */}
+      {/* ──── Proxy-driven sources (F-Droid mirror, Patreon, private registry, …) ──── */}
       <Section
         id="proxy-sources"
         step={stepOf("proxy-sources")}

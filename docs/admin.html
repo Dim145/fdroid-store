@@ -364,13 +364,13 @@
         <!-- 12 source proxies -->
         <section class="doc-section" id="proxies">
           <h2><span class="num">12</span>Source proxies</h2>
-          <p><code>/admin/proxies</code> manages the registry of external <em>source proxies</em> — small HTTP services that fetch APKs from places fdroid-store doesn't scrape natively (Patreon, kemono.cr, F-Droid mirrors, in-house artefact repos…). The proxy owns the legal/ToS/maintenance burden for its slice; fdroid-store stays neutral and only speaks <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">the v1 proxy protocol</a> over plain HTTP.</p>
+          <p><code>/admin/proxies</code> manages the registry of external <em>source proxies</em> — small HTTP services that fetch APKs from places fdroid-store doesn't scrape natively (Patreon, F-Droid mirrors, in-house artefact repos…). The proxy owns the legal/ToS/maintenance burden for its slice; fdroid-store stays neutral and only speaks <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">the v1 proxy protocol</a> over plain HTTP.</p>
 
           <h3>Registering a proxy</h3>
           <ol class="steps">
             <li>
               <strong>Deploy the proxy</strong>
-              <p>The reference F-Droid proxy ships in the compose stack under the <code>proxy-fdroid</code> profile (see install §08). Third-party proxies (Patreon, kemono, …) are out-of-tree — see the protocol spec to write your own.</p>
+              <p>The reference F-Droid proxy ships in the compose stack under the <code>proxy-fdroid</code> profile (see install §08). Third-party proxies (Patreon, internal registries, …) are out-of-tree — see the protocol spec to write your own.</p>
             </li>
             <li>
               <strong>Add it</strong>

@@ -11,8 +11,8 @@ an opt-in compose profile. It exists for two reasons:
 1. **You can use it as-is**: drop a "F-Droid mirror" source on any of
    your apps to track a release published on another F-Droid repo.
 2. **It's the canonical example**: anyone writing a proxy for Patreon,
-   kemono, Play Store, an internal artefact registry, … can copy the
-   shape and patterns from here (~350 lines, one file).
+   the Play Store, an internal artefact registry, … can copy the shape
+   and patterns from here (~350 lines, one file).
 
 ## URL format the user pastes
 

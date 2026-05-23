@@ -851,7 +851,7 @@
         "githubSource": "GitHub releases",
         "githubSourceSubtitle": "Auto-import the latest release of a GitHub repository. A daily scan downloads the matching APK and adds it as a new version — same signer, quota and scan checks apply.",
         "proxySources": "External sources",
-        "proxySourcesSubtitle": "Wire an external proxy (F-Droid mirror, Patreon, kemono.cr, private artefact repo…) to auto-import from a source fdroid-store doesn't scrape natively. Admins deploy the proxies — you pick which proxy and which provider to use.",
+        "proxySourcesSubtitle": "Wire an external proxy (F-Droid mirror, Patreon, private artefact repo…) to auto-import from a source fdroid-store doesn't scrape natively. Admins deploy the proxies — you pick which proxy and which provider to use.",
         "deployTokens": "CI publish",
         "deployTokensSubtitle": "Mint a token your CI can POST APKs to — same signer, quota and scan checks as an interactive upload. Scoped to this app only."
       },
@@ -1203,7 +1203,7 @@
         }
       },
       "proxySources": {
-        "intro": "Each proxy publishes its own catalogue of providers (F-Droid mirror, Patreon, kemono.cr, private artefact repo, …). One app can hold multiple sources as long as they point at the same package and signer.",
+        "intro": "Each proxy publishes its own catalogue of providers (F-Droid mirror, Patreon, private artefact repo, …). One app can hold multiple sources as long as they point at the same package and signer.",
         "add": "Add a source",
         "empty": "No proxy source attached. Click \"Add a source\" to wire one.",
         "noProxiesTitle": "No proxies available",
@@ -1295,7 +1295,7 @@
     },
     "proxies": {
       "title": "External sources (proxies)",
-      "subtitle": "fdroid-store delegates non-native sources (Patreon, kemono, F-Droid, a private artefact registry, …) to external proxy services speaking the v1 protocol. Each proxy declares its own providers and auth modes — fdroid-store stays neutral, the operator picks what to plug in.",
+      "subtitle": "fdroid-store delegates non-native sources (Patreon, F-Droid, a private artefact registry, …) to external proxy services speaking the v1 protocol. Each proxy declares its own providers and auth modes — fdroid-store stays neutral, the operator picks what to plug in.",
       "addTitle": "Connect a proxy",
       "addAction": "Add",
       "addHint": "Deploy the proxy separately (the reference F-Droid proxy ships in the compose stack under the ``proxy-fdroid`` profile), then paste its URL and the shared secret here.",

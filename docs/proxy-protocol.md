@@ -7,11 +7,11 @@
 ## Why this exists
 
 `fdroid-store` natively speaks to GitHub / GitLab / Gitea release feeds.
-Everything else — Patreon, kemono, Play Store, an internal S3 release
-bucket, a flat directory of nightly builds on someone's NAS — lives
-behind a **source proxy**: a small HTTP service the operator deploys (or
-points at) which knows how to talk to those upstreams and exposes them
-through a uniform JSON API.
+Everything else — Patreon, Play Store, an internal S3 release bucket,
+a flat directory of nightly builds on someone's NAS — lives behind a
+**source proxy**: a small HTTP service the operator deploys (or points
+at) which knows how to talk to those upstreams and exposes them through
+a uniform JSON API.
 
 `fdroid-store` itself stays neutral. It carries zero scraping code, zero
 upstream-specific authentication, and no policy on what's an acceptable
@@ -29,8 +29,8 @@ lines of FastAPI / Express / Echo).
 │  fdroid-store    │ ─────────────────────────────▶ │  Source Proxy   │
 │                  │   2. POST /resolve              │                 │
 │  (worker fetches │ ─────────────────────────────▶ │  · Patreon      │
-│   on a cron)     │                                 │  · kemono       │
-│                  │   3. GET   <apk_url>            │  · F-Droid      │
+│   on a cron)     │                                 │  · F-Droid      │
+│                  │   3. GET   <apk_url>            │  · S3 bucket    │
 │                  │ ─────────────────────────────▶ │  · …            │
 └──────────────────┘                                 └─────────────────┘
                                                               │
@@ -126,16 +126,17 @@ Authorization: Bearer <shared_secret>
       }
     },
     {
-      "id": "kemono",
-      "name": "kemono.cr",
-      "url_hint": "https://kemono.cr/patreon/user/<id>",
+      "id": "private-artefacts",
+      "name": "Internal artefact registry",
+      "description": "Per-build APK uploaded to an internal S3 bucket.",
+      "url_hint": "https://artefacts.example.org/<project>/latest.apk",
       "auth_kind": "api_token",
       "secret_fields": [
         {
-          "key": "session_cookie",
-          "label": "kemono session cookie (optional, premium)",
+          "key": "api_token",
+          "label": "Read-only token for the bucket",
           "secret": true,
-          "required": false
+          "required": true
         }
       ]
     }

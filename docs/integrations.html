@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Integrations — fdroid-store</title>
-  <meta name="description" content="Point F-Droid clients at your repo, publish APKs from CI, wire up forge auto-ingest (GitHub, GitLab, Gitea/Forgejo), and attach source proxies (F-Droid mirrors, Patreon, kemono, internal registries)." />
+  <meta name="description" content="Point F-Droid clients at your repo, publish APKs from CI, wire up forge auto-ingest (GitHub, GitLab, Gitea/Forgejo), and attach source proxies (F-Droid mirrors, Patreon, internal registries)." />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -66,7 +66,7 @@
           <strong>forge auto-ingest</strong> so releases on GitHub / GitLab /
           Gitea show up here automatically, and delegating to
           <strong>source proxies</strong> for anything else (F-Droid mirrors,
-          Patreon, kemono, internal artefact registries…).
+          Patreon, internal artefact registries…).
         </p>
 
         <!-- 01 client -->
@@ -519,7 +519,7 @@ GET  /api/v1/feed/apps/&lt;package_name&gt;</pre>
         <!-- 12 source proxies -->
         <section class="doc-section" id="proxies">
           <h2><span class="num">12</span>Source proxies</h2>
-          <p>For APK sources that don't fit the forge model — F-Droid mirrors, Patreon, kemono.cr, your own internal artefact registry — fdroid-store delegates to external <em>source proxy</em> services that speak <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">a small HTTP protocol</a>. Each proxy author owns the scraping / ToS / legal burden for their slice; fdroid-store stays neutral and only talks to the proxies your operator has whitelisted.</p>
+          <p>For APK sources that don't fit the forge model — F-Droid mirrors, Patreon, your own internal artefact registry — fdroid-store delegates to external <em>source proxy</em> services that speak <a href="https://github.com/Dim145/fdroid-store/blob/main/docs/proxy-protocol.md">a small HTTP protocol</a>. Each proxy author owns the scraping / ToS / legal burden for their slice; fdroid-store stays neutral and only talks to the proxies your operator has whitelisted.</p>
 
           <h3>What the operator sees, what you see</h3>
           <p>Admins register proxies on <code>/admin/proxies</code> with a name, a base URL and an optional shared secret. As an uploader you only see the proxy's name + the providers it exposes — never the URL, never the secret. The actual HTTP traffic from <code>/resolve</code> downloads happens server-side, so internal hostnames stay internal.</p>

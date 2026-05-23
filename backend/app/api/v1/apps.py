@@ -651,7 +651,7 @@ async def create_app_with_proxy_source(
     """Create an App + first APK + ApkProxySource in one shot.
 
     Mirror of :func:`create_app_with_github_source` but the APK comes
-    from a configured proxy (F-Droid mirror, Patreon, kemono.cr, …).
+    from a configured proxy (F-Droid mirror, Patreon, private artefact registry, …).
     The proxy is re-resolved + re-downloaded server-side so the client
     can't smuggle a tampered binary through the inspect response.
 

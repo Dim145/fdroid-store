@@ -851,7 +851,7 @@
         "githubSource": "Releases GitHub",
         "githubSourceSubtitle": "Import auto de la dernière release d'un dépôt GitHub. Un scan quotidien télécharge l'APK correspondant et l'ajoute comme nouvelle version — mêmes contrôles de signer, quota et antivirus.",
         "proxySources": "Sources externes",
-        "proxySourcesSubtitle": "Branche un proxy externe (F-Droid mirror, Patreon, kemono.cr, dépôt artefacts privé…) pour automatiser l'import depuis une source que fdroid-store ne sait pas scraper en natif. L'admin déploie les proxies — toi tu choisis lequel et quelle provider tu utilises.",
+        "proxySourcesSubtitle": "Branche un proxy externe (F-Droid mirror, Patreon, dépôt artefacts privé…) pour automatiser l'import depuis une source que fdroid-store ne sait pas scraper en natif. L'admin déploie les proxies — toi tu choisis lequel et quelle provider tu utilises.",
         "deployTokens": "Publication CI",
         "deployTokensSubtitle": "Mints un token que ta CI peut utiliser pour POSTer des APK — mêmes contrôles de signer, quota et antivirus qu'un upload interactif. Limité à cette app uniquement."
       },
@@ -1186,7 +1186,7 @@
         }
       },
       "proxySources": {
-        "intro": "Chaque proxy déclare ses propres providers (F-Droid mirror, Patreon, kemono.cr, dépôt artefacts privé, …). Une app peut combiner plusieurs sources tant qu'elles pointent vers le même paquet et le même signataire.",
+        "intro": "Chaque proxy déclare ses propres providers (F-Droid mirror, Patreon, dépôt artefacts privé, …). Une app peut combiner plusieurs sources tant qu'elles pointent vers le même paquet et le même signataire.",
         "add": "Ajouter une source",
         "empty": "Aucune source proxy attachée. Clique sur « Ajouter une source » pour en brancher une.",
         "noProxiesTitle": "Aucun proxy disponible",
@@ -1295,7 +1295,7 @@
     },
     "proxies": {
       "title": "Sources externes (proxies)",
-      "subtitle": "fdroid-store délègue les sources non-natives (Patreon, kemono, F-Droid, dépôt artefacts privé, …) à des services proxy externes qui parlent le protocole v1. Chaque proxy déclare ses propres providers et son mode d'authentification — fdroid-store reste neutre, c'est l'opérateur qui choisit ce qu'il branche.",
+      "subtitle": "fdroid-store délègue les sources non-natives (Patreon, F-Droid, dépôt artefacts privé, …) à des services proxy externes qui parlent le protocole v1. Chaque proxy déclare ses propres providers et son mode d'authentification — fdroid-store reste neutre, c'est l'opérateur qui choisit ce qu'il branche.",
       "addTitle": "Brancher un proxy",
       "addAction": "Ajouter",
       "addHint": "Tu déploies le proxy à part (le proxy de référence F-Droid est dans le compose stack sous le profile ``proxy-fdroid``), puis tu colles ici son URL et le secret partagé.",
