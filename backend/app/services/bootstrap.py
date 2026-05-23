@@ -15,6 +15,8 @@ from app.models import (  # noqa: F401 — ensure all models register with Base.
     Apk,
     ApiKey,
     ApkCve,
+    ApkProxy,
+    ApkProxySource,
     ApkSbom,
     App,
     AppCategory,
