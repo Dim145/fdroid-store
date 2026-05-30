@@ -3,15 +3,17 @@
 We only consume the YAML files (not the deprecated ``.txt`` metadata
 format) and return a flat dict the New App form can prefill itself with.
 
-Security: we parse with a hardened ``SafeLoader`` subclass — no arbitrary
-Python type instantiation, no ``!Loader`` tags (SafeLoader), AND no YAML
-aliases. Aliases are refused because ``safe_load`` still *expands* them,
-so a 250-byte "billion laughs" anchor/alias chain explodes into tens of
-millions of nodes (verified: ~250 B → 54 M nodes → 8 s CPU) — a trivial
-DoS that the 32 KiB size cap does nothing to stop. Anchors without an
-alias are harmless and rare in metadata.yml; we reject only on the alias
-event, so ``&``/``*`` inside ordinary string values parse fine. Unknown
-keys are silently dropped.
+Security: deserialisation goes through ``yaml.safe_load`` (no arbitrary
+Python type instantiation, no ``!Loader`` tags). On top of that we reject
+YAML *aliases* first, because ``safe_load`` still *expands* them — a
+250-byte "billion laughs" anchor/alias chain explodes into tens of
+millions of nodes (verified: ~250 B → 54 M nodes → 8 s CPU), a trivial
+DoS the 32 KiB size cap does nothing to stop. The rejection is a cheap
+token SCAN (``yaml.scan``), which does not expand anything — expansion
+only happens at construct time, which we reach only after the scan
+passes. Anchors without an alias are harmless, and ``&``/``*`` inside
+ordinary string values aren't tokenised as anchors/aliases, so normal
+text parses fine. Unknown keys are silently dropped.
 """
 from __future__ import annotations
 
@@ -23,18 +25,26 @@ from fastapi import HTTPException, status
 _MAX_BYTES = 32 * 1024
 
 
-class _SafeLoaderNoAlias(yaml.SafeLoader):
-    """``SafeLoader`` that additionally refuses YAML aliases (``*ref``),
-    closing the alias-expansion ("billion laughs") DoS that plain
-    ``safe_load`` is vulnerable to."""
+def _reject_yaml_aliases(raw: str) -> None:
+    """Raise ``HTTPException(400)`` if ``raw`` uses a YAML alias (``*ref``).
 
-    def compose_node(self, parent: Any, index: Any) -> Any:  # noqa: ANN401
-        if self.check_event(yaml.events.AliasEvent):
-            ev = self.get_event()
-            raise yaml.composer.ComposerError(
-                None, None, "YAML aliases are not permitted", ev.start_mark
-            )
-        return super().compose_node(parent, index)
+    Scanning the token stream neither resolves aliases nor builds nodes, so
+    feeding it the billion-laughs bomb is O(input) — the expansion that makes
+    that input dangerous would only occur later in ``safe_load``, which we
+    never reach when an alias is present.
+    """
+    try:
+        for token in yaml.scan(raw, Loader=yaml.SafeLoader):
+            if isinstance(token, yaml.tokens.AliasToken):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="metadata.yml must not use YAML aliases",
+                )
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid YAML: {exc}",
+        ) from exc
 
 
 def parse_metadata_yaml(raw: str) -> dict[str, Any]:
@@ -53,8 +63,9 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="metadata.yml too large (32 KiB max)",
         )
+    _reject_yaml_aliases(raw)
     try:
-        data = yaml.load(raw, Loader=_SafeLoaderNoAlias)  # noqa: S506 — hardened SafeLoader subclass, aliases refused
+        data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
