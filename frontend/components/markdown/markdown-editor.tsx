@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Extension } from "@tiptap/core";
 import type { Editor } from "@tiptap/react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { Placeholder } from "@tiptap/extensions";
@@ -32,15 +33,51 @@ import { Toolbar, type ToolbarActionKey } from "./toolbar";
      • HTML (e.g. from a Notion / Google Doc paste) → parsed by ProseMirror
        and re-serialised through tiptap-markdown, so only the subset we
        support survives. Anything else is dropped silently.
+
+   Blank-line policy:
+     CommonMark §4.8 says multiple blank lines between blocks are equivalent
+     to a single one — both ``marked`` and the F-Droid Android client honour
+     that. We enforce the same rule live so the editor doesn't lie:
+       1. ``BlockEmptyParagraphChain`` intercepts Enter on an already-empty
+          top-level paragraph (so chaining ``Enter Enter Enter`` is a no-op
+          instead of stacking ghost paragraphs the preview will drop anyway).
+          Exits from list / blockquote still work — those rely on Enter on
+          an empty paragraph and aren't top-level so the guard skips them.
+       2. ``getMarkdown`` collapses runs of 3+ newlines to 2 on the way out.
+          Belt-and-braces for the paste path (a user pasting raw Markdown
+          with extra blank lines gets the normalised version saved).
    ---------------------------------------------------------------------------- */
 
 const HARD_MAX = 20_000;
 
+const BlockEmptyParagraphChain = Extension.create({
+  name: "blockEmptyParagraphChain",
+  addKeyboardShortcuts() {
+    return {
+      Enter: ({ editor }) => {
+        const { $from } = editor.state.selection;
+        // Only intercept top-level empty paragraphs. ``$from.depth === 1``
+        // means we're a direct child of the document — Enter on an empty
+        // paragraph inside a list item or blockquote is the standard way
+        // to exit that container, so we leave it alone.
+        return (
+          $from.depth === 1
+          && $from.parent.type.name === "paragraph"
+          && $from.parent.content.size === 0
+        );
+      },
+    };
+  },
+});
+
 /** ``tiptap-markdown`` registers a serialiser at ``editor.storage.markdown``.
- *  Centralising the cast here keeps the typing dance out of the call sites. */
+ *  We collapse runs of 3+ newlines to 2 so a pasted document with extra
+ *  blank lines round-trips through save/reload as the canonical (single
+ *  blank line) form — matches what every Markdown parser will render. */
 function getMarkdown(editor: Editor): string {
   type WithMarkdown = { markdown?: { getMarkdown: () => string } };
-  return (editor.storage as WithMarkdown).markdown?.getMarkdown() ?? "";
+  const raw = (editor.storage as WithMarkdown).markdown?.getMarkdown() ?? "";
+  return raw.replace(/\n{3,}/g, "\n\n");
 }
 
 export type MarkdownEditorProps = {
@@ -122,6 +159,7 @@ export function MarkdownEditor({
         transformPastedText: true,
         transformCopiedText: true,
       }),
+      BlockEmptyParagraphChain,
     ],
     [placeholder],
   );
