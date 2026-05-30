@@ -178,7 +178,7 @@ def _auth_headers(proxy: ApkProxy) -> dict[str, str]:
     """Build the ``Authorization`` header from the proxy's encrypted
     bearer secret. Missing / undecryptable token → header omitted (the
     proxy will 401, which we surface as ``auth_failed``)."""
-    headers = {"User-Agent": "fdroid-store/1.3", "Accept": "application/json"}
+    headers = {"User-Agent": "fdroid-store/1.4", "Accept": "application/json"}
     if proxy.auth_token_encrypted:
         try:
             token = fernet_decrypt(proxy.auth_token_encrypted)

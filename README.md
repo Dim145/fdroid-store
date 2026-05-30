@@ -421,8 +421,53 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.3.0 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.0 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.0
+
+Security + hardening release — no new features, but a broad audit-driven
+sweep across both ends and the dependency tree.
+
+- **Stored-XSS fix on the public app page** — Markdown descriptions are
+  rendered through `marked` + DOMPurify, but the anchor `target`/`rel`
+  hardening used to run as a regex over DOMPurify's *output*. DOMPurify
+  legitimately emits a literal `>` inside a quoted `href`, so the regex
+  split the tag and re-injected a trailing `<img onerror=…>` as live
+  markup — a crafted description ran JS in every visitor's session. The
+  rewrite is now a DOMPurify `afterSanitizeAttributes` hook, so
+  sanitisation is always the last word.
+- **SSRF hardening, end to end** — a DNS-rebinding-safe HTTP transport
+  resolves each outbound host once, refuses any blocked address, and
+  pins the connection to the validated IP (forge polling + APK-proxy
+  fetches). Forge calls also re-validate at fetch time and no longer
+  follow redirects. The metadata-IP blocklist now recognises IPv4-mapped
+  IPv6 and decimal/hex/octal spellings, and the private-range check
+  covers CGNAT (100.64/10).
+- **At-rest secret keys** derived with HKDF-SHA256 (domain-separated from
+  the JWT signing key) instead of a bare `SHA-256(secret_key)`; existing
+  encrypted tokens keep decrypting via a legacy fallback (no
+  re-encryption needed).
+- **Rate-limit + auth hardening** — the API port now binds to loopback so
+  `X-Forwarded-For` can't be forged past the frontend to evade per-IP
+  limits; MFA (TOTP confirm, passkey/enrol begin+finish) endpoints are
+  rate-limited; the metadata.yml importer refuses YAML aliases (closes a
+  ~250 B → 54 M node "billion laughs" DoS); screenshot uploads validate
+  the `locale` path segment and cap the batch; proxy-supplied download
+  headers are allowlisted.
+- **F-Droid index timestamp fix** — `entry.json` and `index-v2.json`
+  now share a single, strictly-monotonic timestamp per rebuild, and the
+  index files publish atomically (temp + rename). This fixes the
+  intermittent "Repo timestamp expected X, but was Y" error in the
+  F-Droid client.
+- **Dependency refresh** — Tiptap v2 → v3 (editor), `marked` 14 → 18,
+  `isomorphic-dompurify` 2 → 3, plus security-floor bumps on PyJWT
+  (2.13), authlib, python-multipart, pwdlib and others; dev tooling on
+  mypy 2 / pytest 9 / ruff 0.15. A mypy-2 audit fixed six latent bugs
+  (incl. a reachable IPv4/IPv6 comparison `TypeError`).
+- **Ops** — worker container healthcheck (arq heartbeat); worker image
+  re-copies the app code so a parallel `docker compose build` can't ship
+  it stale.
 
 ### 1.3.0
 
