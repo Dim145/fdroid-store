@@ -220,6 +220,7 @@ async def _build_one(
     repo_config: RepoConfig,
     apps: list[App],
     prefix: str,
+    timestamp_ms: int,
 ) -> None:
     file_meta = await _collect_file_meta(storage, repo_config=repo_config, apps=apps)
 
@@ -234,16 +235,29 @@ async def _build_one(
     except json.JSONDecodeError:
         log.warning("repo_config.mirrors_json is not valid JSON; ignoring")
 
+    # All three files share ONE timestamp: the F-Droid v2 client binds the
+    # signed entry.json to index-v2.json by both checksum AND ``timestamp``,
+    # so they must be byte-for-byte agreed. Threading ``timestamp_ms`` (rather
+    # than letting each builder call ``now()``) is what fixes the intermittent
+    # "expected timestamp doesn't match" client error.
+
     # index-v1.jar (contains index-v1.json, signed)
-    v1_bytes = build_index_v1(repo_config=repo_config, apps=apps, mirrors=mirrors)
+    v1_bytes = build_index_v1(
+        repo_config=repo_config, apps=apps, mirrors=mirrors, timestamp_ms=timestamp_ms
+    )
     await _write_jar(
         storage,
         storage_key=f"{prefix}/index-v1.jar",
         entries={"index-v1.json": v1_bytes},
     )
 
-    # index-v2.json (plaintext) + entry.jar (signed, contains entry.json)
-    v2_bytes = build_index_v2(repo_config=repo_config, apps=apps, mirrors=mirrors, file_meta=file_meta)
+    # index-v2.json (plaintext) — written BEFORE entry.jar so the signed
+    # entry (the client's entrypoint) only ever points at an index already
+    # on disk.
+    v2_bytes = build_index_v2(
+        repo_config=repo_config, apps=apps, mirrors=mirrors,
+        file_meta=file_meta, timestamp_ms=timestamp_ms,
+    )
     await _write_bytes(
         storage,
         f"{prefix}/index-v2.json",
@@ -251,7 +265,8 @@ async def _build_one(
         content_type="application/json",
     )
 
-    entry_obj = json.loads(build_entry_json(v2_bytes))
+    # entry.jar (signed) — same timestamp as index-v2.json above.
+    entry_obj = json.loads(build_entry_json(v2_bytes, timestamp_ms=timestamp_ms))
     entry_obj["index"]["numPackages"] = len(apps)
     entry_bytes = json.dumps(entry_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     await _write_jar(
@@ -289,13 +304,27 @@ async def rebuild_repo_index(db: AsyncSession) -> None:
 
     log.info("rebuilding repo index", repo=repo_config.name)
 
+    # One timestamp for the whole rebuild, forced strictly monotonic against
+    # the previous rebuild. F-Droid clients treat a non-increasing repo
+    # timestamp as a rollback and refuse the update, so if the wall clock
+    # ever steps backwards (NTP correction) we still hand out an increasing
+    # value rather than wedging every client until real time catches up.
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    prev = repo_config.last_indexed_at
+    if prev is not None:
+        prev_aware = prev if prev.tzinfo is not None else prev.replace(tzinfo=UTC)
+        prev_ms = int(prev_aware.timestamp() * 1000)
+        if now_ms <= prev_ms:
+            now_ms = prev_ms + 1
+
     apps_public_all = await _load_public_apps(db)
     apps_public_sfw = _strip_nsfw(apps_public_all)
 
     # The shared public index is the default-view: no NSFW. Anonymous F-Droid
     # clients and API keys for users without an opt-in fall through here.
     await _build_one(
-        storage, repo_config=repo_config, apps=apps_public_sfw, prefix=REPO_PUBLIC_PREFIX,
+        storage, repo_config=repo_config, apps=apps_public_sfw,
+        prefix=REPO_PUBLIC_PREFIX, timestamp_ms=now_ms,
     )
 
     # Per-user indexes cover two divergences from the default public view:
@@ -317,6 +346,7 @@ async def rebuild_repo_index(db: AsyncSession) -> None:
             repo_config=repo_config,
             apps=base_public + owner_private,
             prefix=user_private_prefix(user_id),
+            timestamp_ms=now_ms,
         )
         private_total += len(owner_private)
 
@@ -332,7 +362,9 @@ async def rebuild_repo_index(db: AsyncSession) -> None:
 
     repo_config.private_index_owner_ids = json.dumps(sorted(current_set))
     repo_config.last_index_version += 1
-    repo_config.last_indexed_at = datetime.now(UTC)
+    # Persist the EXACT timestamp embedded in this rebuild's indexes (not a
+    # fresh now()) so the monotonic clamp on the next rebuild is precise.
+    repo_config.last_indexed_at = datetime.fromtimestamp(now_ms / 1000, tz=UTC)
     await db.flush()
     log.info(
         "repo index rebuilt",

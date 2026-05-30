@@ -215,12 +215,17 @@ def build_index_v2(
     apps: Iterable[App],
     mirrors: list[str] | None = None,
     file_meta: dict[str, dict[str, Any]] | None = None,
+    timestamp_ms: int | None = None,
 ) -> bytes:
     """``file_meta`` maps each referenced icon storage key to its content
     hash + size. The F-Droid v2 client rejects icon entries that don't carry
     these, so the caller is responsible for hashing icons before calling.
+
+    ``timestamp_ms`` MUST be passed the same value used for ``entry.json``
+    (see ``build_entry_json``): the F-Droid v2 client binds the signed entry
+    to this index by both checksum AND timestamp, so a mismatch is rejected.
     """
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    now_ms = timestamp_ms if timestamp_ms is not None else int(datetime.now(UTC).timestamp() * 1000)
     packages: dict[str, Any] = {}
     categories_seen: set[str] = set()
     for app in apps:

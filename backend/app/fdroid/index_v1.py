@@ -185,13 +185,18 @@ def build_index_v1(
     repo_config: RepoConfig,
     apps: Iterable[App],
     mirrors: list[str] | None = None,
+    timestamp_ms: int | None = None,
 ) -> bytes:
     """Return the index-v1.json content as UTF-8 bytes.
 
     Only apps with at least one PUBLISHED apk are emitted. Apps with no APK
     are silently skipped (the index would not be useful without binaries).
+
+    ``timestamp_ms`` lets the caller pin the repo timestamp so a single
+    rebuild stamps v1, v2 and entry.json identically. Falls back to
+    ``now()`` only when called standalone.
     """
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    now_ms = timestamp_ms if timestamp_ms is not None else int(datetime.now(UTC).timestamp() * 1000)
     apps_list: list[dict[str, Any]] = []
     packages: dict[str, list[dict[str, Any]]] = {}
 

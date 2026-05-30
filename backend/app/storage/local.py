@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import BinaryIO
+from uuid import uuid4
 
 import aiofiles
 
@@ -31,29 +33,52 @@ class LocalStorage(Storage):
         return target
 
     # ------------------------------------------------------------------
+    def _tmp_sibling(self, target: Path) -> Path:
+        """A unique temp path in the SAME directory as ``target`` so the
+        final ``os.replace`` is a same-filesystem atomic rename."""
+        return target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+
     async def put(self, key: str, data: bytes | BinaryIO, content_type: str | None = None) -> None:
         target = self._resolve(key)
         target.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(target, "wb") as f:
-            if isinstance(data, (bytes, bytearray)):
-                await f.write(data)
-            else:
-                while True:
-                    chunk = data.read(self.CHUNK)
-                    if not chunk:
-                        break
-                    await f.write(chunk)
+        # Atomic publish: write a sibling temp file, then atomically rename it
+        # over the target. A concurrent reader (e.g. the F-Droid serving route
+        # streaming index-v2.json while a reindex overwrites it) then always
+        # sees the whole old file or the whole new file — never a truncated
+        # one. Without this, in-place "wb" truncation hands out a corrupt /
+        # short index mid-write.
+        tmp = self._tmp_sibling(target)
+        try:
+            async with aiofiles.open(tmp, "wb") as f:
+                if isinstance(data, (bytes, bytearray)):
+                    await f.write(data)
+                else:
+                    while True:
+                        chunk = data.read(self.CHUNK)
+                        if not chunk:
+                            break
+                        await f.write(chunk)
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
 
     async def put_stream(self, key: str, source: AsyncIterator[bytes], content_type: str | None = None) -> int:
         target = self._resolve(key)
         target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._tmp_sibling(target)
         total = 0
-        async with aiofiles.open(target, "wb") as f:
-            async for chunk in source:
-                if not chunk:
-                    continue
-                await f.write(chunk)
-                total += len(chunk)
+        try:
+            async with aiofiles.open(tmp, "wb") as f:
+                async for chunk in source:
+                    if not chunk:
+                        continue
+                    await f.write(chunk)
+                    total += len(chunk)
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
         return total
 
     async def get_bytes(self, key: str) -> bytes:
