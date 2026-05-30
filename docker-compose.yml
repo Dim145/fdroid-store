@@ -116,8 +116,15 @@ services:
       # above). The default /tmp is a 512 MB tmpfs, too small for the
       # backup working set on real-sized repos.
       - backup_tmp:/data/backup-tmp
+    # Bind to the host LOOPBACK only. The backend trusts ``X-Forwarded-For``
+    # for per-IP rate limiting (the frontend nginx overwrites it with the
+    # real client IP). If port 8000 were published on 0.0.0.0, any remote
+    # client could hit the API directly and forge ``X-Forwarded-For`` to
+    # evade the auth-endpoint rate limits — so it's reachable only from the
+    # host itself (local dev / curl), never from the network. Production
+    # traffic always goes through the frontend on :8080.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
