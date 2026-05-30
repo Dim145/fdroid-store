@@ -421,8 +421,17 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.0 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.1 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.1
+
+- **CodeQL `py/unsafe-deserialization` cleared** — the 1.4.0 billion-laughs
+  hardening parsed metadata.yml via `yaml.load()` with a `SafeLoader`
+  *subclass*, which CodeQL flags as unsafe deserialisation (it doesn't
+  recognise the subclass as safe). Reworked to plain `yaml.safe_load`
+  with a separate `yaml.scan` token pass that rejects YAML aliases — same
+  DoS protection (bomb rejected in <1 ms), no flagged sink.
 
 ### 1.4.0
 
