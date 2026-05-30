@@ -70,6 +70,13 @@ export function ProxySourcesSection({
   // landing while last_status=imported would notify the parent every tick.
   const seenReleases = useRef<Map<string, string>>(new Map());
 
+  // The parent passes a fresh inline ``onImported`` lambda each render. Route
+  // it through a ref so the polling effect below doesn't list it as a dep —
+  // otherwise the 4s interval is torn down and recreated on every parent
+  // re-render (frequent during a scan), making the tick fire late or stall.
+  const onImportedRef = useRef(onImported);
+  useEffect(() => { onImportedRef.current = onImported; }, [onImported]);
+
   const load = useCallback(async () => {
     try {
       const [s, p] = await Promise.all([
@@ -122,12 +129,12 @@ export function ProxySourcesSection({
           src.last_release_id !== seenReleases.current.get(src.id)
         ) {
           seenReleases.current.set(src.id, src.last_release_id);
-          onImported?.();
+          onImportedRef.current?.();
         }
       }
     }, 4000);
     return () => window.clearInterval(tick);
-  }, [anyScanning, appId, onImported]);
+  }, [anyScanning, appId]);
 
   if (loading) {
     return (
@@ -676,6 +683,16 @@ function AddSourceSheet({
         provider: pickedProvider.id,
       });
       oauthStateRef.current = resp.state;
+      // ``popup_url`` comes from the API (built from an admin-registered
+      // proxy base_url). Refuse anything that isn't http(s) so a hostile /
+      // mis-registered proxy can't smuggle a ``javascript:`` URL that would
+      // execute in this origin via window.open. Matches the guard on the
+      // APK-download links.
+      if (!/^https?:\/\//i.test(resp.popup_url)) {
+        setOauthBusy(false);
+        toast.error(t("myApps.edit.proxySources.popupBlocked"));
+        return;
+      }
       // Open the popup. Width/height match a typical OAuth provider window
       // (Google, Patreon, …) — generous enough for the consent screen
       // without dominating the page.

@@ -47,11 +47,27 @@ const SANITIZE_CONFIG = Object.freeze({
     /^(?:(?:https?|mailto|fdroidrepos):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
 });
 
-const ANCHOR_TAG = /<a\b([^>]*?)>/g;
-
 marked.setOptions({
   gfm: false,
   breaks: true,
+});
+
+// Force every anchor to open in a new tab with hardened rel attributes.
+// This MUST run as a DOMPurify hook (mutating the parsed DOM node mid-sanitize)
+// and NEVER as a post-sanitize string/regex rewrite. DOMPurify legitimately
+// emits a literal ``>`` inside a quoted ``href`` value, so an ``<a …>`` regex
+// over its *output* stops at that inner ``>``, splits the tag, and ejects
+// whatever followed (e.g. ``<img onerror=…>``) back into live markup — a
+// textbook sanitiser-bypass XSS. Setting the attributes here keeps DOMPurify
+// the final authority over the serialized HTML. ``ugc`` flags the link as
+// user-generated content for SEO crawlers. The hook is registered once at
+// module load (ES module singleton) and only ever touches anchors, so it is
+// safe to share with any other sanitise call in the app.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.nodeName === "A" && "setAttribute" in node) {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener nofollow ugc");
+  }
 });
 
 /** Convert F-Droid-compatible Markdown to a sanitised HTML fragment.
@@ -67,13 +83,10 @@ export function renderFdroidMarkdown(markdown: string): string {
   // non-async extensions). The cast trims the async overload out of TS's
   // return-type union.
   const raw = marked.parse(markdown, { async: false }) as string;
-  const safe = DOMPurify.sanitize(raw, SANITIZE_CONFIG);
-  // Force every anchor to open in a new tab with hardened rel attributes.
-  // (``ugc`` flags the link as user-generated content for SEO crawlers.)
-  return safe.replace(
-    ANCHOR_TAG,
-    (_m, attrs) => `<a${attrs} target="_blank" rel="noopener nofollow ugc">`,
-  );
+  // DOMPurify is the LAST thing to touch the HTML — the anchor target/rel
+  // hardening happens inside it via the ``afterSanitizeAttributes`` hook
+  // above, never as a post-hoc string rewrite (see the hook comment).
+  return DOMPurify.sanitize(raw, SANITIZE_CONFIG);
 }
 
 type Props = {

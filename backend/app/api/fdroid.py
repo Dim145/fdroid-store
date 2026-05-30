@@ -269,6 +269,13 @@ async def serve_icon(
     binds to the package (see ``download_token.sign_media_token``); the
     token survives the lack of an Authorization header on ``<img>`` tags.
     """
+    # Reject any path separator / dotfile before the name reaches the
+    # storage key, mirroring the segment guard the other media routes use.
+    # The FastAPI ``{filename}`` converter already refuses ``/`` and the
+    # local backend re-anchors under its root, but the S3 backend has no
+    # such barrier — so defend in depth here rather than rely on either.
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
     # Filename layout is ``<package>.png``, ``<package>-custom.png``,
     # ``fdroid-icon.png`` (the repo's own icon), or ``repo-icon-<ts>.png``.
     # Derive the package name only for the per-app variants.

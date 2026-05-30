@@ -260,6 +260,14 @@ function NewAppInner() {
     try {
       const resp = await api.proxies.beginOAuthNewApp(pxProxy.id, pxProvider.id);
       pxOauthStateRef.current = resp.state;
+      // Refuse a non-http(s) ``popup_url`` so a hostile / mis-registered
+      // proxy can't slip a ``javascript:`` URL into window.open (would run
+      // in this origin). Mirrors the APK-download link guard.
+      if (!/^https?:\/\//i.test(resp.popup_url)) {
+        setPxOauthBusy(false);
+        setError(t("myApps.edit.proxySources.popupBlocked"));
+        return;
+      }
       const popup = window.open(
         resp.popup_url,
         "proxy-oauth",

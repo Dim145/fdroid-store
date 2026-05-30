@@ -517,9 +517,11 @@ async def passwordless_finish(
 
 
 @auth_router.post("/mfa/begin", response_model=RegisterBeginResponse)
+@limiter.limit("10/minute")
 async def mfa_begin(
     payload: MfaBeginRequest,
     db: DbSession,
+    request: Request,
 ) -> RegisterBeginResponse:
     """Step 1 of the passkey MFA flow: the caller already passed the
     password step and holds an ``mfa_token`` from /auth/login. Returns
@@ -548,6 +550,7 @@ async def mfa_begin(
 
 
 @auth_router.post("/mfa/finish")
+@limiter.limit("10/minute")
 async def mfa_finish(
     payload: MfaFinishRequest,
     request: Request,
@@ -624,9 +627,11 @@ def _open_enrollment_token(token: str) -> uuid.UUID:
 
 
 @auth_router.post("/enroll/begin", response_model=RegisterBeginResponse)
+@limiter.limit("10/minute")
 async def enroll_begin(
     payload: EnrollBeginRequest,
     db: DbSession,
+    request: Request,
 ) -> RegisterBeginResponse:
     user_id = _open_enrollment_token(payload.enrollment_token)
     user = (
@@ -663,6 +668,7 @@ async def enroll_begin(
 
 
 @auth_router.post("/enroll/finish")
+@limiter.limit("10/minute")
 async def enroll_finish(
     payload: EnrollFinishRequest,
     request: Request,

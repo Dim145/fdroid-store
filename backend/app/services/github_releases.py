@@ -140,9 +140,21 @@ def _is_private_ip(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
+    # Normalise IPv4-mapped IPv6 (``::ffff:10.0.0.1``) back to v4 so the
+    # range checks below can't be sidestepped by spelling a blocked v4
+    # address as a v6 literal.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     if ip.is_loopback or ip.is_private or ip.is_link_local:
         return True
     if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        return True
+    # ``is_private`` does NOT cover the 100.64.0.0/10 carrier-grade-NAT /
+    # shared-address space (RFC 6598), which routes to internal infra in
+    # many cloud / k8s / Tailscale setups, nor a handful of special-use
+    # ranges. ``not is_global`` is the catch-all: anything not part of the
+    # public unicast internet has no business being a fetch target.
+    if not ip.is_global:
         return True
     # AWS / GCP / Azure metadata endpoints all live at 169.254.169.254
     # which is covered by ``is_link_local``. Keep this explicit anyway
@@ -275,6 +287,21 @@ def _assert_download_url_public(url: str) -> None:
         assert_fetch_url_safe(url)
     except ValueError as exc:
         raise GithubReleaseError(f"Asset URL rejected: {exc}") from exc
+
+
+def _guard_forge_url(url: str) -> str:
+    """Re-validate a forge API URL against the SSRF guard AT FETCH TIME.
+
+    ``base_url`` is only checked by the Pydantic validator when the source
+    row is saved. Between then and this request a hostname can rebind (DNS)
+    or its record can change to point at an internal address — so we
+    re-resolve and re-check here. Returns a canonical URL with userinfo
+    stripped. Raises :class:`GithubReleaseError` on a blocked target.
+    """
+    try:
+        return assert_fetch_url_safe(url)
+    except ValueError as exc:
+        raise GithubReleaseError(f"Forge URL rejected: {exc}") from exc
 
 
 def _resolve_token(provider: str, explicit: str | None) -> str | None:
@@ -470,9 +497,11 @@ async def _github_find(
     # repo URLs. Self-hosted GitHub Enterprise uses ``/api/v3`` on the
     # configured base — handled by ``base_url`` overriding the host.
     api = (base_url.rstrip("/") + "/api/v3") if base_url else _DEFAULTS["github"]
-    url = f"{api}/repos/{repo}/releases"
+    url = _guard_forge_url(f"{api}/repos/{repo}/releases")
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("github", token)) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=_auth_headers_for("github", token), follow_redirects=False
+    ) as client:
         try:
             resp = await client.get(url, params={"per_page": str(_PER_PAGE)})
         except httpx.RequestError as exc:
@@ -531,10 +560,16 @@ async def _github_find(
 
 async def _github_meta(repo: str, base_url: str | None, token: str | None) -> RepoMetadata | None:
     api = (base_url.rstrip("/") + "/api/v3") if base_url else _DEFAULTS["github"]
+    try:
+        url = assert_fetch_url_safe(f"{api}/repos/{repo}")
+    except ValueError:
+        return None
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("github", token)) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=_auth_headers_for("github", token), follow_redirects=False
+    ) as client:
         try:
-            resp = await client.get(f"{api}/repos/{repo}")
+            resp = await client.get(url)
         except httpx.RequestError:
             return None
     if resp.status_code != 200:
@@ -570,9 +605,11 @@ async def _gitlab_find(
     # (``%2F`` instead of ``/``). The ``safe=""`` forces every slash
     # through the percent-encoder.
     project = quote(repo, safe="")
-    url = f"{host}/api/v4/projects/{project}/releases"
+    url = _guard_forge_url(f"{host}/api/v4/projects/{project}/releases")
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitlab", token)) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=_auth_headers_for("gitlab", token), follow_redirects=False
+    ) as client:
         try:
             resp = await client.get(url, params={"per_page": str(_PER_PAGE)})
         except httpx.RequestError as exc:
@@ -649,9 +686,14 @@ async def _gitlab_find(
 async def _gitlab_meta(repo: str, base_url: str | None, token: str | None) -> RepoMetadata | None:
     host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitlab"])
     project = quote(repo, safe="")
-    url = f"{host}/api/v4/projects/{project}?license=true"
+    try:
+        url = assert_fetch_url_safe(f"{host}/api/v4/projects/{project}?license=true")
+    except ValueError:
+        return None
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitlab", token)) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=_auth_headers_for("gitlab", token), follow_redirects=False
+    ) as client:
         try:
             resp = await client.get(url)
         except httpx.RequestError:
@@ -689,9 +731,11 @@ async def _gitea_find(
     repo: str, pattern: str, include_prereleases: bool, base_url: str | None, token: str | None,
 ) -> ReleaseAsset | None:
     host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitea"])
-    url = f"{host}/api/v1/repos/{repo}/releases"
+    url = _guard_forge_url(f"{host}/api/v1/repos/{repo}/releases")
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitea", token)) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=_auth_headers_for("gitea", token), follow_redirects=False
+    ) as client:
         try:
             resp = await client.get(url, params={"limit": str(_PER_PAGE)})
         except httpx.RequestError as exc:
@@ -743,9 +787,14 @@ async def _gitea_find(
 
 async def _gitea_meta(repo: str, base_url: str | None, token: str | None) -> RepoMetadata | None:
     host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitea"])
-    url = f"{host}/api/v1/repos/{repo}"
+    try:
+        url = assert_fetch_url_safe(f"{host}/api/v1/repos/{repo}")
+    except ValueError:
+        return None
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(timeout=timeout, headers=_auth_headers_for("gitea", token)) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, headers=_auth_headers_for("gitea", token), follow_redirects=False
+    ) as client:
         try:
             resp = await client.get(url)
         except httpx.RequestError:

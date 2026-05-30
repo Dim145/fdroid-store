@@ -25,6 +25,20 @@ from app.services.apk_proxy_client import ApkProxyError
 
 log = get_logger(__name__)
 
+# Proxy-supplied ``apk_headers`` are untrusted. Only forward the small set a
+# real download legitimately needs, capped in count + value length. ``host``
+# / ``user-agent`` / ``content-length`` are deliberately excluded — the
+# client sets those itself and a proxy must not override them.
+_ALLOWED_PROXY_HEADERS = frozenset({
+    "authorization",   # signed-URL / bearer auth for the upstream asset
+    "accept",
+    "range",           # partial / resumable fetch
+    "if-none-match",
+    "if-modified-since",
+})
+_MAX_PROXY_HEADERS = 8
+_MAX_PROXY_HEADER_VALUE_LEN = 4096
+
 
 def assert_apk_url_safe(url: str) -> None:
     """SSRF guard on a proxy-supplied ``apk_url``.
@@ -83,12 +97,21 @@ async def download_apk(
     assert_apk_url_safe(apk_url)
     req_headers: dict[str, str] = {"User-Agent": "fdroid-store/1.3"}
     if headers:
-        # Forward only string values; refuse anything else so a hostile
-        # proxy can't smuggle bytes / control characters through the
-        # headers dict.
-        for k, v in headers.items():
-            if isinstance(k, str) and isinstance(v, str):
-                req_headers[k] = v
+        # The proxy is untrusted, so its ``apk_headers`` are tightly
+        # constrained: only an allowlist of names a legitimate download
+        # needs (signed-URL auth, range/conditional requests, content
+        # negotiation), capped in count and value length. This stops a
+        # hostile proxy from smuggling ``Cookie``/``Proxy-Authorization``,
+        # overriding our ``User-Agent``/``Host``, or amplifying the request
+        # with an unbounded header set. ``User-Agent`` is never overridable.
+        for k, v in list(headers.items())[:_MAX_PROXY_HEADERS]:
+            if not (isinstance(k, str) and isinstance(v, str)):
+                continue
+            if k.lower() not in _ALLOWED_PROXY_HEADERS:
+                continue
+            if len(v) > _MAX_PROXY_HEADER_VALUE_LEN:
+                continue
+            req_headers[k] = v
     timeout = httpx.Timeout(180.0, connect=15.0)
     path: Path | None = None
     total = 0

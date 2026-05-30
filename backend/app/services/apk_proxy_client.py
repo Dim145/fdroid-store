@@ -74,39 +74,72 @@ _BLOCKED_METADATA_IPS = frozenset({
 })
 
 
+def _octet(part: str) -> int:
+    """Parse one dotted-quad label with ``inet_aton`` semantics: a ``0x``
+    prefix is hex, a bare leading zero is octal, everything else decimal.
+    This is how libc resolvers read ``0251.0376.0251.0376`` (= 169.254.169.254),
+    so the blocklist has to read it the same way or it's trivially bypassed."""
+    low = part.lower()
+    if low.startswith("0x"):
+        return int(part, 16)
+    if part.startswith("0") and len(part) > 1:
+        return int(part, 8)
+    return int(part, 10)
+
+
+def _coerce_ips(host: str) -> list[ipaddress._BaseAddress]:
+    """Best-effort enumerate every IP a host string could resolve to as a
+    literal — covering dotted-decimal/hex/octal, bare integer/hex/octal,
+    and IPv6 (with IPv4-mapped IPv6 normalised back to v4). Returns all
+    interpretations so the caller can block if ANY of them is sensitive."""
+    cands: list[ipaddress._BaseAddress] = []
+    if host.count(".") == 3:
+        try:
+            octs = [_octet(p) for p in host.split(".")]
+            if all(0 <= o <= 255 for o in octs):
+                cands.append(ipaddress.ip_address(bytes(octs)))
+        except (ValueError, TypeError):
+            pass
+    try:
+        cands.append(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    try:
+        cands.append(
+            ipaddress.ip_address(int(host, 0) if host.lower().startswith(("0x", "0o")) else int(host))
+        )
+    except (ValueError, TypeError):
+        pass
+    out: list[ipaddress._BaseAddress] = []
+    for ip in cands:
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            out.append(ip.ipv4_mapped)
+        out.append(ip)
+    return out
+
+
 def _is_blocked_metadata_host(hostname: str) -> bool:
     """Return True if ``hostname`` is on the cloud-metadata blocklist.
 
-    Accepts hostnames, dotted IPv4, IPv6, AND IPv4 in its weird-but-legal
-    forms (decimal ``2852039166``, hex ``0xa9fea9fe``, trailing dot).
-    ``ipaddress.ip_address`` is the only stdlib parser that normalises
-    all of them to the same numeric value; we feed it whatever shape the
-    URL produced.
+    The only protection here (RFC1918 is intentionally allowed for sidecars)
+    is this blocklist, so it has to recognise every spelling of the metadata
+    IP that a libc resolver would: dotted decimal/hex/octal, bare
+    decimal/hex/octal integers, IPv4-mapped IPv6, and trailing-dot hostnames.
+    Missing any one of them lets ``base_url`` reach 169.254.169.254.
     """
     lower = hostname.lower().rstrip(".")
     if lower in _BLOCKED_METADATA_HOSTNAMES:
         return True
-    try:
-        ip = ipaddress.ip_address(int(lower, 0) if lower.startswith(("0x", "0o")) else lower)
-    except (ValueError, TypeError):
-        try:
-            # Plain integer forms like ``2852039166``.
-            ip = ipaddress.ip_address(int(lower))
-        except (ValueError, TypeError):
-            return False
-    if ip in _BLOCKED_METADATA_IPS:
-        return True
-    # Anything in the IPv4 link-local 169.254/16 gets the same treatment —
-    # even outside the literal IMDS IP, link-local has no business being a
-    # proxy base. ``isinstance`` is used instead of ``ip.version == 4`` so
-    # type checkers can narrow ``ip`` before the cross-version comparison
-    # (``IPv4Address <= IPv6Address`` raises ``TypeError`` at runtime).
-    if isinstance(ip, ipaddress.IPv4Address):
-        return (
-            ipaddress.IPv4Address("169.254.0.0")
-            <= ip
-            <= ipaddress.IPv4Address("169.254.255.255")
-        )
+    for ip in _coerce_ips(lower):
+        if ip in _BLOCKED_METADATA_IPS:
+            return True
+        # Anything in the IPv4 link-local 169.254/16 gets the same treatment —
+        # even outside the literal IMDS IP, link-local has no business being a
+        # proxy base.
+        if isinstance(ip, ipaddress.IPv4Address) and (
+            ipaddress.IPv4Address("169.254.0.0") <= ip <= ipaddress.IPv4Address("169.254.255.255")
+        ):
+            return True
     return False
 
 

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import DbSession, get_current_user
+from app.core.rate_limit import limiter
 from app.core.security import verify_password
 from app.models.repo_config import RepoConfig
 from app.models.user import User
@@ -84,6 +85,7 @@ async def totp_setup(
 
 
 @router.post("/confirm", response_model=TotpConfirmResponse)
+@limiter.limit("10/minute")
 async def totp_confirm(
     payload: TotpConfirmRequest,
     db: DbSession,

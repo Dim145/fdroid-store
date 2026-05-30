@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 import uuid
 from typing import Annotated
 
@@ -297,6 +298,15 @@ async def revert_to_auto_icon(
 # --------------------------------------------------------------------------
 # Screenshots
 # --------------------------------------------------------------------------
+# BCP-47-ish tag, same shape enforced on whats-new locales in apks.py. The
+# ``locale`` flows into the storage key, so it MUST be validated or an
+# uploader can inject path segments (``../``) into the object key.
+_LOCALE_RE = re.compile(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,4})?$")
+# Cap per request so one multipart can't buffer N×12 MiB into RAM + queue N
+# Pillow decodes on the thread pool.
+_MAX_SCREENSHOTS_PER_REQUEST = 20
+
+
 @router.post("/{app_id}/screenshots", response_model=list[dict])
 async def upload_screenshots(
     app_id: uuid.UUID,
@@ -310,6 +320,16 @@ async def upload_screenshots(
     Stored under ``<package>/<locale>/phoneScreenshots/<id>.png`` so the
     F-Droid client finds them at the path advertised in the index.
     """
+    if not _LOCALE_RE.match(locale):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid locale tag",
+        )
+    if len(files) > _MAX_SCREENSHOTS_PER_REQUEST:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Too many screenshots in one request (max {_MAX_SCREENSHOTS_PER_REQUEST})",
+        )
     app = await _load_owned_app(db, app_id, user)
     storage = get_storage()
 

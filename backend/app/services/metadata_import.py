@@ -3,10 +3,15 @@
 We only consume the YAML files (not the deprecated ``.txt`` metadata
 format) and return a flat dict the New App form can prefill itself with.
 
-Security: we feed the bytes through ``yaml.safe_load`` — no arbitrary
-Python type instantiation, no ``!Loader`` tags. Unknown keys are silently
-dropped. The file size cap (32 KiB) keeps a malicious paste from chewing
-through memory.
+Security: we parse with a hardened ``SafeLoader`` subclass — no arbitrary
+Python type instantiation, no ``!Loader`` tags (SafeLoader), AND no YAML
+aliases. Aliases are refused because ``safe_load`` still *expands* them,
+so a 250-byte "billion laughs" anchor/alias chain explodes into tens of
+millions of nodes (verified: ~250 B → 54 M nodes → 8 s CPU) — a trivial
+DoS that the 32 KiB size cap does nothing to stop. Anchors without an
+alias are harmless and rare in metadata.yml; we reject only on the alias
+event, so ``&``/``*`` inside ordinary string values parse fine. Unknown
+keys are silently dropped.
 """
 from __future__ import annotations
 
@@ -16,6 +21,20 @@ import yaml
 from fastapi import HTTPException, status
 
 _MAX_BYTES = 32 * 1024
+
+
+class _SafeLoaderNoAlias(yaml.SafeLoader):
+    """``SafeLoader`` that additionally refuses YAML aliases (``*ref``),
+    closing the alias-expansion ("billion laughs") DoS that plain
+    ``safe_load`` is vulnerable to."""
+
+    def compose_node(self, parent: Any, index: Any) -> Any:  # noqa: ANN401
+        if self.check_event(yaml.events.AliasEvent):
+            ev = self.get_event()
+            raise yaml.composer.ComposerError(
+                None, None, "YAML aliases are not permitted", ev.start_mark
+            )
+        return super().compose_node(parent, index)
 
 
 def parse_metadata_yaml(raw: str) -> dict[str, Any]:
@@ -35,7 +54,7 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
             detail="metadata.yml too large (32 KiB max)",
         )
     try:
-        data = yaml.safe_load(raw)
+        data = yaml.load(raw, Loader=_SafeLoaderNoAlias)  # noqa: S506 — hardened SafeLoader subclass, aliases refused
     except yaml.YAMLError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

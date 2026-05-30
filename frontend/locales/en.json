@@ -114,7 +114,9 @@
     "label": "Theme",
     "light": "Light",
     "system": "System",
-    "dark": "Dark"
+    "dark": "Dark",
+    "cycleAria": "Theme: {{current}}. Click to switch to {{next}}.",
+    "cycleTooltip": "Switch to {{next}} theme"
   },
   "repoCta": {
     "title": "Subscribe with the F-Droid client.",
