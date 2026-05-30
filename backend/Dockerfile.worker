@@ -111,6 +111,21 @@ COPY --from=apksigner-builder /usr/lib/android-sdk/build-tools/debian/apksigner 
 RUN mkdir -p /data/backup-tmp && \
     chown -R fdroid:fdroid /data
 
+# Re-copy the application package on top of the inherited API image.
+#
+# The worker FROMs the API image, which ALREADY carries this code — but
+# ``docker compose build backend worker`` builds the two in parallel, so the
+# worker's ``FROM ...backend:latest`` can resolve to a STALE cached API image
+# while the freshly-built one is still being tagged. That silently ships the
+# worker old app code (e.g. the worker keeps running a pre-fix rebuild_index)
+# even though the API is up to date. Re-copying from the build context here
+# makes the worker's app code track the working tree directly, regardless of
+# FROM-cache timing. (Python deps still come from the inherited ``/opt/venv``;
+# a *dependency* change — pyproject.toml — still needs a fresh API image, but
+# app-code changes — the common case — are now always current.)
+COPY --chown=fdroid:fdroid app /app/app
+RUN /opt/venv/bin/python -m compileall -q /app/app || true
+
 USER fdroid:fdroid
 
 # Compose overrides CMD to ``python -m arq app.workers.tasks.WorkerSettings``.
