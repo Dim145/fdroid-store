@@ -118,13 +118,18 @@ services:
       - backup_tmp:/data/backup-tmp
     # Bind to the host LOOPBACK only. The backend trusts ``X-Forwarded-For``
     # for per-IP rate limiting (the frontend nginx overwrites it with the
-    # real client IP). If port 8000 were published on 0.0.0.0, any remote
+    # real client IP). If the API port were published on 0.0.0.0, any remote
     # client could hit the API directly and forge ``X-Forwarded-For`` to
     # evade the auth-endpoint rate limits — so it's reachable only from the
     # host itself (local dev / curl), never from the network. Production
     # traffic always goes through the frontend on :8080.
+    #
+    # Host port is 8011 (not 8000) purely to dodge a common local collision
+    # on 8000; the in-container port stays 8000, so the frontend's
+    # ``UPSTREAM_BACKEND=backend:8000`` and everything on the compose network
+    # is unaffected. Change the left-hand number if 8011 is also taken.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8011:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
