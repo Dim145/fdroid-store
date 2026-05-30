@@ -21,6 +21,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.core.logging import get_logger
+from app.core.ssrf import is_blocked_proxy_ip, make_ssrf_client
 from app.models.apk_proxy import ApkProxy
 from app.schemas.apk_proxy import ProxySourcesCatalogue, ResolveResponse
 from app.services.crypto import decrypt as fernet_decrypt
@@ -197,7 +198,7 @@ async def health_check(proxy: ApkProxy) -> dict[str, Any]:
     onto ``ApkProxy.last_health_*`` columns.
     """
     base = _assert_proxy_url_safe(proxy.base_url)
-    async with httpx.AsyncClient(timeout=_HEALTH_TIMEOUT, follow_redirects=False) as client:
+    async with make_ssrf_client(is_blocked_proxy_ip, timeout=_HEALTH_TIMEOUT, follow_redirects=False) as client:
         try:
             res = await client.get(f"{base}/healthz")
         except httpx.HTTPError as exc:
@@ -226,7 +227,7 @@ async def fetch_sources(proxy: ApkProxy) -> ProxySourcesCatalogue:
     """
     base = _assert_proxy_url_safe(proxy.base_url)
     headers = _auth_headers(proxy)
-    async with httpx.AsyncClient(timeout=_HANDSHAKE_TIMEOUT, follow_redirects=False) as client:
+    async with make_ssrf_client(is_blocked_proxy_ip, timeout=_HANDSHAKE_TIMEOUT, follow_redirects=False) as client:
         try:
             res = await client.get(f"{base}/sources", headers=headers)
         except httpx.HTTPError as exc:
@@ -278,7 +279,7 @@ async def resolve(
         body["last_release_id"] = last_release_id
     if secrets:
         body["secrets"] = secrets
-    async with httpx.AsyncClient(timeout=_RESOLVE_TIMEOUT, follow_redirects=False) as client:
+    async with make_ssrf_client(is_blocked_proxy_ip, timeout=_RESOLVE_TIMEOUT, follow_redirects=False) as client:
         try:
             res = await client.post(f"{base}/resolve", headers=headers, json=body)
         except httpx.HTTPError as exc:

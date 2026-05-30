@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.core.logging import get_logger
+from app.core.ssrf import is_blocked_proxy_ip, make_ssrf_client
 from app.services.apk_proxy_client import ApkProxyError
 
 log = get_logger(__name__)
@@ -118,7 +119,8 @@ async def download_apk(
     try:
         with tempfile.NamedTemporaryFile(suffix=".apk", delete=False) as tmp:
             path = Path(tmp.name)
-            async with httpx.AsyncClient(
+            async with make_ssrf_client(
+                is_blocked_proxy_ip,
                 timeout=timeout,
                 follow_redirects=False,
             ) as client:

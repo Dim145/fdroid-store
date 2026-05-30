@@ -25,6 +25,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.ssrf import is_blocked_public_ip, make_ssrf_client
 
 log = get_logger(__name__)
 
@@ -429,7 +430,8 @@ async def download_asset(asset: ReleaseAsset) -> Path:
         elif asset.provider == "gitea":
             req_headers["Authorization"] = f"token {tok}"
 
-    async with httpx.AsyncClient(
+    async with make_ssrf_client(
+        is_blocked_public_ip,
         timeout=timeout,
         follow_redirects=False,
         headers=base_headers,
@@ -499,7 +501,8 @@ async def _github_find(
     api = (base_url.rstrip("/") + "/api/v3") if base_url else _DEFAULTS["github"]
     url = _guard_forge_url(f"{api}/repos/{repo}/releases")
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(
+    async with make_ssrf_client(
+        is_blocked_public_ip,
         timeout=timeout, headers=_auth_headers_for("github", token), follow_redirects=False
     ) as client:
         try:
@@ -565,7 +568,8 @@ async def _github_meta(repo: str, base_url: str | None, token: str | None) -> Re
     except ValueError:
         return None
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(
+    async with make_ssrf_client(
+        is_blocked_public_ip,
         timeout=timeout, headers=_auth_headers_for("github", token), follow_redirects=False
     ) as client:
         try:
@@ -607,7 +611,8 @@ async def _gitlab_find(
     project = quote(repo, safe="")
     url = _guard_forge_url(f"{host}/api/v4/projects/{project}/releases")
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(
+    async with make_ssrf_client(
+        is_blocked_public_ip,
         timeout=timeout, headers=_auth_headers_for("gitlab", token), follow_redirects=False
     ) as client:
         try:
@@ -691,7 +696,8 @@ async def _gitlab_meta(repo: str, base_url: str | None, token: str | None) -> Re
     except ValueError:
         return None
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(
+    async with make_ssrf_client(
+        is_blocked_public_ip,
         timeout=timeout, headers=_auth_headers_for("gitlab", token), follow_redirects=False
     ) as client:
         try:
@@ -733,7 +739,8 @@ async def _gitea_find(
     host = (base_url.rstrip("/") if base_url else _DEFAULTS["gitea"])
     url = _guard_forge_url(f"{host}/api/v1/repos/{repo}/releases")
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(
+    async with make_ssrf_client(
+        is_blocked_public_ip,
         timeout=timeout, headers=_auth_headers_for("gitea", token), follow_redirects=False
     ) as client:
         try:
@@ -792,7 +799,8 @@ async def _gitea_meta(repo: str, base_url: str | None, token: str | None) -> Rep
     except ValueError:
         return None
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
-    async with httpx.AsyncClient(
+    async with make_ssrf_client(
+        is_blocked_public_ip,
         timeout=timeout, headers=_auth_headers_for("gitea", token), follow_redirects=False
     ) as client:
         try:
