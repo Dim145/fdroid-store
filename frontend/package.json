@@ -55,6 +55,10 @@
     "typescript": "^5.9.0"
   },
   "overrides": {
-    "postcss": "^8.5.14"
+    "postcss": "^8.5.14",
+    "dompurify": "^3.4.11",
+    "markdown-it": "^14.2.0",
+    "undici": "^7.28.0",
+    "@babel/core": "^7.29.7"
   }
 }
