@@ -3,12 +3,46 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import zipfile
 from pathlib import Path
 
 
 class SigningError(RuntimeError):
     """Raised when signing a JAR fails."""
+
+
+def _resolve_jarsigner() -> str:
+    """Locate the ``jarsigner`` binary robustly.
+
+    Invoking it by bare name relies on ``jarsigner`` being on ``PATH`` at
+    runtime — fragile across deployments (a custom entrypoint or an
+    ``environment:`` override that resets ``PATH`` drops the JDK's bin dir,
+    and the resulting ``FileNotFoundError: 'jarsigner'`` is opaque). Resolve
+    it explicitly: ``JAVA_HOME/bin`` first (the worker image sets
+    ``JAVA_HOME=/opt/jre-min``), then ``PATH``, then the image's bundled JRE.
+
+    Raises :class:`SigningError` with an actionable message if none is found
+    — index signing needs a JDK, which only the *worker* image bundles; the
+    API image deliberately ships without one.
+    """
+    candidates: list[str] = []
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        candidates.append(os.path.join(java_home, "bin", "jarsigner"))
+    on_path = shutil.which("jarsigner")
+    if on_path:
+        candidates.append(on_path)
+    candidates.append("/opt/jre-min/bin/jarsigner")  # Dockerfile.worker location
+    for path in candidates:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    raise SigningError(
+        "jarsigner not found — F-Droid index signing requires a JDK. This "
+        "task must run in the WORKER image (which bundles a minimal JRE at "
+        "/opt/jre-min and sets JAVA_HOME); the API image has no JDK. "
+        f"Searched: {candidates or ['<PATH only>']}"
+    )
 
 
 def make_jar(jar_path: Path, entries: dict[str, bytes]) -> None:
@@ -52,7 +86,7 @@ async def sign_jar(
     if not jar_arg.startswith("/") and not jar_arg.startswith("./"):
         jar_arg = "./" + jar_arg
     cmd = [
-        "jarsigner",
+        _resolve_jarsigner(),
         "-keystore", str(keystore_path),
         "-storepass:env", "FDROID_STOREPASS",
         "-keypass:env", "FDROID_STOREPASS",
