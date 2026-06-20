@@ -421,8 +421,21 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.1 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.2 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.2
+
+- **Index signing finds `jarsigner` robustly** — `rebuild_index` invoked
+  `jarsigner` by bare name, so a worker whose `PATH` didn't include the
+  JDK bin dir (custom entrypoint / `environment:` override, or an image
+  missing the JDK entirely) failed mid-rebuild with an opaque
+  `FileNotFoundError: 'jarsigner'`. It's now resolved explicitly via
+  `JAVA_HOME/bin` → `PATH` → the worker image's bundled JRE, with a clear
+  error that names the cause (the task must run in the *worker* image,
+  which bundles the JDK; the API image doesn't). Reminder: index signing
+  only works in the worker image — never run `rebuild_index` from the API
+  image.
 
 ### 1.4.1
 
