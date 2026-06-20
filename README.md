@@ -421,8 +421,19 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.2 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.3 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.3
+
+- **Vulnerable transitive deps bumped** (npm `overrides`), clearing 8
+  Dependabot alerts in the frontend lockfile: `dompurify` 3.4.5 → 3.4.11
+  (7 advisories — mostly IN_PLACE-mode bypasses we don't use; the
+  markdown-view XSS neutralisation was re-verified on 3.4.11) and
+  `markdown-it` 14.1.1 → 14.2.0 (smartquotes quadratic-complexity DoS,
+  CVE-2026-48988). Also pulled `undici` 7.25.0 → 7.28.0 (high; via jsdom,
+  unreachable since DOMPurify makes no network calls) and `@babel/core`
+  → 7.29.7 (low, build-time). `npm audit` now reports zero.
 
 ### 1.4.2
 
