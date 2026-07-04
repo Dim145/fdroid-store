@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # ----- Storage ------------------------------------------------------------
     storage_backend: Literal["local", "s3"] = "local"
     local_storage_path: str = "/data/storage"
+    # When True, local-storage APK downloads are handed off to nginx via an
+    # ``X-Accel-Redirect`` to its internal ``/_protected/`` location instead
+    # of being streamed through Python. nginx then serves the file with
+    # sendfile + native Range/resume and no backend read-timeout in the byte
+    # path — the right shape for large (100s of MB) APKs. Opt-in / default
+    # off: it REQUIRES the serving nginx to define
+    # ``location /_protected/ { internal; alias /data/storage/; }`` and mount
+    # the storage volume, so enabling it without that config breaks downloads.
+    x_accel_redirect_enabled: bool = False
     s3_endpoint_url: str | None = None
     s3_region: str = "us-east-1"
     s3_bucket: str = "fdroid-store"

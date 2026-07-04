@@ -12,6 +12,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -19,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_api_key_from_basic_auth, get_current_user_optional, is_public_mode
+from app.core.config import settings
 from app.core.download_token import verify_download_token, verify_media_token
 from app.core.security import parse_api_key, verify_api_key_secret
 from app.fdroid.repo_builder import REPO_PUBLIC_PREFIX, user_private_prefix
@@ -90,7 +92,9 @@ def _cache_control_for(storage_key: str) -> str:
     return "private, max-age=86400"
 
 
-async def _serve_storage_object(storage_key: str, *, content_type: str) -> Response:
+async def _serve_storage_object(
+    storage_key: str, *, content_type: str, allow_x_accel: bool = False
+) -> Response:
     """Serve a stored object through the backend.
 
     We deliberately do NOT redirect to an S3 public URL even when one
@@ -109,7 +113,18 @@ async def _serve_storage_object(storage_key: str, *, content_type: str) -> Respo
         path = storage.local_path(storage_key)
         if not path.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-        # FileResponse already sets Content-Length from the stat.
+        if allow_x_accel and settings.x_accel_redirect_enabled:
+            # Hand the byte transfer to nginx: it serves /data/storage/<key>
+            # via its internal /_protected/ location (sendfile, native Range/
+            # resume, no Python nor backend read-timeout in the path). Only
+            # used for large APKs; icons/index keep the FileResponse path so
+            # their Content-Type stays exact. ``quote(safe="/")`` keeps path
+            # separators while escaping anything else in the key.
+            headers["X-Accel-Redirect"] = "/_protected/" + quote(storage_key, safe="/")
+            headers["Content-Type"] = content_type
+            return Response(status_code=status.HTTP_200_OK, headers=headers)
+        # FileResponse sets Content-Length from the stat AND honours Range
+        # requests (206), so a dropped download can be resumed.
         return FileResponse(str(path), media_type=content_type, headers=headers)
     if not await storage.exists(storage_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
@@ -630,4 +645,8 @@ async def _serve_apk(
     except Exception:  # noqa: BLE001
         pass
 
-    return await _serve_storage_object(apk.storage_key, content_type="application/vnd.android.package-archive")
+    return await _serve_storage_object(
+        apk.storage_key,
+        content_type="application/vnd.android.package-archive",
+        allow_x_accel=True,
+    )

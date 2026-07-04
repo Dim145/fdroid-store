@@ -91,6 +91,12 @@ services:
       # exceed that on real-sized repos. Point at the persistent volume
       # mounted below so the feature has room to breathe.
       BACKUP_TMP_DIR: /data/backup-tmp
+      # Serve local-storage APK downloads via nginx X-Accel-Redirect (the
+      # frontend defines /_protected/ and mounts storage_data read-only), so
+      # large APKs stream via sendfile with native Range/resume instead of
+      # through Python. Set to 0 if you front the backend with an nginx that
+      # lacks the /_protected/ location.
+      X_ACCEL_REDIRECT_ENABLED: ${X_ACCEL_REDIRECT_ENABLED:-1}
     # Lock the image down at runtime. ``read_only`` makes the entire root
     # filesystem immutable; the few paths the app legitimately writes to
     # are explicitly enumerated below as tmpfs (ephemeral, sized) or named
