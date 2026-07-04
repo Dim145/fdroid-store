@@ -421,8 +421,31 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.3 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.4 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.4
+
+- **Large-APK downloads no longer truncate.** Big APKs (100s of MB) were
+  streamed through Python and proxy-buffered, so a slow client could be
+  cut mid-transfer (the browser shows `NS_BINDING_ABORTED` / a truncated
+  file) when a proxy in the chain buffered the response to a temp file
+  that filled up — with nothing in the app logs. Two changes:
+  - `/fdroid/` + `/r/` in the bundled nginx now set `proxy_buffering off`
+    with 3600 s read/send/client timeouts, so downloads stream
+    client-paced instead of being buffered to a size-limited temp file.
+  - New opt-in `X_ACCEL_REDIRECT_ENABLED` (on by default in the reference
+    compose): local-storage APK downloads are handed to nginx via
+    `X-Accel-Redirect` to an internal `/_protected/` location — served
+    with sendfile, a real `Content-Length`, and native Range/resume, with
+    no Python nor backend read-timeout in the byte path. Requires the
+    serving nginx to define `/_protected/` and mount the storage volume
+    (both already true in the reference compose).
+  - **Operator note:** if you run your own reverse proxy / CDN in front
+    (nginx, BunkerWeb, Traefik, …), disable response buffering (or give
+    its temp dir room) and raise its timeouts for the download route too
+    — a short timeout or a small proxy temp filesystem *there* will still
+    truncate large downloads regardless of these app-side changes.
 
 ### 1.4.3
 
