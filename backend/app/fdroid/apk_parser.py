@@ -136,13 +136,15 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
     # string reaches ``open`` / ``isfile`` directly.
     #
     # Strict allowlist + path reconstruction. Every legitimate caller
-    # (``save_upload_to_temp`` from the upload endpoints,
-    # ``_download_apk`` from the rescan service) builds the input
-    # through ``tempfile.NamedTemporaryFile(suffix='.apk')`` whose
-    # random middle is drawn from
-    # ``string.ascii_letters + string.digits + '_'`` — never ``.``,
-    # ``-``, or path separators — so the pattern below matches every
-    # real call and rejects everything else.
+    # builds the input through ``tempfile.NamedTemporaryFile(...,
+    # suffix='.apk')``: ``save_upload_to_temp`` / ``_download_apk`` use
+    # the default ``tmp`` prefix, while ``_materialise_staged_apk`` uses
+    # ``prefix='fdroid-staged-'``. So a real basename is
+    # ``{tmp|fdroid-staged-}<random>.apk`` — letters, digits, ``_`` and
+    # ``-`` only, never ``.`` or a path separator. The class below
+    # allows exactly those and rejects everything else. (``-`` is safe:
+    # only ``.`` and ``/`` enable traversal, and both stay excluded — so
+    # allowing ``-`` keeps the barrier's anti-traversal guarantee intact.)
     #
     # Three design points:
     #
@@ -167,7 +169,7 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
     #   caller-supplied string re-introduces the taint that the
     #   regex barrier just stripped.
     basename = os.path.basename(str(path))
-    if not re.fullmatch(r"[A-Za-z0-9_]{1,128}\.apk", basename):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}\.apk", basename):
         raise ApkParseError(
             "APK basename must be a tempfile-style filename"
         )

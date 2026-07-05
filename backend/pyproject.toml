@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fdroid-store-backend"
-version = "1.4.4"
+version = "1.4.5"
 description = "Self-hosted F-Droid repository backend"
 requires-python = ">=3.13"
 dependencies = [

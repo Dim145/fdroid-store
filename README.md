@@ -421,8 +421,21 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.4 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.5 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.5
+
+- **Staged APK uploads work again.** The path-injection allowlist that
+  validates the internal temp-file name in `parse_apk` only permitted
+  `[A-Za-z0-9_]`. The staged-upload path names its temp file with a
+  `fdroid-staged-` prefix, so the hyphens were rejected and every upload
+  that redeemed a staging token — the inspect-then-upload flow the web UI
+  uses, plus creating an app from a staged APK — failed with
+  `400 "APK basename must be a tempfile-style filename"`. (Direct uploads
+  were unaffected: they use the default `tmp` prefix.) The allowlist now
+  also accepts `-`, which stays traversal-safe since `.` and `/` remain
+  excluded.
 
 ### 1.4.4
 
