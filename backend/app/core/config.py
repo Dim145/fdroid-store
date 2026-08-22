@@ -5,6 +5,7 @@ throughout the app. All env vars documented in ``.env.example``.
 """
 from __future__ import annotations
 
+import tempfile
 from functools import lru_cache
 from typing import Literal
 
@@ -151,7 +152,7 @@ class Settings(BaseSettings):
     # tree), which overflows the small tmpfs we mount at /tmp. Pointing
     # this at a persistent volume keeps the read-only root + tmpfs
     # lockdown intact while giving the feature room to breathe.
-    backup_tmp_dir: str = "/tmp"
+    backup_tmp_dir: str = Field(default_factory=tempfile.gettempdir)
 
     # ------------------------------------------------------------------
     # Computed / helpers

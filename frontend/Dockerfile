@@ -50,4 +50,9 @@ ENV UPSTREAM_BACKEND=backend:8000 \
     HSTS_MAX_AGE=31536000 \
     NGINX_ENVSUBST_TEMPLATE_VARS='${UPSTREAM_BACKEND} ${HSTS_DIRECTIVE}'
 
+# The nginx-unprivileged base already runs as uid 101, but declare it
+# explicitly so the non-root guarantee is visible in this Dockerfile and
+# survives a future base-image change (satisfies trivy DS-0002).
+USER 101
+
 EXPOSE 8080

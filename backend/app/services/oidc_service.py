@@ -40,7 +40,10 @@ def get_oauth() -> OAuth | None:
     # ``oidc_enabled`` is gated on a non-empty issuer in
     # ``app.core.config`` so we can safely strip the trailing slash here —
     # but the type is still ``str | None`` so we assert for type-checkers.
-    assert settings.oidc_issuer is not None
+    # Gated by ``oidc_enabled`` (which requires a non-empty issuer); an
+    # explicit guard rather than ``assert`` keeps it effective under -O.
+    if settings.oidc_issuer is None:
+        raise RuntimeError("OIDC enabled but OIDC_ISSUER is unset")
     oauth = OAuth()
     oauth.register(
         name="oidc",

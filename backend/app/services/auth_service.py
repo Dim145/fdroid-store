@@ -246,7 +246,10 @@ async def signup_local(
     # the code was bad. We re-attach the user.id below once SQLAlchemy assigns it.
     invite: InviteCode | None = None
     if policy == "invite":
-        assert invite_code is not None
+        # Explicit runtime guard (not ``assert`` — that is stripped under
+        # ``python -O``, which would turn this invite gate into a no-op).
+        if invite_code is None:
+            raise AuthError("An invite code is required")
         invite = (
             await db.execute(select(InviteCode).where(InviteCode.code == invite_code))
         ).scalar_one_or_none()

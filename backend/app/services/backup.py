@@ -195,10 +195,16 @@ def _run_psql_apply(sql_path: Path) -> None:
         "--quiet",
         "--no-psqlrc",
         "-v", "ON_ERROR_STOP=1",
+        # Bind the DB name as a psql variable: ``:'datname'`` expands to a
+        # safely-quoted string literal, so we never interpolate the value
+        # into the SQL ourselves. Defence-in-depth — ``dbname`` comes from
+        # our own DATABASE_URL, not user input, but this removes the
+        # string-built-SQL sink entirely (bandit B608).
+        "-v", f"datname={params['dbname']}",
         "-c", (
             "SELECT pg_terminate_backend(pid) "
             "FROM pg_stat_activity "
-            f"WHERE datname = '{params['dbname']}' "
+            "WHERE datname = :'datname' "
             "AND pid <> pg_backend_pid();"
         ),
     ]

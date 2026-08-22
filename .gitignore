@@ -45,3 +45,6 @@ build/
 coverage/
 *.log
 .remember
+
+# Knowledge graph (regenerable via `graphify update .`)
+graphify-out/
