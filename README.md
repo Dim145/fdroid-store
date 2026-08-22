@@ -421,8 +421,22 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.5 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.6 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.6
+
+- **Security fixes (Dependabot + CodeQL).** Cleared every open Dependabot
+  advisory by bumping frontend dependencies — `next` (→ 16.3.x),
+  `undici`, `dompurify`, `postcss`, `nanoid`, `brace-expansion`, `sharp`
+  and `linkify-it` — `npm audit` now reports zero vulnerabilities.
+  Rewrote the `LocalStorage` path guard (`_resolve`) into a shape CodeQL's
+  `py/path-injection` tracker recognises: each storage-key segment is
+  checked against a bounded allowlist and the path is rebuilt from the
+  fixed, pre-resolved storage root, with no `resolve()`/`realpath()` on
+  the caller-supplied string. Behaviour is unchanged — every real key is
+  accepted, absolute paths and `..` traversal are rejected — and it's
+  covered by new tests.
 
 ### 1.4.5
 

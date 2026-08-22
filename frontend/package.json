@@ -1,6 +1,6 @@
 {
   "name": "fdroid-store-frontend",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
@@ -33,7 +33,7 @@
     "lucide-react": "^1.16.0",
     "marked": "^18.0.4",
     "motion": "^12.38.0",
-    "next": "^16.2.6",
+    "next": "^16.2.11",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-i18next": "^17.0.8",
@@ -49,16 +49,19 @@
     "@types/react-dom": "^19.2.0",
     "autoprefixer": "^10.5.0",
     "eslint": "^10.4.0",
-    "eslint-config-next": "^16.2.6",
-    "postcss": "^8.5.14",
+    "eslint-config-next": "^16.2.11",
+    "postcss": "^8.5.23",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.9.0"
   },
   "overrides": {
-    "postcss": "^8.5.14",
-    "dompurify": "^3.4.11",
+    "postcss": "^8.5.23",
+    "dompurify": "^3.4.13",
     "markdown-it": "^14.2.0",
-    "undici": "^7.28.0",
-    "@babel/core": "^7.29.7"
+    "undici": "^7.29.0",
+    "@babel/core": "^7.29.7",
+    "brace-expansion": "^2.0.2",
+    "sharp": "^0.35.0",
+    "linkify-it": "^5.0.2"
   }
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import BinaryIO
@@ -22,15 +23,31 @@ class LocalStorage(Storage):
 
     # ------------------------------------------------------------------
     def _resolve(self, key: str) -> Path:
+        # CodeQL ``py/path-injection`` barrier. The previous shape here —
+        # ``(self.base / key).resolve()`` then ``relative_to(self.base)`` —
+        # is correct at runtime but the analyser's data-flow tracker does
+        # not recognise ``resolve()``/``relative_to`` as a sanitiser, so the
+        # caller-supplied key still "reached" the filesystem op. Instead we
+        # validate every path segment against a bounded allowlist (letters,
+        # digits, ``.`` ``_`` ``-`` only — never ``.``/``..`` on their own,
+        # never a separator inside a segment) and then rebuild the path from
+        # the hard-coded, already-resolved ``self.base`` via ``joinpath``.
+        # The path handed to the FS op is now a constant prefix + allowlisted
+        # data, and we deliberately never call ``resolve()``/``realpath()``
+        # on the caller string afterward (that would re-introduce the taint
+        # the allowlist just stripped). Bounded ``{1,255}`` keeps the regex
+        # ReDoS-free. Every real storage key — ``staging/<sha>.apk``,
+        # ``fdroid/repo/<pkg>_<vc>.apk``, ``fdroid/repo/icons/<pkg>.png``,
+        # ``fdroid/repo/<pkg>/<locale>/phoneScreenshots/<uuid>.png`` — is
+        # built server-side from exactly these characters, so the allowlist
+        # never rejects a legitimate key.
         if key.startswith("/"):
             raise ValueError("Storage keys must be relative")
-        target = (self.base / key).resolve()
-        # Make sure we can't escape the base via "../" traversal.
-        try:
-            target.relative_to(self.base)
-        except ValueError as exc:
-            raise ValueError(f"Key escapes storage root: {key!r}") from exc
-        return target
+        segments = key.split("/")
+        for seg in segments:
+            if seg in (".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]{1,255}", seg):
+                raise ValueError(f"Key escapes storage root: {key!r}")
+        return self.base.joinpath(*segments)
 
     # ------------------------------------------------------------------
     def _tmp_sibling(self, target: Path) -> Path:
