@@ -421,8 +421,22 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.6 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.4.7 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.4.7
+
+- **Frontend dependency security update.** Clears seven Dependabot
+  advisories, two of them **critical** in Next.js: `next` 16.3.1 → 16.3.4
+  (GHSA-p293-qw3h-jr36, GHSA-2xp9-vwfh-vxw4), `@tiptap/*` 3.23.6 → 3.31.3
+  (GHSA-j95f-988m-3j2f, GHSA-cp6q-959q-f8rh), `sharp` → 0.35.4,
+  `browserslist` → 4.28.9, `baseline-browser-mapping` → 2.11.21.
+  Both the direct ranges in `package.json` and the lockfile were bumped:
+  the frontend image installs from `package.json` alone (the Dockerfile
+  does not copy the lockfile), so the ranges are what actually govern the
+  published image, while the lockfile is what Dependabot reads.
+  `npm audit` reports zero vulnerabilities; `tsc --noEmit` and
+  `next build` both pass.
 
 ### 1.4.6
 

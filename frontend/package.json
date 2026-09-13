@@ -1,6 +1,6 @@
 {
   "name": "fdroid-store-frontend",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
@@ -21,10 +21,10 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-toast": "^1.2.15",
     "@simplewebauthn/browser": "^13.3.0",
-    "@tiptap/extensions": "^3.23.6",
-    "@tiptap/pm": "^3.23.6",
-    "@tiptap/react": "^3.23.6",
-    "@tiptap/starter-kit": "^3.23.6",
+    "@tiptap/extensions": "^3.30.5",
+    "@tiptap/pm": "^3.30.5",
+    "@tiptap/react": "^3.30.5",
+    "@tiptap/starter-kit": "^3.30.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "i18next": "^26.2.0",
@@ -33,7 +33,7 @@
     "lucide-react": "^1.16.0",
     "marked": "^18.0.4",
     "motion": "^12.38.0",
-    "next": "^16.2.11",
+    "next": "^16.3.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-i18next": "^17.0.8",
@@ -49,7 +49,7 @@
     "@types/react-dom": "^19.2.0",
     "autoprefixer": "^10.5.0",
     "eslint": "^10.4.0",
-    "eslint-config-next": "^16.2.11",
+    "eslint-config-next": "^16.3.3",
     "postcss": "^8.5.23",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.9.0"
@@ -61,7 +61,10 @@
     "undici": "^7.29.0",
     "@babel/core": "^7.29.7",
     "brace-expansion": "^2.0.2",
-    "sharp": "^0.35.0",
+    "sharp": "^0.35.4",
+    "browserslist": "^4.28.7",
+    "baseline-browser-mapping": "^2.11.0",
+    "@tiptap/core": "^3.30.5",
     "linkify-it": "^5.0.2"
   }
 }
