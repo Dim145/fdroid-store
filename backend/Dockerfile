@@ -28,11 +28,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY pyproject.toml ./
+# ``requirements.txt`` is the fully-resolved, pinned dependency set,
+# generated with:
+#
+#     uv pip compile backend/pyproject.toml --universal \
+#         --python-version 3.13 -o backend/requirements.txt
+#
+# Installing from it instead of resolving pyproject.toml's open ``>=``
+# ranges at build time buys two things:
+#   1. Reproducible images — the same commit always ships the same
+#      dependency versions, instead of "whatever was latest that day".
+#   2. Security visibility — GitHub's dependency graph parses
+#      requirements.txt and sees the whole transitive tree. pyproject.toml
+#      alone only exposes the ~27 direct deps, which left Dependabot blind
+#      to the ~90 indirect packages where most CVEs actually live.
+#
+# Regenerate it with the command above whenever pyproject.toml changes.
+COPY pyproject.toml requirements.txt ./
 RUN mkdir -p app && touch app/__init__.py
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip wheel setuptools && \
-    /opt/venv/bin/pip install .
+    /opt/venv/bin/pip install -r requirements.txt && \
+    /opt/venv/bin/pip install --no-deps .
 
 # Optional androguard transitive deps we never touch. ``--yes`` is safe here
 # because nothing in our codebase imports any of them. If a future change
