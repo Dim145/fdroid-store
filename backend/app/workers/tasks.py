@@ -16,11 +16,14 @@ Available jobs:
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from arq import cron
+from arq import Retry, cron
 from arq.connections import RedisSettings
+from redis.asyncio.lock import Lock
 from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 
@@ -33,22 +36,67 @@ from app.models.apk_scan import ApkScan, ApkScanStatus
 from app.models.app import App
 from app.models.github_source import GithubSource, GithubSourceStatus
 from app.models.repo_config import RepoConfig
+from app.services.queue import REINDEX_DIRTY_KEY, REINDEX_LOCK_KEY, REINDEX_QUEUED_KEY
 from app.storage import get_storage
 from app.storage.local import LocalStorage
 
 log = get_logger(__name__)
 
 
-async def rebuild_index(ctx: dict) -> dict:
-    async with SessionLocal() as db:
+# Single-flight index rebuild: the lock is held for the whole build and
+# refreshed while it runs, so a crashed worker frees it within a TTL.
+_REINDEX_LOCK_TTL = 120
+# How long a second rebuild job waits for the running one before retrying.
+_REINDEX_LOCK_WAIT = 900
+
+
+async def _keep_lock(lock: Lock) -> None:
+    while True:
+        await asyncio.sleep(_REINDEX_LOCK_TTL / 3)
         try:
-            await rebuild_repo_index(db)
-            await db.commit()
-            return {"ok": True}
-        except Exception as exc:
-            await db.rollback()
-            log.exception("rebuild_index failed", error=str(exc))
-            raise
+            await lock.reacquire()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("rebuild_index lock refresh failed", error=str(exc))
+            return
+
+
+async def rebuild_index(ctx: dict, force: bool = False) -> dict:
+    """Regenerate every index variant — one build at a time.
+
+    ``enqueue_reindex`` marks the index dirty after each committed change.
+    The job takes the dirty flag *before* reading the database, so a change
+    committed during the build re-marks it and its own (queued) job
+    rebuilds; a job that finds the flag already consumed by an earlier build
+    has nothing new to publish. Concurrent jobs wait on the lock instead of
+    writing the same index files at the same time.
+    """
+    redis = ctx["redis"]
+    await redis.delete(REINDEX_QUEUED_KEY)
+    lock = redis.lock(
+        REINDEX_LOCK_KEY, timeout=_REINDEX_LOCK_TTL, blocking_timeout=_REINDEX_LOCK_WAIT
+    )
+    if not await lock.acquire():
+        raise Retry(defer=30)
+    keepalive = asyncio.create_task(_keep_lock(lock))
+    try:
+        dirty = await redis.getdel(REINDEX_DIRTY_KEY)
+        if dirty is None and not force:
+            return {"ok": True, "skipped": "index already up to date"}
+        async with SessionLocal() as db:
+            try:
+                await rebuild_repo_index(db)
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                # Leave the work for the retry / next job.
+                await redis.set(REINDEX_DIRTY_KEY, "1")
+                log.exception("rebuild_index failed", error=str(exc))
+                raise
+        return {"ok": True}
+    finally:
+        keepalive.cancel()
+        with contextlib.suppress(Exception):
+            await lock.release()
 
 
 async def scan_apks_periodic(ctx: dict, force: bool = False) -> dict:
@@ -451,8 +499,8 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup
     on_shutdown = shutdown
-    # rebuild_index is dedup-coalesced by job_id at enqueue time, so we don't
-    # need a high concurrency.
+    # rebuild_index is coalesced at enqueue time and single-flight (redis
+    # lock), so a second slot never runs two builds at once.
     max_jobs = 2
     # Backups on large repos can run for tens of minutes; bump the timeout
     # generously so a real-world repo finishes inside one job lifetime.

@@ -28,7 +28,10 @@ from app.models.user import User, UserRole
 # --------------------------------------------------------------------------
 # DB session
 # --------------------------------------------------------------------------
-DbSession = Annotated[AsyncSession, Depends(get_db)]
+# ``scope="function"``: the session commits (and closes) when the endpoint
+# returns, before the response is sent — not after, which is FastAPI's
+# default for dependencies with ``yield``.
+DbSession = Annotated[AsyncSession, Depends(get_db, scope="function")]
 
 
 # --------------------------------------------------------------------------
