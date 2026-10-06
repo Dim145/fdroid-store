@@ -10,6 +10,7 @@ from arq import create_pool
 from arq.connections import RedisSettings
 
 from app.core.config import settings
+from app.core.database import run_after_commit
 from app.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -19,39 +20,56 @@ def _redis_settings() -> RedisSettings:
     return RedisSettings.from_dsn(settings.redis_url)
 
 
+# Index rebuild coordination (see ``app.workers.tasks.rebuild_index``).
+REINDEX_DIRTY_KEY = "fdroid:reindex:dirty"
+REINDEX_QUEUED_KEY = "fdroid:reindex:queued"
+REINDEX_LOCK_KEY = "fdroid:reindex:lock"
+# A queued flag outliving its job (worker down, redis hiccup) must not
+# block new rebuilds forever.
+_REINDEX_QUEUED_TTL = 600
+
+
 async def enqueue_reindex(*, force: bool = False) -> None:
     """Schedule a repo reindex.
 
-    Arq dedupes by ``_job_id`` against both queued *and* recently-finished
-    jobs — the result key lingers in redis for ~24h, so a fixed id like
-    ``"rebuild_index"`` would silently swallow every enqueue between the
-    first run of the day and the result-TTL expiry. Symptom: APKs
-    uploaded all day never appear in the F-Droid index until tomorrow.
+    Inside a request, the job is only queued once the request's transaction
+    has committed (``run_after_commit``): a rebuild that starts earlier
+    would read the database without the change that asked for it. Outside
+    a request (worker tasks) callers commit first, so it is queued now.
 
-    To stay useful, we use a **per-minute job id** by default:
-
-      * Multiple events inside the same minute (upload → publish →
-        another upload) coalesce into a single rebuild — same intent as
-        the old fixed id.
-      * Events in different minutes each get their own rebuild because
-        the bucket flipped — the 24h result TTL never blocks the next
-        bucket.
-
-    ``force=True`` short-circuits to a millisecond-unique id so the admin
-    "Trigger reindex" button always actually runs even when the current
-    minute's rebuild is already cached.
+    Every request marks the index dirty; at most one plain rebuild waits in
+    the queue at a time — a burst of changes coalesces into that job, which
+    reads the database after it started. A change committed while a rebuild
+    is already running queues the next one, and the job skips the work when
+    nothing changed since the last build. ``force=True`` (the admin
+    "Trigger reindex" button) always queues and always rebuilds.
     """
+    key = "reindex:force" if force else "reindex"
+    if run_after_commit(key, lambda: _enqueue_reindex_now(force=force)):
+        return
+    await _enqueue_reindex_now(force=force)
+
+
+async def _enqueue_reindex_now(*, force: bool) -> None:
     import time as _time
 
     try:
         pool = await create_pool(_redis_settings())
         try:
+            await pool.set(REINDEX_DIRTY_KEY, "1")
+            stamp = int(_time.time() * 1000)
             if force:
-                job_id = f"rebuild_index:manual:{int(_time.time() * 1000)}"
-            else:
-                bucket = int(_time.time() // 60)
-                job_id = f"rebuild_index:{bucket}"
-            await pool.enqueue_job("rebuild_index", _job_id=job_id)
+                await pool.enqueue_job(
+                    "rebuild_index", True, _job_id=f"rebuild_index:manual:{stamp}"
+                )
+            elif await pool.set(REINDEX_QUEUED_KEY, stamp, nx=True, ex=_REINDEX_QUEUED_TTL):
+                # Unique id: arq keeps finished results for 24h and would
+                # silently drop a re-used id.
+                job = await pool.enqueue_job("rebuild_index", _job_id=f"rebuild_index:{stamp}")
+                if job is None:
+                    await pool.delete(REINDEX_QUEUED_KEY)
+            # else: a rebuild is queued and not started yet — it will see
+            # the dirty flag and read this change.
         finally:
             await pool.close()
     except Exception as exc:  # noqa: BLE001
@@ -62,12 +80,19 @@ async def enqueue_reindex(*, force: bool = False) -> None:
 async def enqueue_cve_scan(apk_id: str | uuid.UUID) -> None:
     """Schedule a per-APK SBOM + CVE scan.
 
-    Dedupes within a minute via a bucketed job_id (similar pattern to
-    :func:`enqueue_reindex`): rapid bursts of enqueues collapse to a
-    single scan, but a manual re-scan a few minutes later still runs.
-    Arq's 24h ``keep_result`` would otherwise swallow any second
-    enqueue with the same id.
+    Like :func:`enqueue_reindex`, inside a request the job is queued once
+    the transaction has committed — the worker drops jobs whose APK row it
+    can't see yet. Dedupes within a minute via a bucketed job_id: rapid
+    bursts of enqueues collapse to a single scan, but a manual re-scan a few
+    minutes later still runs. Arq's 24h ``keep_result`` would otherwise
+    swallow any second enqueue with the same id.
     """
+    if run_after_commit(f"cve:{apk_id}", lambda: _enqueue_cve_scan_now(apk_id)):
+        return
+    await _enqueue_cve_scan_now(apk_id)
+
+
+async def _enqueue_cve_scan_now(apk_id: str | uuid.UUID) -> None:
     import time as _time
     import uuid as _uuid
 
@@ -95,10 +120,15 @@ async def enqueue_clamav_scan() -> bool:
     try:
         pool = await create_pool(_redis_settings())
         try:
+            # Per-minute id: presses within a minute coalesce, but arq's 24h
+            # result retention can't swallow the next manual run (a fixed
+            # id silently dropped every press for a day after a scan).
+            import time as _time
+
             await pool.enqueue_job(
                 "scan_apks_periodic",
                 True,  # force
-                _job_id="scan_apks_manual",
+                _job_id=f"scan_apks_manual:{int(_time.time() // 60)}",
             )
             return True
         finally:

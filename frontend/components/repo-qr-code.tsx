@@ -21,10 +21,10 @@ type Props = {
   showCaption?: boolean;
 };
 
-/* Encodes an `fdroidrepo(s)://` deep link as a QR code.
- *
- *   - `fdroidrepos://` is used when the public repo URL is HTTPS
- *   - `fdroidrepo://`  is used when it is plain HTTP
+/* Encodes the "add repository" link built by ``fdroidDeepLink`` as a QR
+ * code — ``fdroidrepos://`` for HTTPS, ``https://fdroid.link/#…`` for a
+ * plain-HTTP repo (F-Droid 2.0 dropped ``fdroidrepo://``). F-Droid's own
+ * scanner (Repositories → +) accepts every form.
  *
  * Repo URL + fingerprint come from the public /setup/status endpoint via
  * useRepoInfo(), so the QR always reflects the LIVE admin configuration —

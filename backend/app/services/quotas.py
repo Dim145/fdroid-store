@@ -87,12 +87,16 @@ async def ensure_can_create_app(db: AsyncSession, user: User) -> None:
 
 async def ensure_can_upload_apk(
     db: AsyncSession,
-    user: User,
+    user: User | None,
     *,
     incoming_size_bytes: int,
 ) -> None:
-    """Refuse with 403 when the upload would exceed storage or monthly cap."""
-    if user.role == UserRole.ADMIN:
+    """Refuse with 403 when the upload would exceed storage or monthly cap.
+
+    ``user`` is the app's owner; ``None`` when that account was deleted
+    (``apps.owner_id`` is SET NULL) — there is no one to bill, so no cap.
+    """
+    if user is None or user.role == UserRole.ADMIN:
         return
     config = await _load_config(db)
     # Same TOCTOU defence as ensure_can_create_app — parallel uploads

@@ -9,7 +9,7 @@ import {
   ShieldCheck,
   GitCompareArrows,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -29,21 +29,39 @@ export default function AdminScanningPage() {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
 
+  // The "Scan now" poll calls ``reload`` long after the click, from that
+  // render's closure: read the filter through a ref so it uses the current
+  // one, and number the reloads so an older response can't overwrite a
+  // newer list. ``mounted`` lets the poll stop once the page is gone.
+  // (Synced in an effect declared before the reload-on-filter one below,
+  // so it is current by the time that one runs.)
+  const onlyInfectedRef = useRef(onlyInfected);
+  useEffect(() => { onlyInfectedRef.current = onlyInfected; }, [onlyInfected]);
+  const reloadSeq = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
   async function reload() {
+    const seq = ++reloadSeq.current;
     setLoading(true);
     try {
       const [r, p, s] = await Promise.all([
         api.admin.repo(),
         api.admin.clamavPing().catch(() => ({ ok: false, configured: false })),
-        api.admin.scans({ only_infected: onlyInfected }),
+        api.admin.scans({ only_infected: onlyInfectedRef.current }),
       ]);
+      if (seq !== reloadSeq.current) return;
       setRepo(r);
       setPing(p);
       setScans(s);
     } catch (e) {
+      if (seq !== reloadSeq.current) return;
       toast.error(t("admin.scans.loadFailed"), e instanceof Error ? e.message : undefined);
     } finally {
-      setLoading(false);
+      if (seq === reloadSeq.current) setLoading(false);
     }
   }
   useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [onlyInfected]);
@@ -97,6 +115,7 @@ export default function AdminScanningPage() {
       // Refresh manually.
       for (const delay of [3000, 6000, 12000]) {
         await new Promise((r) => setTimeout(r, delay));
+        if (!mounted.current) return;
         await reload();
       }
     } catch (e) {

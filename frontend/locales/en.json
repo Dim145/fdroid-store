@@ -121,7 +121,8 @@
   "repoCta": {
     "title": "Subscribe with the F-Droid client.",
     "body": "Scan the code with your phone, or paste the URL in F-Droid → Settings → Repositories → +.",
-    "open": "Open in F-Droid"
+    "open": "Open in F-Droid",
+    "httpWarning": "This repository is served over plain HTTP: F-Droid 2.0 no longer opens fdroidrepo:// links and F-Droid Basic refuses unencrypted repositories. Serve it over HTTPS."
   },
   "repoQr": {
     "ariaLabel": "F-Droid repository QR code",
@@ -261,7 +262,7 @@
     "categoriesSubtitle": "Browse by interest",
     "seeAll": "See all",
     "emptyShelfTitle": "Nothing on the shelf yet.",
-    "emptyShelfBody": "Once an APK is published you'll see it featured here. Admin: head to <link>My apps → New release</link>.",
+    "emptyShelfBody": "Once an APK is published you'll see it featured here. Admin: head to <newReleaseLink>My apps → New release</newReleaseLink>.",
     "setupRequired": "Setup required",
     "setupNotReady": "The repo isn't ready yet.",
     "setupAdminCta": "An administrator needs to finish the wizard.",
@@ -362,10 +363,14 @@
     "nsfw": {
       "title": "This app is flagged as adult content.",
       "tagline": "NSFW content",
-      "body": "<bold>{{name}}</bold> is hidden from the catalogue by default. Confirm you want to see it for this session, or change your preference in <link>account settings</link>.",
+      "body": "<bold>{{name}}</bold> is hidden from the catalogue by default. Confirm you want to see it for this session, or change your preference in <settingsLink>account settings</settingsLink>.",
       "continue": "Continue",
       "backToCatalogue": "Back to catalogue"
-    }
+    },
+    "openInFdroid": "Open in F-Droid",
+    "openInFdroidHint": "Opens this app's page in F-Droid once this repository is added.",
+    "beta": "beta",
+    "betaHint": "Pre-release: F-Droid only offers it to users who allowed beta updates for this app."
   },
   "auth": {
     "heroEyebrow": "self-hosted · open source · yours",
@@ -406,7 +411,24 @@
       "errors": {
         "default": "Sign-in failed",
         "invalid": "Invalid email or password"
+      },
+      "oidcErrors": {
+        "generic": "SSO sign-in failed. Please try again.",
+        "token_exchange_failed": "The identity provider's answer couldn't be verified. Please try again.",
+        "missing_claims": "The identity provider didn't share an account ID and email address.",
+        "email_unverified": "Your email address isn't verified by the identity provider.",
+        "signup_disabled": "Account creation is disabled on this repository.",
+        "signup_closed": "Signups are closed. Ask an administrator to create an account for you.",
+        "invite_required": "An invite code is required to create an account through SSO.",
+        "invite_invalid": "This invite code is invalid.",
+        "invite_used": "This invite code has already been used or has expired.",
+        "account_disabled": "This account is disabled.",
+        "identity_conflict": "This account is already linked to another SSO identity."
       }
+    },
+    "oidcSuccess": {
+      "finishing": "Finishing sign-in…",
+      "backToLogin": "Back to sign in"
     },
     "signup": {
       "heroEyebrow": "publish · sync · install",
@@ -499,6 +521,10 @@
       "unknownClient": "Unknown client",
       "showRevoked_one": "Show {{count}} revoked session",
       "showRevoked_other": "Show {{count}} revoked sessions"
+    },
+    "security": {
+      "confirmPasswordLabel": "Current password",
+      "confirmPasswordHint": "Required to add a new way to sign in."
     },
     "totp": {
       "notEnrolledBody": "Add an authenticator app (Aegis, 1Password, …) as a second factor. You'll be asked for a 6-digit code on every sign-in.",
@@ -606,7 +632,8 @@
       "encodedUrl": "Encoded URL",
       "usernameNote": "In F-Droid the username can be anything; this one matches your account so revoking it is easier to track.",
       "createFailed": "Create failed",
-      "revokeFailed": "Revoke failed"
+      "revokeFailed": "Revoke failed",
+      "replaceRepoNote": "Already added this repository in F-Droid without a key? Remove it first, then scan this code: F-Droid only takes the key when a repository is added."
     }
   },
   "history": {
@@ -893,6 +920,7 @@
         "visibility": "Visibility",
         "visibilityPublic": "Public",
         "visibilityPrivate": "Private",
+        "visibilityOwnerOnly": "Only the app owner (or an admin) can change the visibility.",
         "summary": "Summary",
         "description": "Description",
         "descriptionPlaceholder": "What does it do? Highlights, screenshots context, etc.",
@@ -907,9 +935,9 @@
         "translationPlaceholder": "https://weblate.example.org/…",
         "donateUrl": "Donate URL",
         "liberapay": "Liberapay",
-        "liberapayPlaceholder": "https://liberapay.com/you",
+        "liberapayPlaceholder": "username (or https://liberapay.com/username)",
         "openCollective": "Open Collective",
-        "openCollectivePlaceholder": "https://opencollective.com/you",
+        "openCollectivePlaceholder": "project-slug (or https://opencollective.com/slug)",
         "bitcoin": "Bitcoin",
         "bitcoinPlaceholder": "bc1q… or bitcoin:bc1q…"
       },
@@ -970,7 +998,8 @@
         "remove": "Remove {{name}}",
         "add": "Add {{name}}",
         "empty": "Nothing selected. Pick one or more below — F-Droid clients use this to group your app in their catalogue.",
-        "allSelected": "All available categories are already selected."
+        "allSelected": "All available categories are already selected.",
+        "custom": "Not an official F-Droid category: F-Droid 2.0 lists it under \"Miscellaneous\"."
       },
       "versions": {
         "uploadNew": "Upload new version",
@@ -1010,7 +1039,20 @@
         "changelogSaveFailed": "Save failed",
         "changelogCleared": "Changelog cleared.",
         "changelogClearFailed": "Clear failed",
-        "clearAllLocales": "Clear all locales"
+        "clearAllLocales": "Clear all locales",
+        "uploadedBeta": "Beta version uploaded.",
+        "betaUpload": "Upload as beta",
+        "betaUploadHint": "Publish on the F-Droid Beta channel: only users who allowed beta updates for this app get it. The suggested version doesn't move.",
+        "beta": "beta",
+        "betaHint": "Held back on the Beta channel: newer than the suggested version, so F-Droid only offers it to users who allowed beta updates.",
+        "markBeta": "Mark as beta",
+        "markBetaTitle": "Move this version to the F-Droid Beta channel",
+        "promote": "Promote to stable",
+        "promoteTitle": "Offer this version to everyone",
+        "markedBeta": "v{{name}} moved to the Beta channel.",
+        "promoted": "v{{name}} promoted to stable.",
+        "autoUpdateBlocked": "F-Droid can't update it automatically on Android {{android}}+ (targetSdk {{target}})",
+        "autoUpdateHint": "Android only allows silent updates for apps targeting a recent SDK; F-Droid 2.0 then shows \"auto-update not available\" and asks the user every time."
       },
       "reproducibility": {
         "label": "Reproducibility",
@@ -1055,7 +1097,10 @@
           "severity": "Severity",
           "package": "Package",
           "fixed": "Fixed in"
-        }
+        },
+        "knownVulnApplied": "Version flagged KnownVuln.",
+        "applyKnownVuln": "Flag as known vulnerability",
+        "knownVulnHint": "Adds the KnownVuln anti-feature with this reason: F-Droid 2.0 warns users who have this version installed to update or uninstall it."
       },
       "changelog": {
         "title": "Release notes for {{version}}",
@@ -1164,7 +1209,8 @@
           "body_": "Body",
           "snippets": "Sample pipeline snippets",
           "tokenNotice": "<YOUR_TOKEN> is the token you minted above. We don't store the plaintext — if you lost it, mint a new one."
-        }
+        },
+        "betaTip": "Add -F beta=true to publish on the F-Droid Beta channel (nightlies, release candidates): only users who allowed beta updates get it."
       },
       "githubSource": {
         "providerLabel": "Forge",
@@ -1210,6 +1256,7 @@
         "scanFailed": "Could not start scan",
         "loadFailed": "Could not load source",
         "lostAccess": "Lost contact with the backend — refresh to try again.",
+        "ownerOnly": "Only the app owner (or an admin) can change or disconnect this source. You can still run a scan.",
         "lastScanned": "Last scanned {{date}}",
         "neverScanned": "Never scanned yet.",
         "statusIdle": "Pending first scan",
@@ -1237,6 +1284,7 @@
       },
       "proxySources": {
         "intro": "Each proxy publishes its own catalogue of providers (F-Droid mirror, Patreon, private artefact repo, …). One app can hold multiple sources as long as they point at the same package and signer.",
+        "ownerOnly": "Only the app owner (or an admin) can attach, scan, pause or detach external sources.",
         "add": "Add a source",
         "empty": "No proxy source attached. Click \"Add a source\" to wire one.",
         "noProxiesTitle": "No proxies available",
@@ -1307,6 +1355,14 @@
           "scopesHint": "Scopes requested: {{scopes}}",
           "create": "Attach source"
         }
+      },
+      "antiFeatureReasons": {
+        "saved": "Reasons saved.",
+        "edit": "Reasons",
+        "hint": "Explain each anti-feature — F-Droid 2.0 shows the text under it.",
+        "title": "Anti-feature reasons",
+        "body": "Optional. F-Droid 2.0 shows each reason under the anti-feature on the app page (for KnownVuln, in the red warning banner).",
+        "placeholder": "e.g. Firebase Analytics, Crashlytics"
       }
     }
   },
@@ -1761,7 +1817,35 @@
       "deleteFailed": "Delete failed",
       "loadFailed": "Failed to load categories",
       "empty": "No categories yet. Add one above to get started.",
-      "noEmpty": "Nothing to clean up — every category has at least one app."
+      "noEmpty": "Nothing to clean up — every category has at least one app.",
+      "merged": "{{from}} merged into {{to}}.",
+      "mergeFailed": "Merge failed",
+      "customNotice_one": "{{count}} category isn't an official F-Droid ID: F-Droid 2.0 shows it with a generic icon under \"Miscellaneous\". Merge it into an official category.",
+      "customNotice_other": "{{count}} categories aren't official F-Droid IDs: F-Droid 2.0 shows them with a generic icon under \"Miscellaneous\". Merge them into official categories.",
+      "official": "F-Droid",
+      "officialHint": "Official F-Droid ID: F-Droid 2.0 shows it with its own icon in this Discover group.",
+      "customBadge": "custom",
+      "customHint": "Not an official F-Droid ID: F-Droid 2.0 lists it under \"Miscellaneous\".",
+      "merge": "Merge",
+      "mergeHint": "Move this category's apps to an official F-Droid category",
+      "mergePrompt": "Move the apps of \"{{name}}\" to:",
+      "mergePick": "Pick an official category…",
+      "mergeConfirm": "Merge",
+      "addNameHint": "Prefer an official F-Droid ID (suggested while typing): F-Droid 2.0 gives it an icon and a Discover group.",
+      "groups": {
+        "communication": "Communication",
+        "device": "Device",
+        "games": "Games",
+        "health": "Health",
+        "interests": "Interests",
+        "media": "Media",
+        "misc": "Miscellaneous",
+        "network": "Network",
+        "productivity": "Productivity",
+        "storage": "Storage",
+        "tools": "Tools",
+        "wallets": "Money"
+      }
     },
     "users": {
       "title": "Users",
@@ -1992,7 +2076,16 @@
       "maxVersionsHint": "When an app has more than N APK rows, the oldest by versionCode is auto-deleted on the next upload. The suggested version is never evicted. Leave empty for no cap.",
       "saveQuotas": "Save quotas",
       "saved": "Saved.",
-      "saveFailed": "Save failed"
+      "saveFailed": "Save failed",
+      "rom": {
+        "title": "Pre-install on devices (ROM / fleet)",
+        "body": "F-Droid 2.0 adds the repositories listed in /system_ext, /product or /vendor/etc/fdroid/additional_repos.json (the old XML file is no longer read). Ship this file in your ROM or device image.",
+        "privateWarning": "This repository is in private mode and the file can't carry credentials: devices will still need an API key.",
+        "copy": "Copy",
+        "download": "Download",
+        "generate": "Generate additional_repos.json",
+        "failed": "Could not generate the file"
+      }
     },
     "setup": {
       "title": "Setup wizard",

@@ -16,20 +16,14 @@ from __future__ import annotations
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from app.core.config import settings
+from app.core.client_ip import client_ip
 
 # ``key_func`` here looks at ``request.client.host`` by default. In a
 # reverse-proxy deployment that resolves to the nginx host IP for every
 # request; the nginx config sets ``X-Forwarded-For`` so we use that when
 # the trust list is configured.
 def _client_key(request) -> str:
-    if settings.trust_forwarded_headers:
-        fwd = request.headers.get("x-forwarded-for")
-        if fwd:
-            # First entry is the original client; nginx appends $remote_addr
-            # so the chain is "<client>, <proxy>".
-            return fwd.split(",")[0].strip()
-    return get_remote_address(request)
+    return client_ip(request) or get_remote_address(request)
 
 
 limiter = Limiter(

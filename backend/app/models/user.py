@@ -79,6 +79,12 @@ class User(Base, IdMixin, TimestampMixin):
         return self.role == UserRole.ADMIN
 
     @property
+    def has_password(self) -> bool:
+        """A local password exists (local accounts, and local accounts later
+        linked to SSO). Sensitive changes ask for it again."""
+        return self.hashed_password is not None
+
+    @property
     def can_upload(self) -> bool:
         """True for ``uploader`` or ``admin``. Gates every endpoint that
         creates, edits, or attaches an APK / metadata / asset to an app

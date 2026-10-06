@@ -14,7 +14,9 @@ class AppCollaboratorRead(BaseModel):
     granted_at: datetime
     # Joined client-side from the User row — saves the frontend an N+1.
     username: str
-    email: EmailStr
+    # Only filled for admins (see api/v1/collaborators.py); plain str —
+    # SSO addresses are stored as the IdP sent them.
+    email: str | None = None
     full_name: str | None = None
 
 

@@ -29,7 +29,7 @@ dependencies = [
     # confusion via JWK-as-secret, allow-list bypass on PyJWK decode,
     # PyJWKClient accepting file:// / data: URIs, JWKS-fetch-failure
     # cache wipe, and a detached-form base64 DoS amplifier.
-    "PyJWT[crypto]>=2.13.0",
+    "PyJWT[crypto]>=2.15.0",
     # 0.0.20 has two CVEs (path traversal + DoS); 0.0.28 fixed both.
     # 0.0.29 hardens RFC 2231 continuation parsing on uploaded headers.
     "python-multipart>=0.0.29",

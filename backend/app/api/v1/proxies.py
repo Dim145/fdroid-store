@@ -336,10 +336,15 @@ async def _load_source_or_404(
     return row
 
 
-async def _load_app_for_management(db, app_id: uuid.UUID, user: User) -> App:
-    """Resolve an app + assert the caller can manage it. Same gate the
-    GitHub source endpoints use."""
-    from app.services.app_permissions import assert_can_manage_app
+async def _load_app_for_management(
+    db, app_id: uuid.UUID, user: User, *, owner_only: bool = False
+) -> App:
+    """Resolve an app + assert the caller can manage it. Changing a source
+    is owner/admin-only (``owner_only``), as for GitHub sources: the worker
+    imports with the owner as uploader, so a co-maintainer pointing a source
+    at their own URL would skip moderation (and auto-publish on an admin's
+    app)."""
+    from app.services.app_permissions import assert_can_manage_app, assert_owner_or_admin
 
     app = (
         await db.execute(select(App).where(App.id == app_id))
@@ -347,6 +352,8 @@ async def _load_app_for_management(db, app_id: uuid.UUID, user: User) -> App:
     if app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
     await assert_can_manage_app(db, user, app)
+    if owner_only:
+        assert_owner_or_admin(user, app)
     return app
 
 
@@ -391,7 +398,7 @@ async def create_proxy_source(
     for ``api_token`` / ``basic`` providers, the keys match the
     proxy's declared ``secret_fields``.
     """
-    await _load_app_for_management(db, app_id, user)
+    await _load_app_for_management(db, app_id, user, owner_only=True)
     proxy = await _load_proxy_or_404(db, payload.proxy_id)
     if not proxy.enabled:
         raise HTTPException(
@@ -490,7 +497,7 @@ async def update_proxy_source(
     """Partial update. ``secrets={}`` clears them (the proxy will
     challenge with 401 on the next scan); ``secrets=None`` leaves
     them alone. ``enabled`` toggles the cron without losing the row."""
-    await _load_app_for_management(db, app_id, user)
+    await _load_app_for_management(db, app_id, user, owner_only=True)
     src = await _load_source_or_404(db, app_id, source_id)
     changed: dict[str, object] = {}
     if payload.source_url is not None and str(payload.source_url) != src.source_url:
@@ -547,7 +554,7 @@ async def scan_proxy_source_now(
     """
     from app.services.queue import enqueue_apk_proxy_source_scan
 
-    await _load_app_for_management(db, app_id, user)
+    await _load_app_for_management(db, app_id, user, owner_only=True)
     src = await _load_source_or_404(db, app_id, source_id)
     if not src.enabled:
         raise HTTPException(
@@ -578,7 +585,7 @@ async def delete_proxy_source(
     """Unbind the source. The proxy keeps the OAuth credential (if any)
     until its own retention rules expire it — we don't have a back-
     channel to ask the proxy to revoke."""
-    await _load_app_for_management(db, app_id, user)
+    await _load_app_for_management(db, app_id, user, owner_only=True)
     src = await _load_source_or_404(db, app_id, source_id)
     await write_event(
         db,
@@ -694,7 +701,7 @@ async def begin_proxy_oauth(
     + provider are validated against the cached catalogue so we don't
     redirect to a path that won't exist.
     """
-    await _load_app_for_management(db, app_id, user)
+    await _load_app_for_management(db, app_id, user, owner_only=True)
     try:
         proxy_id = uuid.UUID(str(body.get("proxy_id")))
         provider = str(body.get("provider"))

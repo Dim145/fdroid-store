@@ -1,0 +1,72 @@
+#!/bin/sh
+# Defaults + validation for the env-driven parts of nginx.conf.template
+# (everything except UPSTREAM_BACKEND and the HSTS toggle, see
+# 10-fdroid-hsts.envsh). Sourced by the nginx image's entrypoint after
+# 15-local-resolvers.envsh and before 20-envsubst-on-templates.sh, so the
+# values exported here are what envsubst writes into the config.
+#
+#   TRUSTED_PROXY_CIDRS   IPs/CIDRs, comma or space separated, of the
+#                         reverse proxy (BunkerWeb, Traefik, a CDN, …) in
+#                         front of this container. Renders the realip
+#                         directives into ${REAL_IP_DIRECTIVES}. Empty
+#                         (default) = realip off, i.e. unchanged behaviour.
+#   NGINX_RESOLVER        DNS server(s) for resolving UPSTREAM_BACKEND.
+#                         Default: NGINX_LOCAL_RESOLVERS when the image's
+#                         NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1 mechanism is
+#                         on, else Docker's embedded DNS (127.0.0.11).
+#   API_MAX_BODY_SIZE     client_max_body_size outside the upload routes.
+#                         Default 10m.
+#   UPLOAD_MAX_BODY_SIZE  client_max_body_size of the upload routes.
+#                         Default 2100m; 0 disables the check.
+#
+# Values are checked against a strict character set: they're pasted into
+# nginx.conf verbatim, so a stray ``;`` or ``}`` must stop the container
+# with a clear message rather than inject a directive. ``exit`` here ends
+# the entrypoint (this file is sourced), so nginx never starts.
+set -eu
+
+_fdroid_fail() {
+    echo "16-fdroid-nginx.envsh: ERROR: $*" >&2
+    exit 1
+}
+
+# ---- Body-size caps ---------------------------------------------------------
+: "${API_MAX_BODY_SIZE:=10m}"
+: "${UPLOAD_MAX_BODY_SIZE:=2100m}"
+for _fdroid_size in "$API_MAX_BODY_SIZE" "$UPLOAD_MAX_BODY_SIZE"; do
+    case "$_fdroid_size" in
+        *[!0-9kKmMgG]*|[!0-9]*)
+            _fdroid_fail "invalid body size '$_fdroid_size' (expected e.g. 10m, 2100m, 2g)" ;;
+    esac
+done
+export API_MAX_BODY_SIZE UPLOAD_MAX_BODY_SIZE
+
+# ---- DNS resolver -----------------------------------------------------------
+if [ -z "${NGINX_RESOLVER:-}" ]; then
+    NGINX_RESOLVER="${NGINX_LOCAL_RESOLVERS:-127.0.0.11}"
+fi
+case "$NGINX_RESOLVER" in
+    *[!]0-9A-Za-z.:_[\ -]*)
+        _fdroid_fail "invalid NGINX_RESOLVER '$NGINX_RESOLVER' (space separated addresses, e.g. 127.0.0.11 or [fd00::53]:53)" ;;
+esac
+export NGINX_RESOLVER
+
+# ---- Real client IP behind a trusted reverse proxy --------------------------
+REAL_IP_DIRECTIVES=""
+set -f  # no globbing while word-splitting the list
+for _fdroid_cidr in $(printf '%s' "${TRUSTED_PROXY_CIDRS:-}" | tr ',' ' '); do
+    case "$_fdroid_cidr" in
+        *[!0-9A-Fa-f:./]*)
+            _fdroid_fail "invalid TRUSTED_PROXY_CIDRS entry '$_fdroid_cidr' (expected IPs or CIDRs, e.g. 192.168.1.10,10.0.0.0/8)" ;;
+        */0)
+            _fdroid_fail "TRUSTED_PROXY_CIDRS entry '$_fdroid_cidr' would trust every client's X-Forwarded-For; list your proxy's address(es) instead" ;;
+    esac
+    REAL_IP_DIRECTIVES="${REAL_IP_DIRECTIVES}set_real_ip_from ${_fdroid_cidr}; "
+done
+set +f
+if [ -n "$REAL_IP_DIRECTIVES" ]; then
+    REAL_IP_DIRECTIVES="${REAL_IP_DIRECTIVES}real_ip_header X-Forwarded-For; real_ip_recursive on;"
+fi
+export REAL_IP_DIRECTIVES
+
+unset _fdroid_size _fdroid_cidr

@@ -89,12 +89,17 @@ async def _scan_stream(host: str, port: int, fh, *, size_bytes: int = 0) -> Scan
                 return ScanResult(clean=False, signature=None, error="drain timeout")
         # Zero-length chunk = end-of-stream.
         writer.write(struct.pack(">I", 0))
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), timeout=10.0)
         try:
             reply = await asyncio.wait_for(reader.readline(), timeout=timeout_s)
         except asyncio.TimeoutError:
             return ScanResult(clean=False, signature=None, error="scan timeout")
         text = reply.decode("utf-8", errors="replace").strip().rstrip("\0")
+    except (OSError, TimeoutError, asyncio.IncompleteReadError) as exc:
+        # clamd closes the socket at its StreamMaxLength or when it restarts
+        # (ConnectionResetError / BrokenPipeError): a failed scan, not a
+        # crash of the caller (upload → 503, nightly rescan → next APK).
+        return ScanResult(clean=False, signature=None, error=f"connection error: {exc!r}")
     finally:
         try:
             writer.close()

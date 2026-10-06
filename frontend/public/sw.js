@@ -19,6 +19,20 @@
  */
 
 let authToken = null;
+/* What the pages told us: "unknown" until a controlled page answers (the
+ * browser stops idle workers, wiping this memory), then "user" or
+ * "anonymous". The explicit anonymous state is what spares an anonymous
+ * visitor a token round-trip (and its ~300 ms wait) on every image. */
+let authState = "unknown";
+/* Token changes — and the cache purge they may trigger — run one after
+ * another on this chain; fetches wait for it, so none reads the media
+ * cache halfway through an account switch. */
+let authChange = Promise.resolve();
+/* Shared ``need-token`` round-trip, so a burst of <img> fetches asks once. */
+let solicitation = null;
+/* Bumped on every token change: a response fetched under an older value
+ * is not written to the cache (it may belong to the previous user). */
+let cacheGeneration = 0;
 
 /* Explicit ``CacheStorage`` bucket for media. The previous
  * ``fetch(url, {cache: "default"})`` relied on Chrome's HTTP cache to
@@ -30,15 +44,20 @@ let authToken = null;
  * Owning the cache here gives us:
  *   • Real reuse across navigations (the SW serves the bytes directly,
  *     no HTTP round-trip).
- *   • A clear privacy boundary — purge on ``clear-token`` (logout) so
- *     user A's private-app thumbnails can't bleed into user B's
- *     session on a shared browser.
+ *   • A clear privacy boundary — the cache is only read while a token is
+ *     set, and purged when that token is cleared (logout) or replaced by
+ *     another user's, so user A's private-app thumbnails can't bleed into
+ *     an anonymous visitor's or user B's session on a shared browser.
  *   • Freshness honouring whatever ``max-age`` the backend sent.
  *
  * Bump ``CACHE_VERSION`` whenever the cache shape changes so old
  * entries get evicted on next activation. */
 const CACHE_VERSION = "v1";
 const MEDIA_CACHE = "fdroid-media-" + CACHE_VERSION;
+/* Entry in MEDIA_CACHE naming the user whose token filled it (the JWT
+ * ``sub``). Unlike ``authToken`` it survives the worker being stopped,
+ * so a logout or account switch still purges after a restart. */
+const OWNER_KEY = "/__fdroid-media-owner__";
 
 /* Index files MUST revalidate per request (the backend sets
  * ``no-cache, must-revalidate`` on them), so we never cache them.
@@ -68,24 +87,102 @@ function _isFresh(cached) {
   return ageSec < parseInt(m[1], 10);
 }
 
-/** Ask every controlled window for a fresh token. Used on the first
- *  fetch after activation when the page hasn't yet pushed via
- *  ``set-token`` — without this, that first <img> burst races the
- *  registration handshake and lands as 404 against private apps. */
-async function _solicitTokenFromClients() {
+/** Ask every controlled window for the token. Used while ``authState``
+ *  is still "unknown" (first fetches after activation or a worker
+ *  restart, before any page pushed ``set-token`` / ``clear-token``) —
+ *  without this, that first <img> burst races the registration handshake
+ *  and lands as 404 against private apps. Concurrent callers share one
+ *  round-trip. */
+function _solicitTokenFromClients() {
+  if (!solicitation) {
+    solicitation = (async () => {
+      try {
+        const list = await self.clients.matchAll({ type: "window" });
+        if (list.length === 0) return;
+        for (const client of list) {
+          client.postMessage({ type: "need-token" });
+        }
+        // Give the page a brief window to reply. We don't await a
+        // specific reply — the message handler settles ``authState``
+        // (to "user" or "anonymous") and we stop as soon as it does.
+        for (let i = 0; i < 10 && authState === "unknown"; i++) {
+          await new Promise((r) => setTimeout(r, 30));
+        }
+      } catch (_) {
+        /* matchAll can throw on insecure contexts; harmless. */
+      }
+    })().finally(() => { solicitation = null; });
+  }
+  return solicitation;
+}
+
+/** ``sub`` claim of a JWT — who the token belongs to. Read without
+ *  verification: it only decides whether the cache changes hands. */
+function _tokenSubject(token) {
   try {
-    const list = await self.clients.matchAll({ type: "window" });
-    for (const client of list) {
-      client.postMessage({ type: "need-token" });
+    const part = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(part + "===".slice((part.length + 3) % 4)));
+    return claims && claims.sub != null ? String(claims.sub) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Owner recorded in the media cache: null when there is no cache, "" when
+ *  one exists without an owner entry (written by an older worker, or
+ *  re-created after an eviction) — i.e. owner unknown. */
+async function _cacheOwner() {
+  if (!(await caches.has(MEDIA_CACHE))) return null;
+  const cache = await caches.open(MEDIA_CACHE);
+  const hit = await cache.match(OWNER_KEY);
+  return hit ? hit.text() : "";
+}
+
+/** Apply a ``set-token`` / ``clear-token`` from a page. The media cache
+ *  is purged only when it changes hands: a token that was set is cleared
+ *  (logout), or a token for another user replaces it. An anonymous
+ *  visitor answering ``need-token`` with ``clear-token`` costs nothing. */
+async function _applyToken(token) {
+  if (token) {
+    if (token === authToken && authState === "user") return;
+    // Responses already in flight were fetched for the previous token:
+    // they must not land in a cache that may be changing hands.
+    cacheGeneration++;
+    // An undecodable token gets an identity of its own, so it never
+    // inherits a cache it can't be proven to own.
+    const owner = _tokenSubject(token) || "?" + Date.now();
+    try {
+      const previous = await _cacheOwner();
+      if (previous !== null && previous !== owner) {
+        await caches.delete(MEDIA_CACHE);
+      }
+      if (previous !== owner) {
+        const cache = await caches.open(MEDIA_CACHE);
+        await cache.put(OWNER_KEY, new Response(owner));
+      }
+    } catch (_) {
+      /* CacheStorage unavailable — then nothing is cached to protect */
     }
-    // Give the page a brief window to reply with ``set-token``. We
-    // don't await a specific reply — the message handler updates
-    // ``authToken`` and any near-simultaneous fetch will pick it up.
-    for (let i = 0; i < 10 && !authToken; i++) {
-      await new Promise((r) => setTimeout(r, 30));
+    authToken = token;
+    authState = "user";
+    return;
+  }
+  if (authState === "anonymous") return;
+  cacheGeneration++;
+  const wasUser = authState === "user";
+  authToken = null;
+  authState = "anonymous";
+  try {
+    // After a worker restart the memory says "unknown": the owner entry
+    // tells whether a signed-in session filled the cache.
+    if (wasUser || (await _cacheOwner()) !== null) {
+      // Otherwise, on a shared browser (kiosk, multi-user laptop), user
+      // A's private-app thumbnails would still sit in CacheStorage for
+      // whoever logs in next — a thin but real cross-account leak.
+      await caches.delete(MEDIA_CACHE);
     }
   } catch (_) {
-    /* matchAll can throw on insecure contexts; harmless. */
+    /* best effort */
   }
 }
 
@@ -115,16 +212,18 @@ self.addEventListener("message", (event) => {
   }
   const data = event.data;
   if (!data || typeof data !== "object") return;
+  let token;
   if (data.type === "set-token") {
-    authToken = typeof data.token === "string" ? data.token : null;
+    token = typeof data.token === "string" && data.token ? data.token : null;
   } else if (data.type === "clear-token") {
-    authToken = null;
-    // Purge the media cache on logout. Otherwise, on a shared browser
-    // (kiosk, multi-user laptop), user A's private-app thumbnails
-    // would still be served from CacheStorage to whoever logs in next
-    // for the same URL — a thin but real cross-account leak.
-    caches.delete(MEDIA_CACHE).catch(() => { /* best effort */ });
+    token = null;
+  } else {
+    return;
   }
+  const change = authChange.then(() => _applyToken(token));
+  // Never let one failed purge wedge every later fetch on the chain.
+  authChange = change.catch(() => { /* best effort */ });
+  if (event.waitUntil) event.waitUntil(authChange);
 });
 
 /* Network fetch with Authorization header. The original ``<img>``
@@ -177,6 +276,25 @@ self.addEventListener("fetch", (event) => {
   const cacheable = _isCacheable(url.pathname);
 
   event.respondWith((async () => {
+    // Don't know yet whether this browser is signed in (the page hasn't
+    // pushed a token since the worker started) → ask any window client
+    // and wait briefly. Once a page answered — token or explicit
+    // ``clear-token`` — later fetches skip this entirely.
+    await authChange;
+    if (authState === "unknown") {
+      await _solicitTokenFromClients();
+      await authChange;
+    }
+    const token = authState === "user" ? authToken : null;
+    if (!token) {
+      // Anonymous (or no answer): plain fetch, no auth header, and the
+      // media cache stays out of it — it holds what a token was allowed
+      // to see. Public apps succeed, private ones get the 404 they would
+      // have anyway; nothing here is cached, so that 404 can't poison
+      // the slot for the same URL once we DO have a token.
+      return fetch(event.request);
+    }
+
     // Cache-first when we can. The cache lives across pages and
     // across SW restarts, so a navigation that revisits an app's
     // screenshots after seeing them on /apps/[package] hits memory
@@ -189,33 +307,16 @@ self.addEventListener("fetch", (event) => {
       }
     }
 
-    // No token to add → either the page hasn't pushed one yet (first
-    // paint after a hard reload, SW just activated) or the user
-    // really is anonymous. Solicit one from any window client and
-    // wait briefly; if nothing arrives, let the browser fetch
-    // normally (public apps succeed, private ones get the 404 they
-    // would have anyway).
-    let token = authToken;
-    if (!token) {
-      await _solicitTokenFromClients();
-      token = authToken;
-    }
-    if (!token) {
-      // Anonymous bypass — no auth header. Don't cache this either,
-      // because the 404 we'd get on a private asset shouldn't poison
-      // the cache for the same URL once we DO have a token.
-      return fetch(event.request);
-    }
-
+    const generation = cacheGeneration;
     const response = await _fetchWithAuth(url, req, token);
 
     // Cache successful, cacheable responses. Clone before storing —
     // a Response body is one-shot, and the caller still needs it.
     // Failures (404 on a private asset before login, 5xx, …) are
-    // never cached.
+    // never cached, nor is anything fetched before a token change.
     if (cacheable && response && response.ok) {
       const cache = await caches.open(MEDIA_CACHE).catch(() => null);
-      if (cache) {
+      if (cache && generation === cacheGeneration) {
         // ``cache.put`` is async but we don't need to await it before
         // returning the response to the caller — the body is already
         // cloned and the page can start decoding the image while the

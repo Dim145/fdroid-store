@@ -3,6 +3,7 @@
 import {
   ArrowDownAZ,
   Check,
+  GitMerge,
   Pencil,
   Plus,
   Sparkles,
@@ -17,18 +18,26 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type Category } from "@/lib/api";
+import { api, type Category, type OfficialCategory } from "@/lib/api";
+import { categoryDescription, categoryLabel } from "@/lib/categories";
 import { toast } from "@/lib/toast-store";
 import { cn } from "@/lib/utils";
+
+// ``<datalist>`` id shared by the add / edit name inputs: typing offers the
+// official F-Droid IDs (the ones F-Droid 2.0 gives an icon + group to).
+const CATALOG_LIST_ID = "fdroid-category-catalog";
 
 
 type SortKey = "usage" | "name" | "newest";
 
 export default function AdminCategoriesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [categories, setCategories] = useState<Category[] | null>(null);
+  const [catalog, setCatalog] = useState<OfficialCategory[]>([]);
   const [sort, setSort] = useState<SortKey>("usage");
   const [emptyOnly, setEmptyOnly] = useState(false);
+  // Inline "merge into…" picker, one tile at a time like edit/delete.
+  const [mergingId, setMergingId] = useState<string | null>(null);
 
   // Inline edit state lives at the page level so only one tile can be
   // in edit mode at a time. Carrying it in the tile would let an admin
@@ -49,6 +58,11 @@ export default function AdminCategoriesPage() {
     }
   }
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => {
+    // Non-fatal: without it the page just loses the suggestions / merge
+    // targets that aren't local categories yet.
+    api.categories.catalog().then(setCatalog).catch(() => setCatalog([]));
+  }, []);
 
   // --- Derived state -----------------------------------------------------
   const rows = categories ?? [];
@@ -129,6 +143,22 @@ export default function AdminCategoriesPage() {
     }
   }
 
+  /** Move a legacy / custom category's apps onto an official ID. The
+   *  target is created first when no local category uses it yet. */
+  async function onMerge(source: Category, targetId: string) {
+    try {
+      let target = rows.find((c) => c.name === targetId);
+      if (!target) target = await api.categories.create({ name: targetId });
+      await api.categories.merge(source.id, target.id);
+      toast.success(t("admin.categories.merged", { from: source.name, to: targetId }));
+      setMergingId(null);
+      await refresh();
+      api.categories.catalog().then(setCatalog).catch(() => {});
+    } catch (e) {
+      toast.error(t("admin.categories.mergeFailed"), e instanceof Error ? e.message : undefined);
+    }
+  }
+
   async function cleanEmpty() {
     const targets = rows.filter((c) => (c.app_count ?? 0) === 0);
     if (targets.length === 0) return;
@@ -184,7 +214,7 @@ export default function AdminCategoriesPage() {
               {stats.top ? (
                 <>
                   <span className="truncate text-2xl font-bold tracking-tight text-ink md:text-3xl">
-                    {stats.top.name}
+                    {categoryLabel(stats.top, i18n.language)}
                   </span>
                   <span className="font-mono text-xs text-ink-mute">{stats.top.app_count ?? 0}</span>
                 </>
@@ -195,6 +225,22 @@ export default function AdminCategoriesPage() {
           </div>
         </dl>
       </header>
+
+      <datalist id={CATALOG_LIST_ID}>
+        {catalog.filter((o) => !o.in_use).map((o) => (
+          <option key={o.id} value={o.id}>
+            {categoryLabel({ name: o.id, names: o.names }, i18n.language)}
+          </option>
+        ))}
+      </datalist>
+
+      {/* F-Droid 2.0 keys its category icons and Discover groups on the
+          official IDs; anything else lands under "Miscellaneous". */}
+      {rows.some((c) => c.official === false) && (
+        <p className="rounded-2xl border border-accent/40 bg-accent-container/30 px-4 py-3 text-sm text-accent-on-container">
+          {t("admin.categories.customNotice", { count: rows.filter((c) => c.official === false).length })}
+        </p>
+      )}
 
       {/* ---------- Sort bar ----------------------------------------- */}
       <div className="flex flex-wrap items-center gap-2">
@@ -235,14 +281,20 @@ export default function AdminCategoriesPage() {
               category={c}
               index={i}
               maxCount={maxCount}
+              lang={i18n.language}
+              catalog={catalog}
               editing={editingId === c.id}
               confirming={confirmingId === c.id}
-              onEdit={() => { setEditingId(c.id); setConfirmingId(null); }}
+              merging={mergingId === c.id}
+              onEdit={() => { setEditingId(c.id); setConfirmingId(null); setMergingId(null); }}
               onCancelEdit={() => setEditingId(null)}
               onSave={(payload) => onSave(c, payload)}
-              onConfirmDelete={() => { setConfirmingId(c.id); setEditingId(null); }}
+              onConfirmDelete={() => { setConfirmingId(c.id); setEditingId(null); setMergingId(null); }}
               onCancelDelete={() => setConfirmingId(null)}
               onDelete={() => onDelete(c)}
+              onStartMerge={() => { setMergingId(c.id); setEditingId(null); setConfirmingId(null); }}
+              onCancelMerge={() => setMergingId(null)}
+              onMerge={(targetId) => onMerge(c, targetId)}
             />
           ))}
         </ul>
@@ -401,32 +453,46 @@ function CategoryTile({
   category,
   index,
   maxCount,
+  lang,
+  catalog,
   editing,
   confirming,
+  merging,
   onEdit,
   onCancelEdit,
   onSave,
   onConfirmDelete,
   onCancelDelete,
   onDelete,
+  onStartMerge,
+  onCancelMerge,
+  onMerge,
 }: {
   category: Category;
   index: number;
   maxCount: number;
+  lang: string;
+  catalog: OfficialCategory[];
   editing: boolean;
   confirming: boolean;
+  merging: boolean;
   onEdit: () => void;
   onCancelEdit: () => void;
   onSave: (payload: { name: string; description: string }) => Promise<void>;
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
   onDelete: () => Promise<void>;
+  onStartMerge: () => void;
+  onCancelMerge: () => void;
+  onMerge: (targetId: string) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const count = category.app_count ?? 0;
   const isEmpty = count === 0;
   const ratio = maxCount > 0 ? count / maxCount : 0;
   const accent = paletteFor(category.name);
+  const label = categoryLabel(category, lang);
+  const description = categoryDescription(category, lang);
 
   return (
     <li
@@ -470,17 +536,32 @@ function CategoryTile({
           <>
             <div className="flex items-start justify-between gap-3">
               <h3 className="break-words text-2xl font-bold leading-tight tracking-tight text-ink">
-                {category.name}
+                {label}
               </h3>
               <span className="shrink-0 font-mono text-2xl font-bold tabular-nums text-ink-mute">
                 {count}
               </span>
             </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {label !== category.name && (
+                <span className="font-mono text-[10px] text-ink-mute">{category.name}</span>
+              )}
+              {category.official ? (
+                <Badge variant="outline" className="text-[10px]" title={t("admin.categories.officialHint")}>
+                  {t("admin.categories.official")}
+                  {category.group ? ` · ${t(`admin.categories.groups.${category.group}`)}` : ""}
+                </Badge>
+              ) : (
+                <Badge variant="accent" className="text-[10px]" title={t("admin.categories.customHint")}>
+                  {t("admin.categories.customBadge")}
+                </Badge>
+              )}
+            </div>
             <p className={cn(
               "min-h-[2.5rem] text-sm italic leading-snug text-ink-soft line-clamp-3",
-              !category.description && "not-italic text-ink-mute",
+              !description && "not-italic text-ink-mute",
             )}>
-              {category.description || t("admin.categories.noDescription")}
+              {description || t("admin.categories.noDescription")}
             </p>
           </>
         )}
@@ -507,8 +588,18 @@ function CategoryTile({
       )}
 
       {/* Action zone: edit/delete on hover; delete-confirm overlay */}
-      {!editing && !confirming && (
+      {!editing && !confirming && !merging && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-end gap-1 px-3 pb-2 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+          {!category.official && catalog.length > 0 && (
+            <button
+              type="button"
+              onClick={onStartMerge}
+              title={t("admin.categories.mergeHint")}
+              className="flex h-7 items-center gap-1 rounded-pill border border-outline-soft bg-surface px-2 text-[11px] font-medium text-ink-soft shadow-e1 hover:border-primary hover:text-primary"
+            >
+              <GitMerge className="h-3 w-3" /> {t("admin.categories.merge")}
+            </button>
+          )}
           <button
             type="button"
             onClick={onEdit}
@@ -524,6 +615,16 @@ function CategoryTile({
             <Trash2 className="h-3 w-3" /> {t("admin.categories.delete")}
           </button>
         </div>
+      )}
+
+      {merging && (
+        <MergePanel
+          category={category}
+          catalog={catalog}
+          lang={lang}
+          onCancel={onCancelMerge}
+          onMerge={onMerge}
+        />
       )}
 
       {confirming && (
@@ -548,6 +649,84 @@ function CategoryTile({
         </div>
       )}
     </li>
+  );
+}
+
+
+/* -------------------------------------------------------------------------- */
+/*  Merge a custom category into an official F-Droid ID                        */
+/* -------------------------------------------------------------------------- */
+
+function MergePanel({
+  category,
+  catalog,
+  lang,
+  onCancel,
+  onMerge,
+}: {
+  category: Category;
+  catalog: OfficialCategory[];
+  lang: string;
+  onCancel: () => void;
+  onMerge: (targetId: string) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [target, setTarget] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Official IDs grouped like F-Droid 2.0's Discover screen.
+  const groups = useMemo(() => {
+    const byGroup = new Map<string, { id: string; label: string }[]>();
+    for (const o of catalog) {
+      const list = byGroup.get(o.group) ?? [];
+      list.push({ id: o.id, label: categoryLabel({ name: o.id, names: o.names }, lang) });
+      byGroup.set(o.group, list);
+    }
+    return [...byGroup.entries()]
+      .map(([group, items]) => ({
+        group,
+        items: items.sort((a, b) => a.label.localeCompare(b.label)),
+      }))
+      .sort((a, b) => a.group.localeCompare(b.group));
+  }, [catalog, lang]);
+
+  async function submit() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      await onMerge(target);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="absolute inset-0 flex flex-col justify-center gap-2 bg-surface/95 px-4 text-sm">
+      <p className="font-semibold text-ink">
+        {t("admin.categories.mergePrompt", { name: category.name })}
+      </p>
+      <select
+        value={target}
+        onChange={(e) => setTarget(e.target.value)}
+        className="h-10 w-full rounded-xl border border-outline bg-surface px-3 text-sm focus:border-primary focus:outline-none"
+      >
+        <option value="">{t("admin.categories.mergePick")}</option>
+        {groups.map(({ group, items }) => (
+          <optgroup key={group} label={t(`admin.categories.groups.${group}`)}>
+            {items.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      <div className="flex gap-2">
+        <Button variant="filled" size="sm" onClick={submit} disabled={!target || busy}>
+          <GitMerge className="h-3.5 w-3.5" /> {busy ? t("common.saving") : t("admin.categories.mergeConfirm")}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+          {t("admin.categories.cancel")}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -591,6 +770,7 @@ function EditForm({
         autoFocus
         required
         maxLength={64}
+        list={CATALOG_LIST_ID}
         value={name}
         onChange={(e) => setName(e.target.value)}
         className="text-base font-semibold"
@@ -678,11 +858,13 @@ function AddTile({
           autoFocus
           required
           maxLength={64}
+          list={CATALOG_LIST_ID}
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t("admin.categories.addNamePlaceholder")}
           className="text-base font-semibold"
         />
+        <p className="text-[11px] text-ink-mute">{t("admin.categories.addNameHint")}</p>
         <Label htmlFor="new-desc" className="mt-1 text-[10px] uppercase tracking-wider text-ink-mute">
           {t("admin.categories.addDescriptionLabel")}
         </Label>

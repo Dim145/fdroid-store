@@ -167,7 +167,7 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
             <dt>PUBLIC_API_URL</dt>
             <dd>Backend public URL — what the browser SPA calls. Defaults to <code>PUBLIC_APP_URL</code>.</dd>
             <dt>ENVIRONMENT</dt>
-            <dd><code>development</code> or <code>production</code>. <code>production</code> disables Swagger and hardens cookie flags.</dd>
+            <dd><code>production</code> (default) or <code>development</code>. <code>production</code> refuses the shipped default credentials, disables Swagger and hardens cookie flags; use <code>development</code> only for local hacking.</dd>
             <dt>LOG_LEVEL</dt>
             <dd><code>DEBUG</code> · <code>INFO</code> · <code>WARNING</code>. <code>INFO</code> is the default and what we recommend.</dd>
           </dl>
@@ -177,7 +177,7 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
             <dt>POSTGRES_USER</dt>
             <dd>Postgres role. <span class="opt">default fdroid</span></dd>
             <dt>POSTGRES_PASSWORD</dt>
-            <dd>Postgres password. Change it. <span class="req">required</span></dd>
+            <dd>Postgres password. Change it. The stock compose refuses to start without it (there is no built-in fallback any more); an install created with the old implicit default must set it to the value its database was initialised with. <span class="req">required</span></dd>
             <dt>POSTGRES_DB</dt>
             <dd>Database name. <span class="opt">default fdroid</span></dd>
             <dt>DATABASE_URL</dt>
@@ -232,6 +232,21 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
           <dl class="spec">
             <dt>BACKUP_TMP_DIR</dt>
             <dd>Working directory the encrypted-backup worker uses to stage the in-progress tarball + extraction tree. Bind a persistent volume (the stock compose does — see <code>backup_tmp</code>); the default <code>/tmp</code> tmpfs is 512 MB and too small for real-sized repos. <span class="opt">default /data/backup-tmp in compose</span></dd>
+          </dl>
+
+          <h3>Frontend nginx &amp; client IP</h3>
+          <p>Set on the <code>frontend</code> container (the stock compose reads them from <code>.env</code>), except <code>FORWARDED_ALLOW_IPS</code>, which belongs to the <code>backend</code>.</p>
+          <dl class="spec">
+            <dt>TRUSTED_PROXY_CIDRS</dt>
+            <dd>Address(es) of the reverse proxy in front of the frontend (BunkerWeb, Traefik, Caddy, a CDN…) as seen by the container — comma/space-separated IPs or CIDRs. nginx then takes the client IP from that proxy's <code>X-Forwarded-For</code>, so rate limits, audit logs and access logs see real clients instead of one shared proxy IP. Never <code>0.0.0.0/0</code> (refused). Empty = off: the TCP peer is the client, right when nginx is the edge. <span class="opt">default empty</span></dd>
+            <dt>FORWARDED_ALLOW_IPS</dt>
+            <dd>uvicorn's list of peers whose <code>X-Forwarded-For</code> / <code>X-Forwarded-Proto</code> the backend honours, so it sees the client the frontend forwards rather than the nginx container. The frontend's IP on the compose network is dynamic, so the default trusts Docker's private ranges (the backend port is only published on host loopback). Tighten it to your compose subnet if you like. <span class="opt">default 127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 in compose</span></dd>
+            <dt>UPLOAD_MAX_BODY_SIZE</dt>
+            <dd>Request-body cap for the upload routes only (APK upload / inspect / create-with-APK, app icon + graphics + screenshots, repo icon, backup restore). Must cover the admin APK cap (<code>upload_max_apk_mb</code>, up to 2000 MB) plus multipart overhead; <code>0</code> disables the check. Uploads stream to the backend, never to nginx's temp dir. <span class="opt">default 2100m</span></dd>
+            <dt>API_MAX_BODY_SIZE</dt>
+            <dd>Request-body cap for every other route, kept small so anonymous clients can't push huge bodies into arbitrary endpoints. <span class="opt">default 10m</span></dd>
+            <dt>NGINX_RESOLVER</dt>
+            <dd>DNS server(s) nginx uses to resolve <code>UPSTREAM_BACKEND</code>. Docker's embedded DNS by default; set it under podman / Kubernetes / any other runtime (or set <code>NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1</code> and leave it empty to use the container's <code>/etc/resolv.conf</code>). <span class="opt">default 127.0.0.11</span></dd>
           </dl>
         </section>
 
@@ -471,7 +486,7 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
   ssl_certificate     /etc/letsencrypt/live/apks.example.com/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/apks.example.com/privkey.pem;
 
-  client_max_body_size 200m;     <span class="c-cmt"># raise above your max APK size</span>
+  client_max_body_size 2100m;    <span class="c-cmt"># ≥ your max APK size / backup archive</span>
 
   location / {
     proxy_pass http://127.0.0.1:8080;
@@ -485,6 +500,11 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
           <div class="callout">
             <div class="badge">HSTS</div>
             <p>Set <code>ENABLE_HSTS=1</code> on the <code>frontend</code> container env to make the bundled nginx emit a <code>Strict-Transport-Security</code> header. Only do this once TLS is confirmed working — HSTS is sticky in browsers.</p>
+          </div>
+
+          <div class="callout">
+            <div class="badge">CLIENT IP</div>
+            <p>Behind any of these proxies, set <code>TRUSTED_PROXY_CIDRS</code> to the proxy's address as the frontend container sees it (e.g. the BunkerWeb / LXC IP; check the frontend access log): per-IP rate limits and audit logs then key on the real client instead of the proxy. Your proxy must send <code>X-Forwarded-For</code> (both recipes above do).</p>
           </div>
         </section>
 
@@ -528,7 +548,15 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
 <pre><span class="c-fn">docker</span> compose <span class="c-fl">--profile</span> proxy-fdroid <span class="c-fl">up</span> <span class="c-fl">-d</span></pre>
           </div>
 
-          <p>By default the proxy listens on <code>proxy-fdroid:8000</code> inside the compose network and runs in <em>open mode</em> (no shared secret) — fine for a single-host deployment where only the backend reaches it. To require a Bearer secret, set <code>PROXY_SHARED_SECRET</code> in the proxy's environment, then paste the same value into <code>/admin/proxies</code> when registering it.</p>
+          <p>The proxy listens on <code>proxy-fdroid:8000</code> inside the compose network (image <code>ghcr.io/dim145/fdroid-store-proxy-fdroid</code>). Set a Bearer secret with <code>PROXY_FDROID_SECRET</code> in <code>.env</code> (compose passes it to the proxy as <code>PROXY_SHARED_SECRET</code>), then paste the same value into <code>/admin/proxies</code> when registering it. Left empty, the proxy runs in <em>open mode</em> — any container on the compose network can drive it — and logs a warning at startup.</p>
+          <div class="code">
+            <div class="strip"><span class="what">.env</span><span>reference proxy</span><button class="copy" type="button">copy</button></div>
+<pre><span class="c-cmt"># generate with: openssl rand -hex 32</span>
+<span class="c-kw">PROXY_FDROID_SECRET</span>=change-me
+<span class="c-cmt"># optional container limits (defaults shown)</span>
+<span class="c-kw">PROXY_FDROID_MEM_LIMIT</span>=2g
+<span class="c-kw">PROXY_FDROID_PIDS_LIMIT</span>=128</pre>
+          </div>
 
           <p>Register the running proxy from <code>/admin/proxies</code> with <code>http://proxy-fdroid:8000</code> as the base URL — the admin UI immediately probes <code>/healthz</code> + caches the catalogue.</p>
 

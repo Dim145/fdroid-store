@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -97,10 +98,18 @@ class Apk(Base, IdMixin, TimestampMixin):
     locales: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     # F-Droid anti-features (NonFreeNet, NonFreeAdd, KnownVuln, Tracking, …).
     # Surfaced as warnings in F-Droid clients. Edited by admins, not extracted
-    # from the APK itself. Empty list = no flags. We could attach a reason
-    # string per flag (the v2 spec allows it) but admins overwhelmingly leave
-    # those empty in practice, so we keep this simple.
+    # from the APK itself. Empty list = no flags.
     anti_features: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Optional ``{flag: reason}`` free text (e.g. "Firebase Analytics" for
+    # Tracking, the CVE list for KnownVuln). F-Droid 2.0 shows it under the
+    # anti-feature and in the KnownVuln banner. Keys not in
+    # ``anti_features`` are ignored at index time.
+    anti_feature_reasons: Mapped[dict | None] = mapped_column(JSON)
+    # Uploaded as a pre-release: it never becomes the suggested version on
+    # its own, so the index marks it ``releaseChannels: ["Beta"]`` and only
+    # users who allowed beta updates for the app get it. Clearing the flag
+    # promotes it (see ``app.services.suggested_version``).
+    is_beta: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     status: Mapped[ApkStatus] = mapped_column(
         Enum(ApkStatus, name="apk_status"),

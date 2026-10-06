@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.core.database import get_db
 from app.core.security import (
@@ -19,6 +20,7 @@ from app.core.security import (
     parse_deploy_token,
     verify_api_key_secret,
     verify_deploy_token_secret,
+    verify_password,
 )
 from app.models.api_key import ApiKey
 from app.models.deploy_token import DeployToken
@@ -28,7 +30,10 @@ from app.models.user import User, UserRole
 # --------------------------------------------------------------------------
 # DB session
 # --------------------------------------------------------------------------
-DbSession = Annotated[AsyncSession, Depends(get_db)]
+# ``scope="function"``: the session commits (and closes) when the endpoint
+# returns, before the response is sent — not after, which is FastAPI's
+# default for dependencies with ``yield``.
+DbSession = Annotated[AsyncSession, Depends(get_db, scope="function")]
 
 
 # --------------------------------------------------------------------------
@@ -112,6 +117,24 @@ async def get_current_uploader(
     return user
 
 
+def require_password_confirmation(user: User, password: str | None) -> None:
+    """Re-check the current password before adding a sign-in method.
+
+    A stolen access token (60 min) must not be enough to register a passkey
+    — a permanent passwordless login surviving a password change — or to
+    enrol a TOTP the owner doesn't have, locking them out. Accounts without
+    a local password (SSO-only) have nothing to confirm. 403, not 401: the
+    session itself is fine, and a 401 would make the SPA refresh it.
+    """
+    if user.hashed_password is None:
+        return
+    if not password or not verify_password(password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Confirm your current password to add a sign-in method",
+        )
+
+
 # --------------------------------------------------------------------------
 # API-key auth (used by the F-Droid client over HTTP Basic)
 # --------------------------------------------------------------------------
@@ -120,10 +143,18 @@ async def _api_key_from_secret(secret: str, db: AsyncSession) -> ApiKey | None:
     if parts is None:
         return None
     prefix, secret_part = parts
-    api_key = (await db.execute(select(ApiKey).where(ApiKey.prefix == prefix))).scalar_one_or_none()
+    api_key = (
+        await db.execute(
+            select(ApiKey).options(joinedload(ApiKey.user)).where(ApiKey.prefix == prefix)
+        )
+    ).scalar_one_or_none()
     if api_key is None or not api_key.is_active:
         return None
     if not verify_api_key_secret(secret_part, api_key.hashed_secret):
+        return None
+    # Disabling an account must cut its F-Droid clients off too, not only
+    # its browser sessions.
+    if api_key.user is None or not api_key.user.is_active:
         return None
     # Rate-limit ``last_used_at`` writes to one per minute per key. F-Droid
     # clients can fire a handful of requests in quick succession while
@@ -221,9 +252,14 @@ async def _deploy_token_user_for_app(
     if token.created_by is None:
         # Token's creator was deleted — refuse rather than orphan-attribute.
         return None
-    return (
+    creator = (
         await db.execute(select(User).where(User.id == token.created_by))
     ).scalar_one_or_none()
+    # A disabled creator's CI token must stop uploading (an admin's would
+    # even auto-publish).
+    if creator is None or not creator.is_active:
+        return None
+    return creator
 
 
 async def get_uploader_for_app(

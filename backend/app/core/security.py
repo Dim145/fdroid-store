@@ -43,11 +43,19 @@ def _bcrypt_safe(password: str) -> str:
 
 
 def hash_password(password: str) -> str:
-    return _password_hash.hash(_bcrypt_safe(password))
+    # Argon2 takes the whole password; only bcrypt has the 72-byte limit.
+    return _password_hash.hash(password)
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    return _password_hash.verify(_bcrypt_safe(password), hashed)
+    if hashed.startswith("$2"):  # legacy bcrypt row
+        return _password_hash.verify(_bcrypt_safe(password), hashed)
+    if _password_hash.verify(password, hashed):
+        return True
+    # Argon2 hashes created before this fix were computed over the first
+    # 72 bytes only; keep those passwords working.
+    truncated = _bcrypt_safe(password)
+    return truncated != password and _password_hash.verify(truncated, hashed)
 
 
 # --------------------------------------------------------------------------

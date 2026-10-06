@@ -42,8 +42,17 @@ _METADATA_IPS = frozenset({
 })
 
 
-class BlockedAddressError(Exception):
-    """A hostname resolved (wholly or partly) to a blocked address."""
+# NAT64 well-known prefix (RFC 6052): the low 32 bits are the IPv4 target.
+_NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
+
+
+class BlockedAddressError(httpx.ConnectError):
+    """A hostname resolved (wholly or partly) to a blocked address.
+
+    An ``httpx.ConnectError`` so the callers' existing ``except
+    httpx.RequestError`` / ``httpx.HTTPError`` handlers turn a refusal at
+    connect time (DNS rebinding, unresolvable host) into their own clean
+    error instead of an unhandled 500."""
 
 
 def _normalise(ip: _BaseIp) -> _BaseIp:
@@ -54,11 +63,31 @@ def _normalise(ip: _BaseIp) -> _BaseIp:
     return ip
 
 
+def _tunnelled_ipv4(ip: _BaseIp) -> ipaddress.IPv4Address | None:
+    """IPv4 host carried inside a 6to4 (``2002::/16``) or NAT64
+    (``64:ff9b::/96``) address. Traffic to those ends up at that v4 host, so
+    it has to pass the same predicate as the v4 spelling."""
+    if not isinstance(ip, ipaddress.IPv6Address):
+        return None
+    if ip.sixtofour is not None:
+        return ip.sixtofour
+    if ip in _NAT64_WKP:
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return None
+
+
 def is_blocked_public_ip(ip: _BaseIp) -> bool:
     """Strict predicate for forge fetches: anything that isn't public
     unicast is refused. ``not is_global`` already covers private, loopback,
-    link-local, CGNAT (100.64/10), benchmarking and documentation ranges."""
+    link-local, CGNAT (100.64/10), benchmarking and documentation ranges;
+    the deprecated IPv6 site-local range (``fec0::/10``) and v4 hosts
+    reached through 6to4 / NAT64 are checked explicitly."""
     ip = _normalise(ip)
+    inner = _tunnelled_ipv4(ip)
+    if inner is not None and is_blocked_public_ip(inner):
+        return True
+    if isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local:
+        return True
     if ip.is_loopback or ip.is_private or ip.is_link_local:
         return True
     if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
@@ -69,8 +98,12 @@ def is_blocked_public_ip(ip: _BaseIp) -> bool:
 def is_blocked_proxy_ip(ip: _BaseIp) -> bool:
     """Lenient predicate for APK-proxy sidecars: RFC1918 / ULA private space
     is allowed (the typical sidecar is on the compose network), but loopback,
-    link-local and the metadata IPs are still refused."""
+    link-local and the metadata IPs are still refused — also when reached
+    through a 6to4 / NAT64 address."""
     ip = _normalise(ip)
+    inner = _tunnelled_ipv4(ip)
+    if inner is not None and is_blocked_proxy_ip(inner):
+        return True
     if ip in _METADATA_IPS:
         return True
     if ip.is_loopback or ip.is_link_local or ip.is_unspecified:

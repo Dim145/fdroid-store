@@ -116,7 +116,7 @@
           <ol class="steps">
             <li><strong>Mint an API key</strong><p>From <code>/account → API keys → New key</code>. Copy it — it's shown once.</p></li>
             <li><strong>Form the URL</strong><p>Stick the key in front of the host as the Basic-auth password. Any username works.</p></li>
-            <li><strong>Add to F-Droid</strong><p>F-Droid → <em>Settings → Repositories → Add repo</em>. Paste the URL. F-Droid stores the credential server-side; in transit, the <code>Authorization: Basic</code> header carries it.</p></li>
+            <li><strong>Add to F-Droid</strong><p>F-Droid → <em>Settings → Repositories → Add repo</em>. Paste the URL (or scan the QR shown when the key is minted). F-Droid stores the credential on the device; in transit, the <code>Authorization: Basic</code> header carries it. If the public repo is already in the app, remove it first: F-Droid only reads credentials when a repository is added.</p></li>
             <li><strong>Sync</strong><p>F-Droid now sees both public and private apps. Updates fetch with the same credential.</p></li>
           </ol>
 
@@ -201,7 +201,7 @@
             <dt>Auth</dt>
             <dd><code>Authorization: Bearer &lt;YOUR_TOKEN&gt;</code></dd>
             <dt>Body</dt>
-            <dd><code>multipart/form-data</code> &mdash; one field named <code>file</code> with the APK.</dd>
+            <dd><code>multipart/form-data</code> &mdash; one field named <code>file</code> with the APK, plus an optional <code>beta=true</code> to publish on the F-Droid Beta channel (only users who allowed beta updates for the app get it; the suggested version doesn't move).</dd>
             <dt>Response</dt>
             <dd><code>201 Created</code> with the parsed manifest. <code>409</code> on duplicate versionCode. <code>422</code> on signing-cert mismatch or ClamAV positive.</dd>
           </dl>
@@ -217,7 +217,7 @@
   <span class="c-fl">-H</span> <span class="c-str">"Authorization: Bearer $FDROID_DEPLOY_TOKEN"</span> \
   <span class="c-fl">-F</span> <span class="c-str">"file=@build/outputs/apk/release/app-release.apk"</span></pre>
           </div>
-          <p>The <code>-f</code> flag makes curl fail loudly on a non-2xx response — important in CI.</p>
+          <p>The <code>-f</code> flag makes curl fail loudly on a non-2xx response — important in CI. For nightlies or release candidates, add <code>-F "beta=true"</code>.</p>
         </section>
 
         <!-- 05 GH Actions -->

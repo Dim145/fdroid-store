@@ -20,6 +20,7 @@ from typing import Any
 
 import yaml
 
+from app.fdroid.donations import funding_for
 from app.models.app import App
 from app.models.apk import ApkStatus
 from app.models.repo_config import RepoConfig
@@ -152,15 +153,18 @@ def build_metadata_dict(
         out["Translation"] = app.translation
 
     # Funding links — F-Droid recognises a fixed handful. We emit only
-    # the ones the operator filled in.
-    if app.donate:
-        out["Donate"] = app.donate
-    if app.liberapay:
-        out["Liberapay"] = app.liberapay
-    if app.open_collective:
-        out["OpenCollective"] = app.open_collective
-    if app.bitcoin:
-        out["Bitcoin"] = app.bitcoin
+    # the ones the operator filled in, in fdroiddata's shape: Liberapay /
+    # OpenCollective / Bitcoin are bare IDs (URLs typed into those fields
+    # are reduced, or moved to Donate when they point elsewhere).
+    funding = funding_for(app)
+    if funding.donate:
+        out["Donate"] = funding.donate[0] if len(funding.donate) == 1 else funding.donate
+    if funding.liberapay:
+        out["Liberapay"] = funding.liberapay
+    if funding.open_collective:
+        out["OpenCollective"] = funding.open_collective
+    if funding.bitcoin:
+        out["Bitcoin"] = funding.bitcoin
 
     # Display name — F-Droid distinguishes ``AutoName`` (from the APK's
     # ``android:label``) from ``Name`` (a manual override). Our DB only

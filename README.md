@@ -75,6 +75,11 @@ Sign in with the initial admin credentials from `.env`, then:
 3. **`/admin/repo`** — Trigger the first reindex.
 4. Add the F-Droid URL above to the F-Droid app on your phone.
 
+> **Phones need HTTPS.** F-Droid **Basic** 2.0 refuses plain-HTTP
+> repositories, and F-Droid 2.0 no longer opens `fdroidrepo://` links.
+> The `localhost` URLs above are for local testing; put the repo behind
+> HTTPS (`PUBLIC_REPO_URL=https://…`) before adding it on a device.
+
 ## Configuration cheatsheet
 
 All settings live in `.env` (see `.env.example` for the full annotated list).
@@ -85,6 +90,10 @@ The most important ones:
 SECRET_KEY=<run: python -c 'import secrets;print(secrets.token_urlsafe(64))'>
 INITIAL_ADMIN_EMAIL=you@example.com
 INITIAL_ADMIN_PASSWORD=change-me-now
+# Required: compose refuses to start without it (no built-in fallback).
+# Upgrading an install that relied on the old implicit default? Set it to
+# the password the database was initialised with (changeme_postgres).
+POSTGRES_PASSWORD=<long random string>
 
 # --- public URLs (the F-Droid client + browser hit these) --------------------
 PUBLIC_REPO_URL=https://apks.your-domain.tld/fdroid/repo
@@ -126,6 +135,27 @@ TRIVY_SERVER_URL=http://trivy:4954
 # The default ``/tmp`` tmpfs is 512 MB and too small for real-sized repos.
 BACKUP_TMP_DIR=/data/backup-tmp
 
+# --- frontend nginx / client IP (defaults shown) -----------------------------
+# Behind a reverse proxy (BunkerWeb, Traefik, a CDN…): its address(es) as
+# seen by the frontend container, comma/space-separated IPs or CIDRs. nginx
+# then takes the client IP from that proxy's X-Forwarded-For, so per-IP
+# rate limits / audit logs see real clients. Empty = off (nginx is the edge).
+TRUSTED_PROXY_CIDRS=
+# Peers the backend (uvicorn) accepts X-Forwarded-For / -Proto from, i.e.
+# the frontend container; its compose IP is dynamic, hence Docker's ranges.
+FORWARDED_ALLOW_IPS=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+# Body caps: uploads (APK, app media, backup restore) vs every other route.
+# UPLOAD_MAX_BODY_SIZE must cover the admin APK cap (max 2000 MB) + overhead.
+UPLOAD_MAX_BODY_SIZE=2100m
+API_MAX_BODY_SIZE=10m
+# DNS server nginx resolves the backend with (Docker's embedded DNS).
+NGINX_RESOLVER=127.0.0.11
+
+# --- optional: reference F-Droid proxy (``proxy-fdroid`` profile) ------------
+PROXY_FDROID_SECRET=<openssl rand -hex 32>   # same value in /admin/proxies
+PROXY_FDROID_MEM_LIMIT=2g
+PROXY_FDROID_PIDS_LIMIT=128
+
 # --- optional: forge tokens (per-source PATs override these in the UI) -------
 GITHUB_TOKEN=ghp_…
 GITLAB_TOKEN=glpat-…
@@ -148,7 +178,57 @@ caller's credentials:
 | Logged-in F-Droid client (Basic auth, password = API key) | `Authorization: Basic <base64>` | private |
 
 The Android F-Droid app supports the `https://anyuser:<api_key>@host/...`
-URL form — that is the supported way to access private apps.
+URL form — that is the supported way to access private apps. The QR code
+shown when you mint a key encodes exactly that
+(`fdroidrepos://user:<key>@host/fdroid/repo?fingerprint=…`). Two caveats
+from the client itself:
+
+- F-Droid only reads credentials when a repository is **added**: if the
+  public repo is already in the app, remove it first, then add the
+  private link (re-adding a known repo is refused, and the Basic-auth
+  editor only appears for repos that already have a username).
+- When the public URL carries an explicit port, the client mangles
+  `user:key@host:port` (it re-encodes `host:port` as `host%3Aport`), so
+  the link falls back to the path-token form `…/r/<key>/fdroid/repo`. The
+  client stores that URL as a *mirror* of the canonical address and
+  fetches the index from the canonical address first — reliable only
+  when the repo runs in private mode.
+
+### F-Droid 2.0 compatibility
+
+F-Droid 2.0 (September 2026) reads the same `entry.jar` + `index-v2.json`,
+but leans much more on repo-level metadata and installs updates
+automatically by default. The index is built accordingly:
+
+- **Anti-features are defined in the repo block** (`repo.antiFeatures`,
+  English + French). 2.0 silently hides any anti-feature its repository
+  doesn't define. Per-version reasons (`{flag: reason}`) are shown under
+  each flag; for `KnownVuln` they're appended to the red warning banner.
+  The CVE scanner suggests a `KnownVuln` reason from CRITICAL/HIGH
+  findings — never applied automatically.
+- **Categories use the official F-Droid IDs** (fdroiddata
+  `config/categories.yml`): 2.0 maps them to an icon and a Discover group,
+  anything else lands under "Miscellaneous". Names and descriptions are
+  localized; `/admin/categories` flags custom IDs and can merge them
+  (e.g. the legacy `Games`, `Money`, `Time`) into official ones.
+- **Beta channel.** Every version above the suggested one is emitted with
+  `releaseChannels: ["Beta"]` (fdroidserver's rule), so a pinned
+  suggested version really holds newer uploads back, and an APK uploaded
+  as beta (UI checkbox, `-F beta=true` from CI, or a forge pre-release)
+  only reaches users who enabled *Allow beta updates* for the app.
+  Clearing the flag promotes it.
+- **`webBaseUrl`** = `PUBLIC_APP_URL/apps`: 2.0's *Share* button sends
+  `…/apps/<package>`, i.e. this site's app page.
+- **Funding**: `donate` is a list (a bare string broke index parsing);
+  Liberapay / Open Collective / Bitcoin are emitted as bare IDs, which
+  the client turns into links itself.
+- **`added`** is the first publication date (2.0's "New apps" carousel
+  shows apps added in the last 14 days).
+- **Silent updates** need a recent `targetSdkVersion` (≥ 34 on Android
+  16); the version list warns when F-Droid will have to ask the user.
+- **Pre-installed repos** (ROMs, device fleets): `/admin/repo` generates
+  the `additional_repos.json` 2.0 reads (the XML format is gone). It has
+  no credentials field.
 
 **Downloads always stream through the backend**, regardless of storage
 backend. The earlier "302 to S3" shortcut bypassed audit, access checks
@@ -188,6 +268,10 @@ curl -X POST "$REPO_URL/api/v1/apks/upload/$APP_ID" \
   -H "Authorization: Bearer $FDROID_DEPLOY_TOKEN" \
   -F "file=@build/outputs/apk/release/app-release.apk"
 ```
+
+Add `-F beta=true` to publish on the F-Droid **Beta** channel (nightlies,
+release candidates): the suggested version doesn't move, and only users
+who allowed beta updates for the app receive it.
 
 Same endpoint accepts a personal API key — the deploy token just
 narrows the blast radius if it leaks.
@@ -289,7 +373,8 @@ POST  /api/v1/apps/with-github-source   # create from a forge URL
 POST  /api/v1/apps/import-metadata      # paste fdroiddata YAML
 GET   /api/v1/apps/{id|package_name}
 GET   /api/v1/apps/{id}/metadata.yml    # F-Droid binary-only YAML export
-POST  /api/v1/apks/upload/{app_id}      # bearer JWT, API key, or deploy token
+POST  /api/v1/apks/upload/{app_id}      # bearer JWT, API key, or deploy token (+ beta=true)
+PATCH /api/v1/apks/{id}                 # changelog, anti-features + reasons, is_beta
 POST  /api/v1/apks/{id}/download-url    # signed URL for private APK
 POST  /api/v1/apks/{id}/reproducibility            # set status / hash / notes
 POST  /api/v1/apks/{id}/reproducibility/verify-from-url  # fetch + auto-decide
@@ -308,6 +393,11 @@ GET   /api/v1/feed/new                  # Atom / RSS — every new app
 GET   /api/v1/feed/updates              # Atom / RSS — every new APK version
 GET   /api/v1/feed/apps/{package_name}  # Atom / RSS — per-app release feed
 
+# categories
+GET   /api/v1/categories                # local categories (+ official / group / localized names)
+GET   /api/v1/categories/catalog        # official F-Droid category IDs
+POST  /api/v1/categories/{id}/merge     # admin: move apps to another category, drop this one
+
 # stats (visibility: public / admin per ``public_stats`` toggle)
 GET   /api/v1/stats
 
@@ -321,6 +411,7 @@ GET/PATCH             /api/v1/admin/apps
 POST                  /api/v1/admin/apks/{id}/publish (or /reject)
 GET/PATCH             /api/v1/admin/repo               # ClamAV + Trivy + RB toggles live here
 POST                  /api/v1/admin/repo/reindex
+GET                   /api/v1/admin/repo/additional-repos.json  # ROM pre-install snippet
 GET                   /api/v1/admin/jobs              # arq run history
 GET                   /api/v1/admin/audit             # audit log
 GET                   /api/v1/admin/scans             # ClamAV results (UI: /admin/scanning)
@@ -413,6 +504,9 @@ fields (name, description, links, categories) without re-typing.
   scan-now `20/min`, APK inspect `10/min`.
 - **CSP, HSTS, X-Frame-Options, X-Content-Type-Options** are emitted by
   the frontend nginx layer; HSTS is opt-in via `ENABLE_HSTS=1`.
+- **No credentials in nginx logs**: the access log masks the `/r/<key>/`
+  path token and `?t=` download tokens (including path-token APK downloads
+  served through `X-Accel-Redirect`), and `/r/` only logs `crit` errors.
 - **Containers** run `read_only` with `no-new-privileges` and all caps
   dropped. The first-run bootstrap is guarded by a Postgres advisory
   lock so concurrent boots can't double-create the admin.
@@ -423,6 +517,45 @@ fields (name, description, links, categories) without re-typing.
 
 Notable changes between 1.0.0 and 1.4.7 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### Unreleased — F-Droid 2.0 alignment
+
+- **Fix: index-v2 broke as soon as an app had a donation URL.** `donate`
+  was emitted as a string; F-Droid clients (1.16+ and 2.0) parse it as a
+  list and rejected the whole index. Liberapay / Open Collective /
+  Bitcoin are now emitted as the bare IDs the client expects (full URLs
+  typed in the form are reduced; the public app page builds the links
+  from either shape).
+- **Anti-features are visible again in F-Droid 2.0**: the index now
+  defines every flag it uses (`repo.antiFeatures`, en + fr). New per-flag
+  reasons, editable per version; the CVE scan suggests a `KnownVuln`
+  reason from CRITICAL/HIGH findings. `Ads` and `TetheredNet` added to
+  the chip set.
+- **Official F-Droid categories.** The default set is now official IDs
+  (`Games`, `Money`, `Time`, `Misc` are no longer seeded — existing rows
+  stay and are flagged "custom", with a merge action in
+  `/admin/categories`). The index ships localized names + descriptions.
+  Renaming / deleting / merging a category now triggers a reindex.
+- **Fix: deleted categories came back on restart.** Default categories
+  are now seeded on first boot only (empty table). An upgraded install
+  keeps its list as is; official IDs are added from the catalogue or
+  picked as merge targets.
+- **Beta channel.** Versions above the suggested one are emitted as
+  `releaseChannels: ["Beta"]`, so a pinned suggested version is honoured
+  by index-v2 clients. New "upload as beta" (UI checkbox, `beta=true` on
+  the upload endpoints, forge pre-releases), plus mark-as-beta / promote
+  actions. Retention never evicts the newest APK.
+- **`webBaseUrl`** points F-Droid's *Share* button at `/apps/<package>`;
+  **`added`** is now the first publication date (new
+  `apps.first_published_at`, backfilled with `created_at`).
+- **Add-repo links** match what F-Droid 2.0 accepts: Basic-auth
+  `fdroidrepos://user:key@host/…` for private access (path token only
+  when the URL has an explicit port), `https://fdroid.link/#http://…`
+  for plain-HTTP repos. Mobile app pages gain an "Open in F-Droid" link.
+- **ROM / fleet pre-install:** `/admin/repo` generates the
+  `additional_repos.json` F-Droid 2.0 reads.
+- Schema: `apps.first_published_at`, `apks.is_beta`,
+  `apks.anti_feature_reasons` (added automatically at boot).
 
 ### 1.4.7
 

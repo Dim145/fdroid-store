@@ -57,8 +57,11 @@ export function SessionsSection() {
     try {
       await api.sessions.revokeAll();
       toast.success(t("account.sessions.revokedAll"));
-      // Browser is now logged out at the next refresh; force a reload so
-      // the auth store catches up via /me failure.
+      // This browser's session is one of those revoked, but its access
+      // token stays valid until it expires — reloading with it still in
+      // storage would just sign straight back in. Drop it locally (store,
+      // localStorage, media SW) before leaving.
+      await useAuth.getState().logout();
       window.location.href = "/login";
     } catch (e) {
       toast.error(t("account.sessions.revokeFailed"), e instanceof Error ? e.message : undefined);
@@ -206,6 +209,8 @@ export function QuotaUsageSection() {
 
 export function TotpSection() {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const [setupPassword, setSetupPassword] = useState("");
   const [status, setStatus] = useState<TotpStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -237,8 +242,9 @@ export function TotpSection() {
   async function startSetup() {
     setBusy(true);
     try {
-      const s = await api.totp.setup();
+      const s = await api.totp.setup(setupPassword);
       setSetup({ qr_data_uri: s.qr_data_uri, secret: s.secret });
+      setSetupPassword("");
     } catch (e) {
       toast.error(t("account.totp.setupFailed"), e instanceof Error ? e.message : undefined);
     } finally {
@@ -398,7 +404,27 @@ export function TotpSection() {
   return (
     <div className="space-y-3">
       <p className="text-sm text-ink-soft">{t("account.totp.notEnrolledBody")}</p>
-      <Button variant="filled" onClick={startSetup} disabled={busy}>
+      {user?.has_password && (
+        <div>
+          <Label htmlFor="totp-setup-pw" className="text-xs font-medium text-ink-soft">
+            {t("account.security.confirmPasswordLabel")}
+          </Label>
+          <Input
+            id="totp-setup-pw"
+            type="password"
+            autoComplete="current-password"
+            value={setupPassword}
+            onChange={(e) => setSetupPassword(e.target.value)}
+            className="max-w-md"
+          />
+          <p className="mt-1 text-[11px] text-ink-mute">{t("account.security.confirmPasswordHint")}</p>
+        </div>
+      )}
+      <Button
+        variant="filled"
+        onClick={startSetup}
+        disabled={busy || (!!user?.has_password && !setupPassword)}
+      >
         <KeyRound className="h-4 w-4" /> {busy ? t("common.loading") : t("account.totp.enable")}
       </Button>
     </div>
@@ -418,6 +444,7 @@ export function PasskeysSection() {
   const [busy, setBusy] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [label, setLabel] = useState("");
+  const [regPassword, setRegPassword] = useState("");
 
   async function reload() {
     setLoading(true);
@@ -440,7 +467,7 @@ export function PasskeysSection() {
     }
     setBusy(true);
     try {
-      const { challenge_token, options } = await api.webauthn.registerBegin(trimmed);
+      const { challenge_token, options } = await api.webauthn.registerBegin(trimmed, regPassword);
       // @simplewebauthn/browser parses + drives navigator.credentials.create
       // and returns the registration response in the JSON shape py_webauthn
       // expects on the verify side — no manual base64url plumbing needed.
@@ -448,6 +475,7 @@ export function PasskeysSection() {
       await api.webauthn.registerFinish(challenge_token, cred);
       toast.success(t("account.passkeys.added"));
       setLabel("");
+      setRegPassword("");
       await reload();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
@@ -499,7 +527,27 @@ export function PasskeysSection() {
             autoComplete="off"
           />
         </div>
-        <Button variant="filled" size="sm" disabled={busy} onClick={register}>
+        {user?.has_password && (
+          <div className="flex-1">
+            <Label htmlFor="passkey-pw" className="text-[10px] uppercase tracking-wider text-ink-mute">
+              {t("account.security.confirmPasswordLabel")}
+            </Label>
+            <Input
+              id="passkey-pw"
+              type="password"
+              value={regPassword}
+              onChange={(e) => setRegPassword(e.target.value)}
+              disabled={busy}
+              autoComplete="current-password"
+            />
+          </div>
+        )}
+        <Button
+          variant="filled"
+          size="sm"
+          disabled={busy || (!!user?.has_password && !regPassword)}
+          onClick={register}
+        >
           <Fingerprint className="h-4 w-4" />
           {busy ? t("account.passkeys.adding") : t("account.passkeys.add")}
         </Button>

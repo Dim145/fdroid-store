@@ -1,6 +1,6 @@
 "use client";
 
-import { Gauge, Image as ImageIcon, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Gauge, Image as ImageIcon, KeyRound, Plus, RefreshCw, Smartphone, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -197,6 +197,8 @@ export default function AdminRepoPage() {
         )}
       </section>
 
+      {keystore?.present && <RomIntegration publicMode={repo.public_mode} />}
+
       <section className="surface p-6">
         <h2 className="mb-4 text-lg font-bold tracking-tight text-ink">{t("admin.repo.indexState")}</h2>
         <dl className="grid gap-3 md:grid-cols-2">
@@ -210,6 +212,80 @@ export default function AdminRepoPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** ``additional_repos.json`` for ROM / device-fleet builders: F-Droid 2.0
+ *  pre-installs the repositories listed in
+ *  ``/{system_ext,product,vendor}/etc/fdroid/additional_repos.json`` (the
+ *  old XML file is no longer read). The format carries no credentials. */
+function RomIntegration({ publicMode }: { publicMode: boolean }) {
+  const { t } = useTranslation();
+  const [json, setJson] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function load() {
+    setErr(null);
+    try {
+      setJson(JSON.stringify(await api.admin.additionalRepos(), null, 2));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : t("admin.repo.rom.failed"));
+    }
+  }
+
+  async function copy() {
+    if (!json) return;
+    try {
+      await navigator.clipboard.writeText(json);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {/* clipboard blocked */}
+  }
+
+  function download() {
+    if (!json) return;
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "additional_repos.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <section className="surface p-6">
+      <h2 className="mb-1 flex items-center gap-2 text-lg font-bold tracking-tight text-ink">
+        <Smartphone className="h-5 w-5" /> {t("admin.repo.rom.title")}
+      </h2>
+      <p className="mb-4 text-sm text-ink-soft">{t("admin.repo.rom.body")}</p>
+      {!publicMode && (
+        <p className="mb-4 rounded-xl border border-accent/40 bg-accent-container/30 px-3 py-2 text-xs text-accent-on-container">
+          {t("admin.repo.rom.privateWarning")}
+        </p>
+      )}
+      {json ? (
+        <>
+          <pre className="max-h-64 overflow-auto rounded-xl border border-outline-soft bg-surface-2 p-3 font-mono text-[11px] text-ink">
+            {json}
+          </pre>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="outlined" size="sm" onClick={copy}>
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {t("admin.repo.rom.copy")}
+            </Button>
+            <Button variant="outlined" size="sm" onClick={download}>
+              <Download className="h-3.5 w-3.5" /> {t("admin.repo.rom.download")}
+            </Button>
+          </div>
+        </>
+      ) : (
+        <Button variant="outlined" size="sm" onClick={load}>
+          {t("admin.repo.rom.generate")}
+        </Button>
+      )}
+      {err && <p className="mt-2 text-sm text-danger">{err}</p>}
+    </section>
   );
 }
 

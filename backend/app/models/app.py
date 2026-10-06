@@ -14,11 +14,13 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Column,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.fdroid import categories_catalog
 from app.models.mixins import IdMixin, TimestampMixin
 
 
@@ -115,6 +117,12 @@ class App(Base, IdMixin, TimestampMixin):
     # override = unlimited even when the global default kicks in").
     max_versions_override: Mapped[int | None] = mapped_column()
     last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set once, when the app first goes live. Emitted as the index ``added``
+    # timestamp, which F-Droid 2.0 uses for its "New apps" carousel — the
+    # draft's ``created_at`` would hide an app created long before it was
+    # published. Legacy rows are backfilled with ``created_at`` (bootstrap)
+    # so their ``added`` value doesn't move.
+    first_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     owner_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -153,13 +161,45 @@ class App(Base, IdMixin, TimestampMixin):
         return False
 
 
+# SQL twin of ``App.is_nsfw`` (any APK flagged NSFW, case-insensitive), for
+# filtering *before* LIMIT/OFFSET. Valid wherever ``apps`` is in the FROM
+# clause under its table name.
+NOT_NSFW_APP = text(
+    "NOT EXISTS (SELECT 1 FROM apks AS nsfw_apk,"
+    " json_array_elements_text(nsfw_apk.anti_features) AS f(flag)"
+    " WHERE nsfw_apk.app_id = apps.id AND lower(btrim(f.flag)) = 'nsfw')"
+)
+
+
 class Category(Base, IdMixin, TimestampMixin):
     __tablename__ = "categories"
 
+    # Doubles as the F-Droid category ID in the index. Official IDs (see
+    # ``app.fdroid.categories_catalog``) get an icon + Discover group in
+    # F-Droid 2.0; anything else lands under "Miscellaneous".
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(String(255))
 
     apps = relationship("App", secondary=app_categories_table, back_populates="categories")
+
+    # Read-only views over the official catalogue, picked up by the
+    # ``CategoryRead`` schema (``from_attributes``).
+    @property
+    def official(self) -> bool:
+        return categories_catalog.official(self.name) is not None
+
+    @property
+    def group(self) -> str | None:
+        entry = categories_catalog.official(self.name)
+        return entry.group if entry else None
+
+    @property
+    def names(self) -> dict[str, str]:
+        return categories_catalog.localized_names(self.name)
+
+    @property
+    def descriptions(self) -> dict[str, str]:
+        return categories_catalog.localized_descriptions(self.name, self.description)
 
 
 class AppCategory(Base, IdMixin, TimestampMixin):

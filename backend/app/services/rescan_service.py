@@ -9,17 +9,16 @@ admin has set a custom icon, which is sticky by design).
 """
 from __future__ import annotations
 
-import io
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 
 from app.core.logging import get_logger
+from app.core.uploads import normalize_image
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App
@@ -48,19 +47,12 @@ async def _download_apk(storage_key: str) -> Path:
         stream = await storage.open_stream(storage_key)
         async for chunk in stream:
             tmp.write(chunk)
-    finally:
+    except BaseException:
         tmp.close()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    tmp.close()
     return tmp_path
-
-
-def _icon_to_png_bytes(raw: bytes) -> bytes:
-    """Normalize an extracted icon to a 512×512 max RGBA PNG."""
-    with Image.open(io.BytesIO(raw)) as img:
-        rgba = img.convert("RGBA")
-        rgba.thumbnail((512, 512), Image.LANCZOS)
-        out = io.BytesIO()
-        rgba.save(out, format="PNG", optimize=True)
-        return out.getvalue()
 
 
 async def rescan_app(
@@ -105,7 +97,10 @@ async def rescan_app(
     # are sticky: an admin upload via /apps/{id}/icon won't be overwritten.
     if latest_with_icon and not app.icon_is_custom:
         try:
-            png = _icon_to_png_bytes(latest_with_icon[1])
+            # Normalised to a 512 px max RGBA PNG through the same format
+            # allowlist + bomb guard as user uploads (the bytes come from
+            # an untrusted APK).
+            png = await normalize_image(latest_with_icon[1], (512, 512))
             icon_key = f"icons/{app.package_name}.png"
             await storage.put(icon_key, png, content_type="image/png")
             app.icon_path = icon_key

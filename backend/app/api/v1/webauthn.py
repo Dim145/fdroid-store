@@ -25,6 +25,8 @@ verify the assertion against the credential rows in the DB.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import uuid
@@ -33,7 +35,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -48,8 +50,10 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from app.api.deps import DbSession, get_current_user
+from app.api.deps import DbSession, get_current_user, require_password_confirmation
+from app.core.client_ip import client_ip, hash_ip
 from app.core.config import settings
+from app.core.one_time import claim_once
 from app.core.rate_limit import limiter
 from app.core.security import decode_token
 from app.models.repo_config import RepoConfig
@@ -61,7 +65,10 @@ from app.services.webauthn import (
     PURPOSE_AUTHENTICATION,
     PURPOSE_MFA,
     PURPOSE_REGISTRATION,
+    challenge_key,
+    challenge_label,
     mint_challenge_token,
+    mint_enrollment_token,
     new_challenge,
     open_challenge_token,
     role_requires_passkey,
@@ -96,6 +103,8 @@ class RegisterBeginRequest(BaseModel):
     Stored verbatim and shown in the /account list."""
 
     label: str = Field(min_length=1, max_length=100)
+    # Current password — required when the account has one.
+    password: str | None = Field(default=None, max_length=256)
 
 
 class RegisterBeginResponse(BaseModel):
@@ -205,11 +214,14 @@ async def list_credentials(
 
 
 @me_router.post("/register/begin", response_model=RegisterBeginResponse)
+@limiter.limit("10/minute")
 async def register_begin(
+    request: Request,
     payload: RegisterBeginRequest,
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
 ) -> RegisterBeginResponse:
+    require_password_confirmation(user, payload.password)
     repo = await _repo(db)
     existing = await _user_credentials(db, user.id)
     # ``excludeCredentials`` stops the same physical authenticator being
@@ -243,11 +255,18 @@ async def register_begin(
             COSEAlgorithmIdentifier.RSASSA_PKCS1_v1_5_SHA_256,
         ],
     )
-    token = mint_challenge_token(str(user.id), challenge, PURPOSE_REGISTRATION)
+    token = mint_challenge_token(
+        str(user.id), challenge, PURPOSE_REGISTRATION, label=_clean_label(payload.label)
+    )
     return RegisterBeginResponse(
         challenge_token=token,
         options=_options_to_json_dict(options),
     )
+
+
+def _clean_label(raw: object) -> str:
+    label = raw.strip()[:100] if isinstance(raw, str) else ""
+    return label or "Passkey"
 
 
 @me_router.post("/register/finish", response_model=_CredentialSummary)
@@ -266,14 +285,10 @@ async def register_finish(
     if sub != str(user.id):
         raise HTTPException(status_code=400, detail="Challenge / user mismatch")
 
-    label = (payload.credential.pop("__label__", None)
-             if isinstance(payload.credential, dict) else None)
-    # Re-derive label from the begin step. The frontend MUST pass it via
-    # a separate /register/begin call; we don't trust the credential
-    # blob's contents.
-    if not label:
-        # Fall back to a generic label if the client forgot.
-        label = "Passkey"
+    # The label picked at /register/begin travels in the signed challenge
+    # token; a ``__label__`` in the credential blob is only a fallback.
+    blob_label = payload.credential.pop("__label__", None)
+    label = _clean_label(challenge_label(payload.challenge_token) or blob_label)
 
     try:
         verification = verify_registration_response(
@@ -300,7 +315,10 @@ async def register_finish(
         transports_json=json.dumps(transports),
         label=label,
     )
+    if not await claim_once(challenge_key(challenge), 600):
+        raise HTTPException(status_code=400, detail="Invalid challenge")
     db.add(cred)
+    await db.flush()  # assigns cred.id for the audit row
     await write_event(
         db,
         action="webauthn.registered",
@@ -349,48 +367,52 @@ async def revoke_credential(
 # /auth/webauthn — passwordless login + MFA + forced enrolment
 # ---------------------------------------------------------------------------
 def _request_meta(request: Request) -> tuple[str | None, str | None]:
-    """Hash IP + truncate UA the same way :mod:`auth` does. Inlined to
-    avoid importing auth.py (which imports us, eventually)."""
-    import hashlib
-
-    fwd = request.headers.get("x-forwarded-for")
-    ip = fwd.split(",", 1)[0].strip() if fwd else (
-        request.client.host if request.client else None
-    )
-    ip_hash = hashlib.sha256(ip.encode("utf-8")).hexdigest() if ip else None
+    """(ip fingerprint, user agent) for the session row — the raw address
+    is never persisted."""
     ua = request.headers.get("user-agent")
-    ua = ua[:255] if ua else None
-    return ip_hash, ua
+    return hash_ip(client_ip(request)), (ua[:255] if ua else None)
 
 
 async def _lookup_user_by_identifier(db: Any, identifier: str) -> User | None:
     """Email or username, case-insensitive on email (RFC 5321 local-parts
     are case-sensitive in theory but no real-world mail server enforces it)."""
     normalised = identifier.strip()
-    row = (
+    return (
         await db.execute(
-            select(User).where(
-                (User.email == normalised.lower()) | (User.username == normalised)
+            select(User)
+            .where(
+                (func.lower(User.email) == normalised.lower()) | (User.username == normalised)
             )
+            .limit(1)
         )
-    ).scalar_one_or_none()
-    return row
+    ).scalars().first()
+
+
+def _decoy_credential_id(identifier: str) -> bytes:
+    """Stable fake credential id for an identifier without passkeys, so
+    ``allowCredentials`` looks the same whether the account exists or not."""
+    return hmac.new(
+        settings.secret_key.encode(), f"webauthn-decoy:{identifier}".encode(), hashlib.sha256
+    ).digest()
 
 
 async def _build_assertion_options(
-    db: Any, user: User | None
+    db: Any, user: User | None, *, identifier: str | None = None
 ) -> tuple[bytes, dict[str, Any]]:
-    """Generate the assertion options for a user. When ``user`` is ``None``
-    we still return a valid options object with an empty
-    ``allowCredentials`` list — this makes the response shape stable
-    whether the identifier matches an existing account or not, so an
-    attacker can't probe for usernames."""
+    """Generate the assertion options for a user. When the identifier
+    matches no account — or one without passkeys — ``allowCredentials``
+    holds a decoy id derived from the identifier: the response looks the
+    same either way, so an attacker can't probe for accounts."""
     challenge = new_challenge()
     allow_credentials: list[PublicKeyCredentialDescriptor] = []
     if user is not None:
         creds = await _user_credentials(db, user.id)
         allow_credentials = [
             PublicKeyCredentialDescriptor(id=c.credential_id) for c in creds
+        ]
+    if not allow_credentials and identifier:
+        allow_credentials = [
+            PublicKeyCredentialDescriptor(id=_decoy_credential_id(identifier.strip().lower()))
         ]
     options = generate_authentication_options(
         rp_id=rp_id(),
@@ -399,6 +421,17 @@ async def _build_assertion_options(
         user_verification=UserVerificationRequirement.PREFERRED,
     )
     return challenge, _options_to_json_dict(options)
+
+
+def _credential_id(credential_payload: dict[str, Any]) -> bytes:
+    raw_id_b64 = credential_payload.get("rawId") or credential_payload.get("id")
+    if not isinstance(raw_id_b64, str):
+        raise HTTPException(status_code=400, detail="Missing credential id")
+    try:
+        pad = "=" * (-len(raw_id_b64) % 4)
+        return base64.urlsafe_b64decode(raw_id_b64 + pad)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Invalid credential id") from exc
 
 
 async def _verify_assertion(
@@ -410,14 +443,7 @@ async def _verify_assertion(
     """Look the credential up by raw-id, run py_webauthn's verification,
     bump the sign-count + last-used-at on success. Raises HTTPException
     on any failure."""
-    raw_id_b64 = credential_payload.get("rawId") or credential_payload.get("id")
-    if not isinstance(raw_id_b64, str):
-        raise HTTPException(status_code=400, detail="Missing credential id")
-    try:
-        pad = "=" * (-len(raw_id_b64) % 4)
-        credential_id = base64.urlsafe_b64decode(raw_id_b64 + pad)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail="Invalid credential id") from exc
+    credential_id = _credential_id(credential_payload)
 
     cred = (
         await db.execute(
@@ -457,13 +483,14 @@ async def passwordless_begin(
     db: DbSession,
 ) -> RegisterBeginResponse:
     """Step 1 of passwordless: caller submits their identifier; we return
-    assertion options. The challenge token carries the resolved user id
-    (or empty when the identifier matched nothing — the /finish step
-    will then reject as usual)."""
+    assertion options. The challenge token deliberately names no account
+    (it is readable by the client): /finish finds the user from the
+    credential that signed the challenge."""
     user = await _lookup_user_by_identifier(db, payload.identifier)
-    challenge, options_dict = await _build_assertion_options(db, user)
-    user_sub = str(user.id) if user is not None else ""
-    token = mint_challenge_token(user_sub, challenge, PURPOSE_AUTHENTICATION)
+    challenge, options_dict = await _build_assertion_options(
+        db, user, identifier=payload.identifier
+    )
+    token = mint_challenge_token("", challenge, PURPOSE_AUTHENTICATION)
     return RegisterBeginResponse(challenge_token=token, options=options_dict)
 
 
@@ -476,26 +503,30 @@ async def passwordless_finish(
 ):
     """Step 2 of passwordless: verify the assertion + mint a token pair."""
     try:
-        sub, challenge = open_challenge_token(
+        _, challenge = open_challenge_token(
             payload.challenge_token, PURPOSE_AUTHENTICATION
         )
     except ValueError as exc:
         raise HTTPException(status_code=401, detail="Invalid challenge") from exc
-    if not sub:
-        # The /begin step matched no account. Use a generic message to
-        # avoid leaking the account-presence oracle.
-        raise HTTPException(status_code=401, detail="Authentication failed")
-    try:
-        user_id = uuid.UUID(sub)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Invalid challenge") from exc
-    user = (
-        await db.execute(select(User).where(User.id == user_id))
+    owner_id = (
+        await db.execute(
+            select(WebAuthnCredential.user_id).where(
+                WebAuthnCredential.credential_id == _credential_id(payload.credential)
+            )
+        )
     ).scalar_one_or_none()
+    user = (
+        (await db.execute(select(User).where(User.id == owner_id))).scalar_one_or_none()
+        if owner_id is not None
+        else None
+    )
     if user is None or not user.is_active:
-        raise HTTPException(status_code=401, detail="Account unavailable")
+        # Same answer for an unknown credential and a disabled account.
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
     await _verify_assertion(db, user, challenge, payload.credential)
+    if not await claim_once(challenge_key(challenge), 600):
+        raise HTTPException(status_code=401, detail="Authentication failed")
     await write_event(
         db,
         action="webauthn.login",
@@ -587,6 +618,8 @@ async def mfa_finish(
         raise HTTPException(status_code=401, detail="Challenge / user mismatch")
 
     await _verify_assertion(db, user, challenge, payload.credential)
+    if not await claim_once(challenge_key(challenge), 600):
+        raise HTTPException(status_code=401, detail="Authentication failed")
     await write_event(
         db,
         action="webauthn.mfa",
@@ -612,7 +645,8 @@ async def mfa_finish(
 # but the account has none. The token is single-use in spirit (we don't
 # track it server-side, but it's discarded after the /finish step mints
 # real tokens) and has the same 5-minute lifetime as the MFA challenge.
-def _open_enrollment_token(token: str) -> uuid.UUID:
+def _open_enrollment_token(token: str) -> tuple[uuid.UUID, str]:
+    """Returns ``(user_id, jti)``; the jti is claimed when enrolment completes."""
     try:
         claims = decode_token(token)
     except Exception as exc:  # noqa: BLE001
@@ -620,8 +654,11 @@ def _open_enrollment_token(token: str) -> uuid.UUID:
     if claims.get("type") != "webauthn_enrollment":
         raise HTTPException(status_code=401, detail="Not an enrolment token")
     sub = claims.get("sub")
+    jti = claims.get("jti")
+    if not isinstance(jti, str) or not jti:
+        raise HTTPException(status_code=401, detail="Invalid enrolment token")
     try:
-        return uuid.UUID(sub) if sub else uuid.UUID(int=0)
+        return (uuid.UUID(sub) if sub else uuid.UUID(int=0)), jti
     except ValueError as exc:
         raise HTTPException(status_code=401, detail="Invalid enrolment token") from exc
 
@@ -633,7 +670,7 @@ async def enroll_begin(
     db: DbSession,
     request: Request,
 ) -> RegisterBeginResponse:
-    user_id = _open_enrollment_token(payload.enrollment_token)
+    user_id, _ = _open_enrollment_token(payload.enrollment_token)
     user = (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
@@ -660,7 +697,9 @@ async def enroll_begin(
             COSEAlgorithmIdentifier.RSASSA_PKCS1_v1_5_SHA_256,
         ],
     )
-    token = mint_challenge_token(str(user.id), challenge, PURPOSE_REGISTRATION)
+    token = mint_challenge_token(
+        str(user.id), challenge, PURPOSE_REGISTRATION, label=_clean_label(payload.label)
+    )
     return RegisterBeginResponse(
         challenge_token=token,
         options=_options_to_json_dict(options),
@@ -674,7 +713,7 @@ async def enroll_finish(
     request: Request,
     db: DbSession,
 ):
-    user_id = _open_enrollment_token(payload.enrollment_token)
+    user_id, enrollment_jti = _open_enrollment_token(payload.enrollment_token)
     user = (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
@@ -690,12 +729,8 @@ async def enroll_finish(
     if challenge_sub != str(user.id):
         raise HTTPException(status_code=400, detail="Challenge / user mismatch")
 
-    label_raw = payload.credential.get("__label__") if isinstance(payload.credential, dict) else None
-    # The enrolment flow gets its label off ``payload`` (we don't store it
-    # on the begin step — the token is meant to be lightweight). Caller
-    # sends the chosen label via ``__label__`` in the credential blob.
-    label = label_raw if isinstance(label_raw, str) and label_raw.strip() else "Passkey"
-    label = label[:100]
+    blob_label = payload.credential.pop("__label__", None)
+    label = _clean_label(challenge_label(payload.challenge_token) or blob_label)
 
     try:
         verification = verify_registration_response(
@@ -722,7 +757,13 @@ async def enroll_finish(
         transports_json=json.dumps(transports),
         label=label,
     )
+    # One enrolment per token, one registration per challenge.
+    if not await claim_once(f"webauthn-enrollment:{enrollment_jti}", 600) or not await claim_once(
+        challenge_key(challenge), 600
+    ):
+        raise HTTPException(status_code=401, detail="Invalid enrolment token")
     db.add(cred)
+    await db.flush()  # assigns cred.id for the audit row
     await write_event(
         db,
         action="webauthn.enrolled_forced",
@@ -778,7 +819,9 @@ async def passkey_login_state(
     """
     from app.models.user import AuthProvider as _AuthProvider
 
-    if user.auth_provider == _AuthProvider.OIDC:
+    if user.auth_provider == _AuthProvider.OIDC and user.hashed_password is None:
+        # A local account linked to SSO keeps its password (and can still log
+        # in with it here), so only password-less SSO accounts are exempt.
         # OIDC accounts can optionally have passkeys — let the SPA see
         # them in the MFA branch only if they exist, never block via
         # forced enrolment.
@@ -797,16 +840,5 @@ async def passkey_login_state(
     )
     if not forced:
         return {"action": "none"}
-    from datetime import UTC as _UTC, datetime as _datetime, timedelta as _timedelta
-
-    import jwt as _jwt
-
-    now = _datetime.now(_UTC)
-    payload = {
-        "sub": str(user.id),
-        "type": "webauthn_enrollment",
-        "iat": int(now.timestamp()),
-        "exp": int((now + _timedelta(minutes=5)).timestamp()),
-    }
-    token = _jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+    token = mint_enrollment_token(str(user.id))
     return {"action": "enrollment_required", "token": token}

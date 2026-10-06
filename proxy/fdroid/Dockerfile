@@ -12,17 +12,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Three runtime deps. ``fastapi[standard]`` pulls uvicorn[standard] +
-# pydantic 2; we add httpx explicitly because the spec calls for it
-# (and fastapi[standard] doesn't always wire it in).
-RUN pip install --upgrade pip wheel setuptools && \
-    pip install \
-        'fastapi[standard]>=0.136' \
-        'uvicorn[standard]>=0.47' \
-        'httpx>=0.27'
+# Three direct runtime deps (requirements.in): ``fastapi[standard]``
+# pulls uvicorn[standard] + pydantic 2; httpx is listed explicitly because
+# the spec calls for it. The image installs requirements.txt — the fully
+# resolved, pinned closure (regeneration command in requirements.in) — so
+# every build ships the same versions instead of whatever the open ``>=``
+# ranges resolved to that day. ``--no-deps`` + ``pip check``: nothing
+# outside the lock gets pulled in, and an incomplete lock fails the build.
+WORKDIR /app
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-deps -r /app/requirements.txt && \
+    pip check
 
 # Single-file app. Adding more endpoints? Drop them in ``main.py``.
-WORKDIR /app
 COPY main.py /app/main.py
 
 # Non-root execution. We don't need a persistent volume — the proxy is

@@ -1,17 +1,18 @@
 "use client";
 
-import { Check, Copy, Smartphone } from "lucide-react";
+import { Check, Copy, Smartphone, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { RepoQrCode } from "@/components/repo-qr-code";
 import { Button } from "@/components/ui/button";
-import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
+import { fdroidDeepLink, isPlainHttp, useRepoInfo } from "@/lib/repo-store";
 
 /* The "Add to F-Droid" invitation. Two paths in: the Open button (works on
- * devices with F-Droid installed, scheme picked from http vs https) and the
- * QR for cross-device handoff (scan from your phone). Both pull the LIVE
- * repo address through useRepoInfo so admin edits propagate immediately. */
+ * devices with F-Droid installed, link shape picked from http vs https) and
+ * the QR for cross-device handoff (scan from your phone). Both pull the
+ * LIVE repo address through useRepoInfo so admin edits propagate
+ * immediately. */
 export function RepoCta() {
   const { t } = useTranslation();
   const repo = useRepoInfo();
@@ -67,6 +68,12 @@ export function RepoCta() {
               </a>
             </Button>
           </div>
+          {isPlainHttp(repo.url) && (
+            <p className="mt-3 flex max-w-xl items-start gap-2 text-xs text-ink-mute">
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {t("repoCta.httpWarning")}
+            </p>
+          )}
         </div>
         <RepoQrCode size={192} showCaption className="shrink-0" />
       </div>

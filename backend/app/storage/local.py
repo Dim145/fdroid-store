@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 from uuid import uuid4
@@ -115,6 +117,23 @@ class LocalStorage(Storage):
                     yield chunk
 
         return _gen()
+
+    async def list_prefix(self, prefix: str) -> list[tuple[str, datetime]]:
+        root = self._resolve(prefix.rstrip("/"))
+
+        def _walk() -> list[tuple[str, datetime]]:
+            if not root.is_dir():
+                return []
+            return [
+                (
+                    p.relative_to(self.base).as_posix(),
+                    datetime.fromtimestamp(p.stat().st_mtime, UTC),
+                )
+                for p in root.rglob("*")
+                if p.is_file()
+            ]
+
+        return await asyncio.to_thread(_walk)
 
     async def delete(self, key: str) -> None:
         target = self._resolve(key)

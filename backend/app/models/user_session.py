@@ -35,9 +35,10 @@ class UserSession(Base, IdMixin, TimestampMixin):
     # lookup at refresh time.
     jti: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
 
-    # Trust signals captured at login time. ``ip_hash`` is a SHA-256 hash of
-    # the raw IP — sufficient to distinguish sessions without persisting the
-    # raw address. ``user_agent`` is truncated to 255 chars.
+    # Trust signals captured at login time. ``ip_hash`` is a keyed (HMAC)
+    # fingerprint of the raw IP (core.client_ip) — sufficient to distinguish
+    # sessions without persisting the raw address. ``user_agent`` is
+    # truncated to 255 chars.
     ip_hash: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(255))
 

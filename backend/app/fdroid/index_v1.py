@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from app.fdroid.donations import funding_for
 from app.models.apk import Apk
 from app.models.app import App
 from app.models.repo_config import RepoConfig
@@ -28,9 +29,28 @@ def _ts_ms(value: datetime | None) -> int:
     return int(value.timestamp() * 1000)
 
 
-def _serialize_app(app: App) -> dict[str, Any]:
+def suggestion_fallback(app: App, published: list[Apk]) -> Apk | None:
+    """The APK to suggest instead of ``app.suggested_version_code`` when that
+    pin matches none of the ``published`` APKs this index carries — a manual
+    pin left dangling after its APK was deleted or rejected. ``None`` when
+    the pin is fine, or unset (no stable baseline: nothing is held back).
+
+    The fallback is the automatic rule of
+    ``app.services.suggested_version.recompute_auto``: the newest published
+    non-beta APK, else the newest. Without it v1 clients are pointed at a
+    version that isn't there, and v2 marks every version above the stale
+    pin as Beta.
+    """
+    code = app.suggested_version_code
+    if code is None or any(a.version_code == code for a in published):
+        return None
+    pool = [a for a in published if not a.is_beta] or published
+    return max(pool, key=lambda a: a.version_code, default=None)
+
+
+def _serialize_app(app: App, published: list[Apk]) -> dict[str, Any]:
     obj: dict[str, Any] = {
-        "added": _ts_ms(app.created_at),
+        "added": _ts_ms(app.first_published_at or app.created_at),
         "name": app.name,
         "packageName": app.package_name,
         "lastUpdated": _ts_ms(app.last_published_at or app.updated_at),
@@ -45,10 +65,13 @@ def _serialize_app(app: App) -> dict[str, Any]:
     cats = [c.name for c in app.categories]
     if cats:
         obj["categories"] = cats
-    if app.suggested_version_code:
-        obj["suggestedVersionCode"] = str(app.suggested_version_code)
-    if app.suggested_version_name:
-        obj["suggestedVersionName"] = app.suggested_version_name
+    fallback = suggestion_fallback(app, published)
+    suggested_code = fallback.version_code if fallback else app.suggested_version_code
+    suggested_name = fallback.version_name if fallback else app.suggested_version_name
+    if suggested_code:
+        obj["suggestedVersionCode"] = str(suggested_code)
+    if suggested_name:
+        obj["suggestedVersionName"] = suggested_name
     if app.author_name:
         obj["authorName"] = app.author_name
     if app.author_email:
@@ -61,14 +84,17 @@ def _serialize_app(app: App) -> dict[str, Any]:
         obj["issueTracker"] = app.issue_tracker
     if app.translation:
         obj["translation"] = app.translation
-    if app.donate:
-        obj["donate"] = app.donate
-    if app.liberapay:
-        obj["liberapay"] = app.liberapay
-    if app.bitcoin:
-        obj["bitcoin"] = app.bitcoin
-    if app.open_collective:
-        obj["openCollective"] = app.open_collective
+    # v1 keeps ``donate`` as a single URL; the platform fields are bare IDs
+    # here too (the client builds the links) — see ``app.fdroid.donations``.
+    funding = funding_for(app)
+    if funding.donate:
+        obj["donate"] = funding.donate[0]
+    if funding.liberapay:
+        obj["liberapay"] = funding.liberapay
+    if funding.bitcoin:
+        obj["bitcoin"] = funding.bitcoin
+    if funding.open_collective:
+        obj["openCollective"] = funding.open_collective
     if app.icon_path:
         # F-Droid v1 clients expect just the basename of an icon stored under
         # ``<repo-url>/icons/<filename>``.
@@ -204,7 +230,7 @@ def build_index_v1(
         published = [a for a in app.apks if a.status.value == "published"]
         if not published:
             continue
-        apps_list.append(_serialize_app(app))
+        apps_list.append(_serialize_app(app, published))
         packages[app.package_name] = [_serialize_apk(a, app) for a in published]
 
     repo_block: dict[str, Any] = {

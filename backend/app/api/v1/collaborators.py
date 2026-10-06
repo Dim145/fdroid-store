@@ -12,12 +12,12 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import DbSession, get_current_user, get_current_uploader
 from app.models.app import App
 from app.models.app_collaborator import AppCollaborator
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.app_collaborator import AppCollaboratorAdd, AppCollaboratorRead
 from app.services.app_permissions import assert_owner_or_admin
 from app.services.audit import write_event
@@ -64,7 +64,7 @@ async def list_collaborators(
             user_id=row.AppCollaborator.user_id,
             granted_at=row.AppCollaborator.granted_at,
             username=row.User.username,
-            email=row.User.email,
+            email=row.User.email if user.role == UserRole.ADMIN else None,
             full_name=row.User.full_name,
         )
         for row in rows
@@ -100,26 +100,25 @@ async def add_collaborator(
         ).scalar_one_or_none()
     else:
         target = (
-            await db.execute(select(User).where(User.email == payload.email))
-        ).scalar_one_or_none()
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            await db.execute(
+                select(User).where(func.lower(User.email) == str(payload.email).lower()).limit(1)
+            )
+        ).scalars().first()
+    # Unknown account and "not an uploader" answer the same: any uploader
+    # can create an app, so this endpoint must not be a directory of who is
+    # registered and with which role.
+    if target is None or not target.can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No uploader account matches. Users need the uploader role "
+                "(an admin can grant it) before they can be added."
+            ),
+        )
     if target.id == app.owner_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The owner is already implicitly granted full rights",
-        )
-    # The collaborator must be able to actually push to /my-apps —
-    # adding a plain ``user`` as collab would create the absurd state
-    # of "co-maintainer of an app I can't open the editor for". Admin
-    # must promote them to ``uploader`` first.
-    if not target.can_upload:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "User does not have the uploader role. "
-                "Ask an admin to promote them to uploader before adding them as a collaborator."
-            ),
         )
     existing = (
         await db.execute(
@@ -158,7 +157,8 @@ async def add_collaborator(
         user_id=target.id,
         granted_at=row.granted_at,
         username=target.username,
-        email=target.email,
+        # E-mail addresses are for admins; owners see usernames.
+        email=target.email if actor.role == UserRole.ADMIN else None,
         full_name=target.full_name,
     )
 

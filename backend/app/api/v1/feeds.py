@@ -16,9 +16,10 @@ Both serialisations are produced by hand: a single feed has at most 50
 entries and the spec surface is small enough that pulling in feedgen would
 be more dependency than it's worth.
 
-The endpoint is unauthenticated by design — feed readers don't carry
-session cookies, and the underlying data is already the public catalogue.
-Private apps never appear.
+In public mode the feeds are anonymous — feed readers don't carry session
+cookies, and the underlying data is already the public catalogue. Private
+apps never appear. In private mode they need what the rest of the API
+needs: a JWT, or an API key over HTTP Basic (which feed readers can send).
 """
 from __future__ import annotations
 
@@ -28,21 +29,37 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy import desc, select
+from sqlalchemy import case, func, select, true
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import (
     DbSession,
     get_api_key_from_basic_auth,
     get_current_user_optional,
+    require_repo_access,
 )
+from app.core.config import settings
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, AppVisibility, Category
 from app.models.api_key import ApiKey
-from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
 
 router = APIRouter()
+
+_BASIC_CHALLENGE = {"WWW-Authenticate": 'Basic realm="fdroid-store"'}
+
+
+async def require_feed_access(
+    db: DbSession,
+    viewer: Annotated[User | None, Depends(get_current_user_optional)],
+    api_key: Annotated[ApiKey | None, Depends(get_api_key_from_basic_auth)],
+) -> None:
+    """``require_browse_access`` for feeds: in private mode a JWT or an API
+    key is required. A feed reader can only send the latter, so the 401
+    carries ``require_repo_access``'s Basic challenge (the reader prompts
+    for the key) instead of the bare one of the browse API."""
+    if viewer is None:
+        await require_repo_access(db, api_key)
 
 
 def _wants_inline_xml(request: Request) -> bool:
@@ -79,21 +96,26 @@ def _xml_escape(text: str | None) -> str:
     return html.escape(_XML_INVALID_CHARS.sub("", text or ""), quote=True)
 
 
-async def _repo_base(db) -> str:
-    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
-    return (config.address.rstrip("/") if config and config.address else "")
+def _app_link(package_name: str) -> str:
+    """The app's page in the web UI — the URL index-v2 also gives F-Droid's
+    "Share" action (``webBaseUrl``). The repo address (``…/fdroid/repo``)
+    serves no ``/apps/<pkg>`` page."""
+    return f"{settings.public_app_url.rstrip('/')}/apps/{package_name}"
+
+
+def _self_link(path: str) -> str:
+    """Absolute URL of a feed (``path`` is relative to ``/api/v1``)."""
+    return f"{settings.public_api_url.rstrip('/')}/api/v1{path}"
 
 
 def _atom_entry(
     app: App,
-    base: str,
     published: datetime,
     title_prefix: str,
 ) -> str:
-    pkg = app.package_name
     title = f"{title_prefix}{app.name}"
     summary = app.summary or ""
-    link = f"{base}/apps/{pkg}" if base else f"/apps/{pkg}"
+    link = _app_link(app.package_name)
     return (
         "  <entry>\n"
         f"    <title>{_xml_escape(title)}</title>\n"
@@ -107,14 +129,12 @@ def _atom_entry(
 
 def _rss_item(
     app: App,
-    base: str,
     published: datetime,
     title_prefix: str,
 ) -> str:
-    pkg = app.package_name
     title = f"{title_prefix}{app.name}"
     summary = app.summary or ""
-    link = f"{base}/apps/{pkg}" if base else f"/apps/{pkg}"
+    link = _app_link(app.package_name)
     pub = published.strftime("%a, %d %b %Y %H:%M:%S +0000")
     return (
         "    <item>\n"
@@ -155,52 +175,70 @@ def _wrap_rss(title: str, self_url: str, items: str) -> str:
     )
 
 
+def _has_nsfw_apk():
+    """SQL twin of ``App.is_nsfw`` (correlated on ``App``): some APK of the
+    app carries the NSFW anti-feature. Labels are free-form, so they are
+    matched trimmed and case-insensitively, as the property does."""
+    flags = (
+        func.json_array_elements_text(
+            case(
+                (func.json_typeof(Apk.anti_features) == "array", Apk.anti_features),
+                else_=func.json_build_array(),
+            )
+        )
+        .table_valued("value")
+        .render_derived(name="nsfw_flag")
+    )
+    return (
+        select(Apk.id)
+        .join(flags, true())
+        .where(Apk.app_id == App.id, func.lower(func.btrim(flags.c.value)) == "nsfw")
+        .exists()
+    )
+
+
 async def _load_apps_for_feed(
     db,
     *,
-    order_col,
+    order_by,
     category: str | None,
     author: str | None,
     nsfw_visible: bool,
     limit: int,
 ) -> list[App]:
-    """Common loader. ``order_col`` is the column we sort by descending —
-    ``last_published_at`` for the updates feed, ``created_at`` for new.
+    """Common loader. ``order_by`` is the expression we sort by descending.
 
-    ``is_nsfw`` is a Python property that walks ``app.apks.anti_features``,
-    not a column, so it can't be pushed into the SQL ``WHERE``. We
-    over-fetch (``limit * 2``) then filter in Python — the catalogue is
-    small enough that the cost is negligible and it keeps the loader
-    symmetrical with the repo-builder behaviour.
+    Every filter runs in SQL, before the ``LIMIT``: filtering a fetched page
+    afterwards returned short (or empty) feeds whenever the newest rows were
+    NSFW or in other categories.
     """
-    fetch_limit = limit * 2 if not nsfw_visible else limit
     stmt = (
         select(App)
-        .options(selectinload(App.categories), selectinload(App.apks))
         .where(
             App.status == AppStatus.PUBLISHED,
             App.visibility == AppVisibility.PUBLIC,
         )
-        .order_by(desc(order_col))
-        .limit(fetch_limit)
+        .order_by(order_by.desc())
+        .limit(limit)
     )
     if author:
         stmt = stmt.where(App.author_name == author)
-    rows = list((await db.execute(stmt)).scalars().unique().all())
-
-    if not nsfw_visible:
-        rows = [a for a in rows if not a.is_nsfw]
     if category:
-        cat_ids = {
-            c for c, in (
-                await db.execute(select(Category.id).where(Category.name == category))
-            ).all()
-        }
-        rows = [a for a in rows if any(c.id in cat_ids for c in a.categories)]
-    return rows[:limit]
+        stmt = stmt.where(App.categories.any(Category.name == category))
+    if not nsfw_visible:
+        stmt = stmt.where(~_has_nsfw_apk())
+    return list((await db.execute(stmt)).scalars().all())
 
 
-@router.get("/new")
+def _first_published(a: App) -> datetime:
+    return a.first_published_at or a.created_at
+
+
+def _last_published(a: App) -> datetime:
+    return a.last_published_at or a.created_at
+
+
+@router.get("/new", dependencies=[Depends(require_feed_access)])
 async def feed_new(
     db: DbSession,
     request: Request,
@@ -210,30 +248,32 @@ async def feed_new(
     nsfw: Literal["on", "off"] = Query(default="off"),
     limit: int = Query(default=20, ge=1, le=50),
 ) -> Response:
+    # "New" = newest to go live, not newest draft: an app created long ago
+    # and published today is new (``first_published_at``, NULL for legacy
+    # rows → ``created_at``; same rule as the index ``added`` field).
     apps = await _load_apps_for_feed(
         db,
-        order_col=App.created_at,
+        order_by=func.coalesce(App.first_published_at, App.created_at),
         category=category,
         author=author,
         nsfw_visible=(nsfw == "on"),
         limit=limit,
     )
-    base = await _repo_base(db)
-    self_url = f"{base}/api/v1/feed/new" if base else "/api/v1/feed/new"
+    self_url = _self_link("/feed/new")
 
     if format == "rss":
-        items = "".join(_rss_item(a, base, a.created_at, "") for a in apps)
+        items = "".join(_rss_item(a, _first_published(a), "") for a in apps)
         body = _wrap_rss("New apps", self_url, items)
         feed_media = "application/rss+xml; charset=utf-8"
     else:
-        entries = "".join(_atom_entry(a, base, a.created_at, "") for a in apps)
+        entries = "".join(_atom_entry(a, _first_published(a), "") for a in apps)
         body = _wrap_atom("New apps", self_url, entries)
         feed_media = "application/atom+xml; charset=utf-8"
     media = "application/xml; charset=utf-8" if _wants_inline_xml(request) else feed_media
     return Response(content=body, media_type=media)
 
 
-@router.get("/updates")
+@router.get("/updates", dependencies=[Depends(require_feed_access)])
 async def feed_updates(
     db: DbSession,
     request: Request,
@@ -243,26 +283,24 @@ async def feed_updates(
     nsfw: Literal["on", "off"] = Query(default="off"),
     limit: int = Query(default=20, ge=1, le=50),
 ) -> Response:
+    # Sorted by the timestamp each entry shows (a NULL ``last_published_at``
+    # would otherwise sort first under DESC).
     apps = await _load_apps_for_feed(
         db,
-        order_col=App.last_published_at,
+        order_by=func.coalesce(App.last_published_at, App.created_at),
         category=category,
         author=author,
         nsfw_visible=(nsfw == "on"),
         limit=limit,
     )
-    base = await _repo_base(db)
-    self_url = f"{base}/api/v1/feed/updates" if base else "/api/v1/feed/updates"
-
-    def _ts(a: App) -> datetime:
-        return a.last_published_at or a.created_at
+    self_url = _self_link("/feed/updates")
 
     if format == "rss":
-        items = "".join(_rss_item(a, base, _ts(a), "Updated: ") for a in apps)
+        items = "".join(_rss_item(a, _last_published(a), "Updated: ") for a in apps)
         body = _wrap_rss("App updates", self_url, items)
         feed_media = "application/rss+xml; charset=utf-8"
     else:
-        entries = "".join(_atom_entry(a, base, _ts(a), "Updated: ") for a in apps)
+        entries = "".join(_atom_entry(a, _last_published(a), "Updated: ") for a in apps)
         body = _wrap_atom("App updates", self_url, entries)
         feed_media = "application/atom+xml; charset=utf-8"
     media = "application/xml; charset=utf-8" if _wants_inline_xml(request) else feed_media
@@ -286,10 +324,11 @@ async def feed_updates(
 #   * JWT bearer — the SPA session token, for the case where the SPA
 #     surfaces a clickable "Subscribe" link from the edit page.
 # Anonymous calls to a private-app feed get the same 401 as the index path,
-# with ``WWW-Authenticate: Basic`` so the reader prompts for credentials.
+# with ``WWW-Authenticate: Basic`` so the reader prompts for credentials —
+# and so does an unknown package, or the 401 would confirm the private one.
 
 
-def _apk_atom_entry(app: App, apk: Apk, base: str) -> str:
+def _apk_atom_entry(app: App, apk: Apk) -> str:
     """One ``<entry>`` per published APK. Title = ``<app> v<name> (<code>)``,
     body = the en-US changelog if any, link = the public app detail page."""
     title = f"{app.name} v{apk.version_name} ({apk.version_code})"
@@ -303,7 +342,7 @@ def _apk_atom_entry(app: App, apk: Apk, base: str) -> str:
                 note = v.strip()
                 break
     when = apk.created_at
-    link = f"{base}/apps/{app.package_name}" if base else f"/apps/{app.package_name}"
+    link = _app_link(app.package_name)
     return (
         "  <entry>\n"
         f"    <title>{_xml_escape(title)}</title>\n"
@@ -315,7 +354,7 @@ def _apk_atom_entry(app: App, apk: Apk, base: str) -> str:
     )
 
 
-def _apk_rss_item(app: App, apk: Apk, base: str) -> str:
+def _apk_rss_item(app: App, apk: Apk) -> str:
     title = f"{app.name} v{apk.version_name} ({apk.version_code})"
     note = ""
     if isinstance(apk.whats_new, dict):
@@ -325,7 +364,7 @@ def _apk_rss_item(app: App, apk: Apk, base: str) -> str:
                 note = v.strip()
                 break
     when = apk.created_at
-    link = f"{base}/apps/{app.package_name}" if base else f"/apps/{app.package_name}"
+    link = _app_link(app.package_name)
     pub = when.strftime("%a, %d %b %Y %H:%M:%S +0000")
     return (
         "    <item>\n"
@@ -345,21 +384,23 @@ async def _can_see_private_app(
     api_key: ApiKey | None,
 ) -> bool:
     """The same gate as ``/fdroid/repo/*`` for private assets: admin OR
-    owner OR collaborator OR matching API key. There's no eager
-    ``App.collaborators`` relationship in the model, so we issue a
-    dedicated ``SELECT 1 FROM app_collaborators`` when needed."""
+    owner OR collaborator OR matching API key. An API key needs the
+    ``can_download_private`` scope (as on the repo path) and an enabled
+    owner. There's no eager ``App.collaborators`` relationship in the
+    model, so we issue a dedicated ``SELECT 1 FROM app_collaborators``
+    when needed."""
     candidate_user_id = None
     if viewer is not None:
         if viewer.role == UserRole.ADMIN:
             return True
         candidate_user_id = viewer.id
-    elif api_key is not None and api_key.user_id is not None:
-        # ``api_key.user`` is lazy and we're in async land — load the role
-        # explicitly via a scalar query rather than the attribute access.
+    elif api_key is not None and api_key.can_download_private and api_key.user_id is not None:
+        # ``api_key.user`` may be lazy and we're in async land — load the
+        # user explicitly via a scalar query rather than the attribute access.
         api_user = (
             await db.execute(select(User).where(User.id == api_key.user_id))
         ).scalar_one_or_none()
-        if api_user is None:
+        if api_user is None or not api_user.is_active:
             return False
         if api_user.role == UserRole.ADMIN:
             return True
@@ -380,7 +421,7 @@ async def _can_see_private_app(
     return row is not None
 
 
-@router.get("/apps/{package_name}")
+@router.get("/apps/{package_name}", dependencies=[Depends(require_feed_access)])
 async def feed_app_releases(
     package_name: str,
     db: DbSession,
@@ -391,33 +432,35 @@ async def feed_app_releases(
     limit: int = Query(default=20, ge=1, le=50),
 ) -> Response:
     """Release feed for one app — one entry per published APK, desc by
-    version_code. Returns 404 for an unknown package so an attacker can't
-    use the endpoint to enumerate private package names."""
-    from sqlalchemy.orm import selectinload as _selectinload
-
+    version_code. An unknown package answers exactly like a private one
+    the caller can't see, so the endpoint can't enumerate private package
+    names."""
     app = (
         await db.execute(
             select(App)
-            .options(_selectinload(App.apks))
+            .options(selectinload(App.apks))
             .where(App.package_name == package_name)
         )
     ).scalar_one_or_none()
-    # 404 (not 403) on unknown OR forbidden — refusing to acknowledge a
-    # private app's existence to anonymous callers (same posture as the
-    # F-Droid media route).
-    if app is None or app.status != AppStatus.PUBLISHED:
+    visible = (
+        app is not None
+        and app.status == AppStatus.PUBLISHED
+        and (
+            app.visibility == AppVisibility.PUBLIC
+            or await _can_see_private_app(db, app, viewer, api_key)
+        )
+    )
+    if not visible:
+        # Unknown, unpublished and not-entitled look the same: anonymous →
+        # 401 + Basic challenge (a reader can then prompt for an API key),
+        # authenticated → 404. Never 401-for-private / 404-for-unknown.
+        if viewer is None and api_key is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers=_BASIC_CHALLENGE,
+            )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
-    if app.visibility != AppVisibility.PUBLIC:
-        if not await _can_see_private_app(db, app, viewer, api_key):
-            # Anonymous + private = ask for credentials; authenticated but
-            # not entitled = 404 (don't leak existence).
-            if viewer is None and api_key is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication required",
-                    headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
-                )
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
 
     published = sorted(
         (a for a in (app.apks or []) if a.status == ApkStatus.PUBLISHED),
@@ -425,19 +468,15 @@ async def feed_app_releases(
         reverse=True,
     )[:limit]
 
-    base = await _repo_base(db)
-    self_url = (
-        f"{base}/api/v1/feed/apps/{package_name}" if base
-        else f"/api/v1/feed/apps/{package_name}"
-    )
+    self_url = _self_link(f"/feed/apps/{app.package_name}")
     feed_title = f"{app.name} — releases"
 
     if format == "rss":
-        items = "".join(_apk_rss_item(app, a, base) for a in published)
+        items = "".join(_apk_rss_item(app, a) for a in published)
         body = _wrap_rss(feed_title, self_url, items)
         feed_media = "application/rss+xml; charset=utf-8"
     else:
-        entries = "".join(_apk_atom_entry(app, a, base) for a in published)
+        entries = "".join(_apk_atom_entry(app, a) for a in published)
         body = _wrap_atom(feed_title, self_url, entries)
         feed_media = "application/atom+xml; charset=utf-8"
     media = "application/xml; charset=utf-8" if _wants_inline_xml(request) else feed_media

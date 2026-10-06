@@ -6,8 +6,10 @@ GitHub, GitLab or Gitea/Forgejo (including self-hosted instances via
 asset URL shape and auth header.
 
 Token wiring is per-provider via env: ``GITHUB_TOKEN``, ``GITLAB_TOKEN``,
-``GITEA_TOKEN``. Without a token we fall back to the anonymous quota
-(60 req/h on GitHub, varies on the others).
+``GITEA_TOKEN`` — used only against the provider's canonical public host,
+never a self-hosted ``base_url``. Without a token we fall back to the
+anonymous quota (60 req/h on GitHub, varies on the others). A token (env
+or per-source) is only ever sent to the forge's own API origin.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -86,6 +88,10 @@ class ReleaseAsset:
     # so the caller doesn't have to re-pass it; falls back to the env
     # var when the source row has no per-source token configured.
     auth_token: str | None = None
+    # Forge API base the token belongs to. ``download_asset`` attaches
+    # ``auth_token`` only to requests on this exact origin; without it the
+    # download is anonymous.
+    forge_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,34 +141,16 @@ def validate_repo(repo: str) -> str:
 def _is_private_ip(ip_str: str) -> bool:
     """True when the address belongs to a range we never want the
     server to fetch from on behalf of a user (loopback, link-local,
-    multicast, RFC1918, ULA, the IPv4-mapped variants of all of those).
-    Both v4 and v6 are handled."""
+    multicast, RFC1918, ULA, CGNAT, site-local, metadata, and the
+    IPv4-mapped / 6to4 / NAT64 spellings of all of those).
+
+    Same predicate as the connect-time guard (:func:`is_blocked_public_ip`)
+    so the string-level pre-check and the pinned transport can't disagree."""
     try:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
-    # Normalise IPv4-mapped IPv6 (``::ffff:10.0.0.1``) back to v4 so the
-    # range checks below can't be sidestepped by spelling a blocked v4
-    # address as a v6 literal.
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    if ip.is_loopback or ip.is_private or ip.is_link_local:
-        return True
-    if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-        return True
-    # ``is_private`` does NOT cover the 100.64.0.0/10 carrier-grade-NAT /
-    # shared-address space (RFC 6598), which routes to internal infra in
-    # many cloud / k8s / Tailscale setups, nor a handful of special-use
-    # ranges. ``not is_global`` is the catch-all: anything not part of the
-    # public unicast internet has no business being a fetch target.
-    if not ip.is_global:
-        return True
-    # AWS / GCP / Azure metadata endpoints all live at 169.254.169.254
-    # which is covered by ``is_link_local``. Keep this explicit anyway
-    # so the intent is unmistakable when reading the code.
-    if isinstance(ip, ipaddress.IPv4Address) and str(ip) == "169.254.169.254":
-        return True
-    return False
+    return is_blocked_public_ip(ip)
 
 
 def _resolves_to_blocked(host: str) -> bool:
@@ -274,7 +262,9 @@ def assert_fetch_url_safe(url: str) -> str:
     elif _resolves_to_blocked(host):
         raise ValueError(f"Host {host!r} resolves to a blocked range")
     port = f":{parsed.port}" if parsed.port is not None else ""
-    netloc = f"{host}{port}"
+    # ``hostname`` drops the brackets of an IPv6 literal; put them back or
+    # the rebuilt URL is unparseable (``2001:db8::1:443``).
+    netloc = f"[{host}]{port}" if ":" in host else f"{host}{port}"
     return urlunsplit((scheme, netloc, parsed.path, parsed.query, ""))
 
 
@@ -305,11 +295,15 @@ def _guard_forge_url(url: str) -> str:
         raise GithubReleaseError(f"Forge URL rejected: {exc}") from exc
 
 
-def _resolve_token(provider: str, explicit: str | None) -> str | None:
+def _resolve_token(provider: str, explicit: str | None, base_url: str | None) -> str | None:
     """Use the per-source PAT when set, otherwise fall back to the
-    server-level env token for the provider."""
+    server-level env token for the provider — but only for its canonical
+    public host. A ``base_url`` is chosen by whoever configures the source,
+    so the operator's token must never be sent there."""
     if explicit:
         return explicit
+    if base_url:
+        return None
     if provider == "github":
         return settings.github_token
     if provider == "gitlab":
@@ -364,7 +358,7 @@ async def find_latest_asset(
     token: str | None = None,
 ) -> ReleaseAsset | None:
     pattern = (asset_pattern or "").strip() or "*.apk"
-    effective_token = _resolve_token(provider, token)
+    effective_token = _resolve_token(provider, token, base_url)
     if provider == "github":
         return await _github_find(repo, pattern, include_prereleases, base_url, effective_token)
     if provider == "gitlab":
@@ -383,7 +377,7 @@ async def fetch_repo_metadata(
 ) -> RepoMetadata | None:
     """Best-effort — returns ``None`` on 4xx/5xx so the caller falls
     back to manual entry instead of failing the create flow."""
-    effective_token = _resolve_token(provider, token)
+    effective_token = _resolve_token(provider, token, base_url)
     if provider == "github":
         return await _github_meta(repo, base_url, effective_token)
     if provider == "gitlab":
@@ -393,17 +387,62 @@ async def fetch_repo_metadata(
     return None
 
 
-async def download_asset(asset: ReleaseAsset) -> Path:
+def _origin(url: str | None) -> tuple[str, str, int] | None:
+    """``(scheme, host, port)`` of ``url`` — the unit a forge credential is
+    scoped to — or ``None`` when it isn't a parseable http(s) URL."""
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = (parts.scheme or "").lower()
+    host = (parts.hostname or "").lower()
+    if scheme not in {"http", "https"} or not host:
+        return None
+    return scheme, host, port or (443 if scheme == "https" else 80)
+
+
+async def _stream_to_tempfile(resp: httpx.Response, cap: int) -> Path:
+    """Stream ``resp`` into a NamedTemporaryFile and return its path. The
+    partial file is removed on ANY failure — over the cap, a network error
+    mid-body, disk full, cancellation — so a flaky or hostile upstream
+    can't fill the worker's /tmp."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".apk", delete=False)
+    path = Path(tmp.name)
+    try:
+        with tmp:
+            total = 0
+            async for chunk in resp.aiter_bytes(1024 * 1024):
+                total += len(chunk)
+                if total > cap:
+                    raise GithubReleaseError(f"Asset exceeds {cap} byte hard cap")
+                tmp.write(chunk)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+async def download_asset(asset: ReleaseAsset, max_bytes: int | None = None) -> Path:
     """Stream the asset to a NamedTemporaryFile and return its path.
 
     The caller MUST unlink the returned path in a ``finally`` block.
-    Each provider's CDN handles auth slightly differently. We manually
-    walk redirects so we can re-validate every hop's host against the
-    SSRF blocklist (httpx's ``follow_redirects=True`` would happily
-    follow a 302 to ``http://169.254.169.254/`` returned by a
+    We manually walk redirects so we can re-validate every hop's host
+    against the SSRF blocklist (httpx's ``follow_redirects=True`` would
+    happily follow a 302 to ``http://169.254.169.254/`` returned by a
     compromised upstream).
+
+    The forge credential only travels to the forge's own API origin
+    (``asset.forge_url``): a release link or redirect pointing anywhere
+    else is fetched anonymously, and once a hop has left that origin the
+    credential is dropped for good — a later hop back (A→B→A) doesn't get
+    it either.
     """
     HARD_CAP = 256 * 1024 * 1024
+    # The admin's APK size cap (upload_max_apk_mb) applies to imports too.
+    cap = min(HARD_CAP, max_bytes) if max_bytes else HARD_CAP
     MAX_REDIRECTS = 5
 
     # Validate the initial URL before we make any request — saves
@@ -415,20 +454,17 @@ async def download_asset(asset: ReleaseAsset) -> Path:
         "User-Agent": _USER_AGENT,
         "Accept": "application/octet-stream",
     }
-    # GitHub asset endpoints redirect cross-host to S3 which does NOT
-    # accept Authorization — and we want to drop it anyway on a
-    # cross-origin hop. We track ``origin_host`` so the credential
-    # only travels to the host the caller meant to authenticate with.
-    initial_host = urlsplit(asset.asset_download_url).hostname or ""
-    req_headers = dict(base_headers)
+    auth_headers: dict[str, str] = {}
     tok = asset.auth_token
     if tok:
         if asset.provider == "github":
-            req_headers["Authorization"] = f"Bearer {tok}"
+            auth_headers["Authorization"] = f"Bearer {tok}"
         elif asset.provider == "gitlab":
-            req_headers["PRIVATE-TOKEN"] = tok
+            auth_headers["PRIVATE-TOKEN"] = tok
         elif asset.provider == "gitea":
-            req_headers["Authorization"] = f"token {tok}"
+            auth_headers["Authorization"] = f"token {tok}"
+    forge_origin = _origin(asset.forge_url)
+    send_auth = bool(auth_headers) and forge_origin is not None
 
     async with make_ssrf_client(
         is_blocked_public_ip,
@@ -437,25 +473,23 @@ async def download_asset(asset: ReleaseAsset) -> Path:
         headers=base_headers,
     ) as client:
         url = asset.asset_download_url
-        current_host = initial_host
         try:
-            for hop in range(MAX_REDIRECTS + 1):
-                # Strip auth on every cross-host hop. urlsplit returns
-                # the bare hostname; we lower-case for the compare.
-                hop_host = urlsplit(url).hostname or ""
-                hop_headers = dict(req_headers)
-                if hop_host.lower() != current_host.lower():
-                    hop_headers.pop("Authorization", None)
-                    hop_headers.pop("PRIVATE-TOKEN", None)
+            for _hop in range(MAX_REDIRECTS + 1):
+                # Every hop is compared with the ORIGINAL forge origin,
+                # never with the previous hop.
+                if send_auth and _origin(url) != forge_origin:
+                    send_auth = False
+                hop_headers = {**base_headers, **auth_headers} if send_auth else base_headers
                 async with client.stream("GET", url, headers=hop_headers) as resp:
-                    if 300 <= resp.status_code < 400 and resp.headers.get("location"):
-                        next_url = str(resp.headers["location"])
+                    location = resp.headers.get("location")
+                    if 300 <= resp.status_code < 400 and location:
+                        # Relative redirects resolve against this hop.
+                        next_url = urljoin(url, location)
                         # Re-validate the redirect target before we
                         # follow it. This is the actual SSRF guard —
                         # a compromised upstream returning a 302 to
                         # an internal IP gets blocked here.
                         _assert_download_url_public(next_url)
-                        current_host = hop_host
                         url = next_url
                         continue
                     if resp.status_code >= 400:
@@ -466,22 +500,7 @@ async def download_asset(asset: ReleaseAsset) -> Path:
                     # do this inside the ``async with`` block because
                     # ``resp`` closes its body the moment the context
                     # manager exits.
-                    tmp = tempfile.NamedTemporaryFile(suffix=".apk", delete=False)
-                    path = Path(tmp.name)
-                    total = 0
-                    try:
-                        async for chunk in resp.aiter_bytes(1024 * 1024):
-                            total += len(chunk)
-                            if total > HARD_CAP:
-                                tmp.close()
-                                path.unlink(missing_ok=True)
-                                raise GithubReleaseError(
-                                    f"Asset exceeds {HARD_CAP} byte hard cap"
-                                )
-                            tmp.write(chunk)
-                    finally:
-                        tmp.close()
-                    return path
+                    return await _stream_to_tempfile(resp, cap)
             raise GithubReleaseError(
                 f"Asset download exceeded {MAX_REDIRECTS} redirects"
             )
@@ -554,9 +573,18 @@ async def _github_find(
             asset_id=int(match["id"]),
             asset_name=str(match["name"]),
             asset_size=int(match.get("size") or 0),
-            asset_download_url=str(match["browser_download_url"]),
+            # With a token, download through the API asset URL: it lives on
+            # the forge API origin (so the token is attached there, and only
+            # there) and redirects to a short-lived CDN link. The
+            # browser_download_url is on github.com — a private repo's asset
+            # would 404 without the token.
+            asset_download_url=str(
+                match["url"] if token and isinstance(match.get("url"), str)
+                else match["browser_download_url"]
+            ),
             provider="github",
             auth_token=token,
+            forge_url=api,
         )
     return None
 
@@ -684,6 +712,7 @@ async def _gitlab_find(
             asset_download_url=str(match["browser_download_url"]),
             provider="gitlab",
             auth_token=token,
+            forge_url=host,
         )
     return None
 
@@ -788,6 +817,7 @@ async def _gitea_find(
             asset_download_url=str(match["browser_download_url"]),
             provider="gitea",
             auth_token=token,
+            forge_url=host,
         )
     return None
 

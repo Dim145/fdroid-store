@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { api, type AppSummary, type Category } from "@/lib/api";
+import { useCategoryLabel } from "@/lib/categories";
 import { cn } from "@/lib/utils";
 
 /* ============================================================================
@@ -66,6 +67,9 @@ function Browse() {
   }, [q, t]);
 
   useEffect(() => setActiveCategory(categoryParam), [categoryParam]);
+  // The header search navigates to /apps?q=… — keep the box (and the
+  // fetch keyed on it) in step when that happens while already here.
+  useEffect(() => setQ(queryParam), [queryParam]);
 
   const filtered = useMemo(() => {
     let list = apps;
@@ -95,6 +99,7 @@ function Browse() {
     () => categories.filter((c) => usedCategoryNames.has(c.name)),
     [categories, usedCategoryNames],
   );
+  const categoryLabel = useCategoryLabel();
 
   return (
     <div>
@@ -171,7 +176,7 @@ function Browse() {
                 className="chip"
                 data-active={activeCategory === c.name}
               >
-                {c.name}
+                {categoryLabel(c)}
                 <span className="ml-1 font-mono text-[10px] text-ink-mute">
                   {usedCategoryNames.get(c.name) || 0}
                 </span>

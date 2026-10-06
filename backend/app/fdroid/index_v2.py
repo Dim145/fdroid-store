@@ -14,12 +14,40 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from app.fdroid.index_v1 import F_DROID_INDEX_VERSION
+from app.fdroid.anti_features import definitions_for as anti_feature_definitions
+from app.fdroid.categories_catalog import localized_descriptions, localized_names
+from app.fdroid.donations import funding_for
+from app.fdroid.index_v1 import F_DROID_INDEX_VERSION, suggestion_fallback
 from app.models.apk import Apk
 from app.models.app import App
 from app.models.repo_config import RepoConfig
 
 DEFAULT_LOCALE = "en-US"
+
+# The one release channel F-Droid clients let users opt into (per app, via
+# "Allow beta updates" in 2.0). Same constant as fdroidserver / the client.
+RELEASE_CHANNEL_BETA = "Beta"
+_RELEASE_CHANNELS: dict[str, Any] = {
+    RELEASE_CHANNEL_BETA: {
+        "name": {DEFAULT_LOCALE: "Beta", "fr": "Bêta"},
+        "description": {
+            DEFAULT_LOCALE: "Pre-release versions, only installed if you allow beta updates.",
+            "fr": "Préversions, installées uniquement si vous autorisez les mises à jour bêta.",
+        },
+    },
+}
+
+
+def is_beta_version(app: App, apk: Apk, published: list[Apk] | None = None) -> bool:
+    """fdroidserver's rule: anything above the suggested (CurrentVersionCode)
+    version is Beta. Covers both a pinned suggested version (newer uploads
+    are held back) and APKs uploaded as beta (they never bump the suggested
+    version). Without a suggested version there is no stable baseline, so
+    nothing is held back. Pass the ``published`` APKs the index carries to
+    resolve a dangling pin (see ``index_v1.suggestion_fallback``)."""
+    fallback = suggestion_fallback(app, published) if published is not None else None
+    suggested = fallback.version_code if fallback else app.suggested_version_code
+    return suggested is not None and apk.version_code > suggested
 
 
 def _ts_ms(value: datetime | None) -> int:
@@ -72,8 +100,10 @@ def _build_package(
     apks: list[Apk],
     file_meta: dict[str, dict[str, Any]] | None,
 ) -> dict[str, Any]:
+    # ``added`` drives F-Droid 2.0's "New apps" carousel (added < 14 days),
+    # so it must be the first publication, not the draft's creation date.
     metadata: dict[str, Any] = {
-        "added": _ts_ms(app.created_at),
+        "added": _ts_ms(app.first_published_at or app.created_at),
         "lastUpdated": _ts_ms(app.last_published_at or app.updated_at),
     }
     # fdroidserver omits "Unknown" license rather than emitting it
@@ -118,14 +148,18 @@ def _build_package(
         metadata["issueTracker"] = app.issue_tracker
     if app.translation:
         metadata["translation"] = app.translation
-    if app.donate:
-        metadata["donate"] = app.donate
-    if app.liberapay:
-        metadata["liberapay"] = app.liberapay
-    if app.bitcoin:
-        metadata["bitcoin"] = app.bitcoin
-    if app.open_collective:
-        metadata["openCollective"] = app.open_collective
+    # ``donate`` is a list in v2 (``MetadataV2.donate: List<String>``); a bare
+    # string makes kotlinx reject the whole index. The other three are IDs the
+    # client turns into links itself — see ``app.fdroid.donations``.
+    funding = funding_for(app)
+    if funding.donate:
+        metadata["donate"] = funding.donate
+    if funding.liberapay:
+        metadata["liberapay"] = funding.liberapay
+    if funding.bitcoin:
+        metadata["bitcoin"] = funding.bitcoin
+    if funding.open_collective:
+        metadata["openCollective"] = funding.open_collective
     icon_entry = _file_entry(app.icon_path, file_meta)
     if icon_entry is not None:
         metadata["icon"] = {DEFAULT_LOCALE: icon_entry}
@@ -199,11 +233,18 @@ def _build_package(
             if trimmed:
                 version_obj["whatsNew"] = trimmed
         if apk.anti_features:
-            # v2 shape: ``{label: {locale: reason}}``. We don't currently
-            # capture per-flag reasons (admins overwhelmingly leave them
-            # empty in practice), so each label maps to an empty dict — the
-            # client renders the badge without a tooltip text.
-            version_obj["antiFeatures"] = {flag: {} for flag in apk.anti_features}
+            # v2 shape: ``{label: {locale: reason}}``. The reason is optional
+            # free text (F-Droid 2.0 shows it under the anti-feature, and
+            # appends it to the red banner for KnownVuln); flags without one
+            # map to an empty dict. Every flag also needs a definition in the
+            # repo block — see ``build_index_v2``.
+            reasons = apk.anti_feature_reasons or {}
+            version_obj["antiFeatures"] = {
+                flag: ({DEFAULT_LOCALE: reasons[flag]} if reasons.get(flag) else {})
+                for flag in apk.anti_features
+            }
+        if is_beta_version(app, apk, apks):
+            version_obj["releaseChannels"] = [RELEASE_CHANNEL_BETA]
         versions[apk.sha256] = version_obj
 
     return {"metadata": metadata, "versions": versions}
@@ -216,6 +257,7 @@ def build_index_v2(
     mirrors: list[str] | None = None,
     file_meta: dict[str, dict[str, Any]] | None = None,
     timestamp_ms: int | None = None,
+    web_base_url: str | None = None,
 ) -> bytes:
     """``file_meta`` maps each referenced icon storage key to its content
     hash + size. The F-Droid v2 client rejects icon entries that don't carry
@@ -224,25 +266,37 @@ def build_index_v2(
     ``timestamp_ms`` MUST be passed the same value used for ``entry.json``
     (see ``build_entry_json``): the F-Droid v2 client binds the signed entry
     to this index by both checksum AND timestamp, so a mismatch is rejected.
+
+    ``web_base_url`` becomes ``repo.webBaseUrl``: F-Droid 2.0's "Share"
+    action sends ``<webBaseUrl>/<packageName>``, and offers no share link at
+    all without it.
     """
     now_ms = timestamp_ms if timestamp_ms is not None else int(datetime.now(UTC).timestamp() * 1000)
     packages: dict[str, Any] = {}
-    categories_seen: set[str] = set()
+    categories_seen: dict[str, str | None] = {}
+    anti_features_seen: set[str] = set()
+    has_beta = False
     for app in apps:
         published = [a for a in app.apks if a.status.value == "published"]
         if not published:
             continue
         # apks come ordered version_code desc, so [0] is the latest
         published.sort(key=lambda a: a.version_code, reverse=True)
-        packages[app.package_name] = _build_package(app, published, file_meta)
+        package = _build_package(app, published, file_meta)
+        packages[app.package_name] = package
         for c in app.categories:
-            categories_seen.add(c.name)
+            categories_seen[c.name] = c.description
+        for version in package["versions"].values():
+            anti_features_seen.update(version.get("antiFeatures", {}))
+            has_beta = has_beta or bool(version.get("releaseChannels"))
 
     repo_block: dict[str, Any] = {
         "name": _localized(repo_config.name) or {DEFAULT_LOCALE: "Repository"},
         "address": repo_config.address,
         "timestamp": now_ms,
     }
+    if web_base_url:
+        repo_block["webBaseUrl"] = web_base_url
     desc = _localized(repo_config.description)
     if desc is not None:
         repo_block["description"] = desc
@@ -251,10 +305,20 @@ def build_index_v2(
         repo_block["icon"] = {DEFAULT_LOCALE: repo_icon}
     if mirrors:
         repo_block["mirrors"] = [{"url": m} for m in mirrors]
+    if anti_features_seen:
+        repo_block["antiFeatures"] = anti_feature_definitions(anti_features_seen)
     if categories_seen:
-        repo_block["categories"] = {
-            c: {"name": {DEFAULT_LOCALE: c}} for c in sorted(categories_seen)
-        }
+        # The ID is what F-Droid 2.0 keys its icon + Discover group on; the
+        # localized name/description are what it displays and searches.
+        repo_block["categories"] = {}
+        for name in sorted(categories_seen):
+            category: dict[str, Any] = {"name": localized_names(name)}
+            descriptions = localized_descriptions(name, categories_seen[name])
+            if descriptions:
+                category["description"] = descriptions
+            repo_block["categories"][name] = category
+    if has_beta:
+        repo_block["releaseChannels"] = _RELEASE_CHANNELS
 
     payload: dict[str, Any] = {"repo": repo_block, "packages": packages}
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

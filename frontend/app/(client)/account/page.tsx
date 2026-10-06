@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { api, API_URL, getAccessToken, type ApiKey, type CurrentUser } from "@/lib/api";
+import { api, type ApiKey, type CurrentUser } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { useAuth } from "@/lib/auth-store";
@@ -640,20 +640,13 @@ function DataExportCard({ user }: { user: CurrentUser }) {
     setBusy(true);
     setMsg(null);
     try {
-      const token = getAccessToken();
-      if (!token) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/api/v1/me/export`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      // Pull the filename from Content-Disposition; fall back to a sane
-      // default if the header is stripped by a CDN.
-      const dispo = res.headers.get("content-disposition") || "";
-      const match = dispo.match(/filename="([^"]+)"/);
-      const filename =
-        match?.[1] ||
-        `fdroid-store-export-${user.username}-${new Date().toISOString().slice(0, 10)}.json`;
+      // Goes through the API client so an expired access token is
+      // refreshed (and the call replayed) instead of failing with a 401.
+      // The filename comes from Content-Disposition, with a sane default
+      // if the header is stripped by a CDN.
+      const { filename, blob } = await api.exportMyData(
+        `fdroid-store-export-${user.username}-${new Date().toISOString().slice(0, 10)}.json`,
+      );
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -1064,6 +1057,10 @@ function NewKeyCelebration({
           <Credential label={t("account.apiKey.username")} value={username} mono />
           <Credential label={t("account.apiKey.encodedUrl")} value={authUrl} mono small />
           <p className="text-xs text-ink-mute">{t("account.apiKey.usernameNote")}</p>
+          {/* F-Droid only reads credentials when a repository is *added*:
+              re-adding a known repo is refused, and the Basic-auth editor
+              only shows for repos that already have a username. */}
+          <p className="text-xs text-ink-mute">{t("account.apiKey.replaceRepoNote")}</p>
         </div>
       </div>
     </div>

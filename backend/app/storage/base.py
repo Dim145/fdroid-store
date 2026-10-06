@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import abc
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO
 
@@ -46,6 +47,12 @@ class Storage(abc.ABC):
     async def size(self, key: str) -> int: ...
 
     # Optional hooks ----------------------------------------------------------
+    async def list_prefix(self, prefix: str) -> list[tuple[str, datetime]]:
+        """``(key, last_modified)`` of every object under ``prefix``. Used
+        for housekeeping (stale staged uploads); backends that can't list
+        return nothing."""
+        return []
+
     def local_path(self, key: str) -> Path | None:
         """Return the on-disk path if the backend supports direct serving."""
         return None

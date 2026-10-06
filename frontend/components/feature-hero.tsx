@@ -7,6 +7,7 @@ import { AppIcon } from "@/components/app-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { type AppSummary } from "@/lib/api";
+import { useCategoryLabel } from "@/lib/categories";
 
 type Props = {
   app: AppSummary;
@@ -19,6 +20,7 @@ type Props = {
  * Mobile collapses to a stacked layout with the icon on top. */
 export function FeatureHero({ app, kicker }: Props) {
   const { t } = useTranslation();
+  const categoryLabel = useCategoryLabel();
   const kickerLabel = kicker ?? t("featureHero.defaultKicker");
   let h = 0;
   for (let i = 0; i < app.name.length; i++) h = (h * 31 + app.name.charCodeAt(i)) | 0;
@@ -55,7 +57,7 @@ export function FeatureHero({ app, kicker }: Props) {
             {app.name}
           </h2>
           <p className="mt-1 text-sm text-ink-mute md:text-base">
-            {app.author_name || app.categories[0]?.name || t("featureHero.selfHostedRelease")}
+            {app.author_name || (app.categories[0] && categoryLabel(app.categories[0])) || t("featureHero.selfHostedRelease")}
           </p>
           {app.summary && (
             <p className="mt-3 max-w-2xl text-sm text-ink-soft md:text-base">
@@ -75,7 +77,7 @@ export function FeatureHero({ app, kicker }: Props) {
               <Badge variant="accent">{t("appCard.private")}</Badge>
             )}
             {app.categories.slice(0, 1).map((c) => (
-              <Badge key={c.id} variant="outline">{c.name}</Badge>
+              <Badge key={c.id} variant="outline">{categoryLabel(c)}</Badge>
             ))}
           </div>
         </div>

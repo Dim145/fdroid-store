@@ -1,15 +1,17 @@
 # nginx config baked into the frontend image. Processed with envsubst at
-# container start (the official nginx image's docker-entrypoint expands any
-# ``${VAR}`` referenced in NGINX_ENVSUBST_TEMPLATE_SUFFIX files), so this
-# single file works for both the bundled docker-compose deployment and any
-# external host that exports a different ``UPSTREAM_BACKEND``.
+# container start by the official nginx image's entrypoint
+# (20-envsubst-on-templates.sh). Only the variables matched by
+# ``NGINX_ENVSUBST_FILTER`` (see the Dockerfile) are substituted, so the
+# nginx ``$variables`` below are never touched. This single file works for
+# both the bundled docker-compose deployment and any external host that
+# exports a different ``UPSTREAM_BACKEND``.
 #
 # The image serves three things on the same port:
 #   * static SPA pages from /usr/share/nginx/html (with SPA-style fallback)
 #   * /api/, /fdroid/repo/, /r/ reverse-proxied to the FastAPI backend
 #   * /_protected/ as an internal X-Accel-Redirect target for /data/storage
 #
-# Variables consumed:
+# Variables consumed (defaults + validation: docker-entrypoint.d/*.envsh):
 #   UPSTREAM_BACKEND     "host:port" of the backend service. Default in
 #                        docker-compose: ``backend:8000``.
 #   ENABLE_HSTS          "1" to emit ``Strict-Transport-Security``. Off by
@@ -17,16 +19,54 @@
 #                        Production deployments behind TLS should turn it
 #                        on (or set it at their upstream TLS terminator).
 #   HSTS_MAX_AGE         seconds for HSTS. Defaults to 31536000 (1y).
+#   TRUSTED_PROXY_CIDRS  IPs/CIDRs (comma or space separated) of the reverse
+#                        proxy in front of this container, whose
+#                        X-Forwarded-For is trusted for the client IP.
+#                        Empty (default) = off, the TCP peer is the client.
+#   NGINX_RESOLVER       DNS server(s) used to resolve UPSTREAM_BACKEND.
+#                        Default 127.0.0.11 (Docker's embedded DNS).
+#   API_MAX_BODY_SIZE    request-body cap for every route except the upload
+#                        routes listed under /api/ below. Default 10m.
+#   UPLOAD_MAX_BODY_SIZE request-body cap for those upload routes (APKs,
+#                        media, backup restore). Default 2100m: the admin
+#                        APK cap (upload_max_apk_mb) goes up to 2000 MB,
+#                        plus multipart overhead.
 
-# Docker's embedded DNS — refresh records every 10s so a backend restart
-# doesn't strand a stale IP.
-resolver 127.0.0.11 valid=10s ipv6=off;
+# Docker's embedded DNS by default — refresh records every 10s so a backend
+# restart doesn't strand a stale IP.
+resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+
+# ---- Access log without credentials ---------------------------------------
+# The path-token route carries a full API key in the URL (/r/<key>/…) and
+# browser downloads carry a signed ``?t=<token>``. The stock ``$request``
+# would log both verbatim — including /r/ APK downloads, which finish in the
+# internal /_protected/ location after the backend's X-Accel-Redirect, so
+# ``access_log off`` on /r/ alone never covered them. Same fields as the
+# stock ``main`` format, with those two values masked.
+map $request_uri $fdroid_log_uri_r {
+    default $request_uri;
+    "~*^(?<fdroid_lp>[^?]*?/(?:r|%72)/)[^/?]*(?<fdroid_ls>.*)$" "$fdroid_lp[redacted]$fdroid_ls";
+}
+map $fdroid_log_uri_r $fdroid_log_uri {
+    default $fdroid_log_uri_r;
+    "~*^(?<fdroid_lq>[^?]*\?(?:.*&)?(?:t|%74)=)[^&]*(?<fdroid_lt>.*)$" "$fdroid_lq[redacted]$fdroid_lt";
+}
+log_format fdroid_redacted '$remote_addr - $remote_user [$time_local] '
+                           '"$request_method $fdroid_log_uri $server_protocol" '
+                           '$status $body_bytes_sent "$http_referer" '
+                           '"$http_user_agent" "$http_x_forwarded_for"';
 
 server {
     listen 8080;
     server_name _;
-    client_max_body_size 500m;
     server_tokens off;
+    access_log /var/log/nginx/access.log fdroid_redacted;
+
+    # Request-body cap for every route except the upload routes nested under
+    # /api/ below (UPLOAD_MAX_BODY_SIZE). Kept small so an unauthenticated
+    # client can't push hundreds of MB into an arbitrary endpoint (FastAPI
+    # reads a JSON body into memory before any auth dependency runs).
+    client_max_body_size ${API_MAX_BODY_SIZE};
 
     gzip on;
     gzip_types text/plain application/json application/javascript text/css application/xml;
@@ -62,35 +102,72 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    # ---- Client IP behind a CDN / external load balancer -----------------
+    # ---- Client IP behind a reverse proxy / CDN --------------------------
     # The proxied locations below set ``X-Forwarded-For $remote_addr`` so the
     # backend keys per-IP rate limits + audit logs on the TRUE client. When
-    # this nginx is itself the edge that's correct. But if a CDN / L7 LB sits
-    # in front, ``$remote_addr`` is the CDN's IP and every visitor collapses
-    # into one rate-limit bucket (and audit logs lose the real IP). In that
-    # case uncomment + scope the realip directives below so ``$remote_addr``
-    # is rewritten to the real client from the trusted upstream's header.
-    # Set the CIDRs to YOUR provider's egress ranges — NEVER ``0.0.0.0/0``,
-    # which would let any client spoof their IP again.
-    #   set_real_ip_from 10.0.0.0/8;     # <-- your CDN/LB egress range(s)
-    #   real_ip_header X-Forwarded-For;
+    # this nginx is itself the edge that's correct. But behind BunkerWeb /
+    # Traefik / a CDN, ``$remote_addr`` is the proxy's IP and every visitor
+    # collapses into one rate-limit bucket (and audit logs lose the real IP).
+    # Set TRUSTED_PROXY_CIDRS to that proxy's address(es), as seen by this
+    # container, and the entrypoint shim renders here:
+    #   set_real_ip_from <cidr>; …  real_ip_header X-Forwarded-For;
     #   real_ip_recursive on;
+    # so ``$remote_addr`` (forwarded to the backend + logged) becomes the
+    # client taken from the trusted proxy's X-Forwarded-For. Empty (default)
+    # renders nothing. Never trust 0.0.0.0/0 (the shim refuses it): any
+    # client could spoof its IP again.
+    ${REAL_IP_DIRECTIVES}
 
     # ---- Backend reverse proxy -------------------------------------------
     # ``set`` + a variable in proxy_pass forces nginx to use the resolver
     # at request time instead of caching the IP at config-load (see comment
-    # at the top of the file).
+    # at the top of the file). Set once at server level: rewrite-module
+    # directives aren't inherited by the nested location under /api/.
+    set $upstream_backend ${UPSTREAM_BACKEND};
+
+    # Never spool proxied bodies to disk. nginx-unprivileged keeps
+    # client_body_temp_path / proxy_temp_path under /tmp — a 32 MB tmpfs in
+    # the reference compose — so a buffered upload > ~32 MB (APK, backup
+    # restore) failed with ENOSPC / 500, and a large buffered API response
+    # (backup download) was truncated. Request bodies now stream to the
+    # backend as they arrive; responses keep the small in-memory buffers and
+    # past those nginx applies back-pressure instead of writing a temp file.
+    proxy_request_buffering off;
+    proxy_max_temp_file_size 0;
+
     location /api/ {
-        set $upstream_backend ${UPSTREAM_BACKEND};
         proxy_pass http://$upstream_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # HTTP/1.1 upstream so a chunked upload streams too (with 1.0 nginx
+        # must buffer a chunked body to compute its Content-Length).
+        proxy_http_version 1.1;
         proxy_read_timeout 300;
+
+        # Upload routes — the only ones allowed bodies above
+        # API_MAX_BODY_SIZE. Every ``UploadFile`` endpoint of the backend:
+        #   POST /api/v1/apks/inspect               APK (inspect + stage)
+        #   POST /api/v1/apks/upload/{app_id}       APK (web UI + CI)
+        #   POST /api/v1/apps/with-apk              APK (create app)
+        #   POST /api/v1/apps/{id}/icon             image, 4 MiB
+        #   POST /api/v1/apps/{id}/feature-graphic  image, 8 MiB
+        #   POST /api/v1/apps/{id}/promo-graphic    image, 4 MiB
+        #   POST /api/v1/apps/{id}/tv-banner        image, 12 MiB
+        #   POST /api/v1/apps/{id}/screenshots      up to 20 x 12 MiB
+        #   POST /api/v1/admin/repo/icon            image, 4 MiB
+        #   POST /api/v1/admin/backup/restore       encrypted backup archive
+        # A new upload endpoint must be added here, or it gets 413 above
+        # API_MAX_BODY_SIZE. The backend still enforces its own per-route
+        # caps (upload_max_apk_mb, media limits). Inherits everything above
+        # except proxy_pass.
+        location ~ ^/api/v1/(apks/(inspect|upload/[^/]+)|apps/(with-apk|[^/]+/(icon|feature-graphic|promo-graphic|tv-banner|screenshots))|admin/(repo/icon|backup/restore))/?$ {
+            client_max_body_size ${UPLOAD_MAX_BODY_SIZE};
+            proxy_pass http://$upstream_backend;
+        }
     }
 
     location /fdroid/ {
-        set $upstream_backend ${UPSTREAM_BACKEND};
         proxy_pass http://$upstream_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -111,12 +188,15 @@ server {
     # The path-token route puts the full API key in the URL path. Nginx
     # would otherwise log every request line — verbatim plaintext keys in
     # access logs is a bulk-credential leak waiting for one rolled log to
-    # turn into account takeover for every F-Droid client. Turn the log
-    # off for the credential-bearing path; the backend still records
-    # authenticated downloads in ``download_events``.
+    # turn into account takeover for every F-Droid client. Turn the access
+    # log off for the credential-bearing path (the server-level format masks
+    # the key anyway); the backend still records authenticated downloads in
+    # ``download_events``. error_log lines embed the raw request line (and
+    # the upstream URL), which can't be masked, so only ``crit`` and above
+    # are logged here; backend outages still show up via /api/ and /fdroid/.
     location /r/ {
         access_log off;
-        set $upstream_backend ${UPSTREAM_BACKEND};
+        error_log /var/log/nginx/error.log crit;
         proxy_pass http://$upstream_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -140,6 +220,11 @@ server {
         types { application/vnd.android.package-archive apk; }
         default_type application/octet-stream;
         send_timeout 3600;
+        # The access log line is masked (server-level format), but a
+        # "file not found" error_log line would carry the original request
+        # line — /r/<key>/… for path-token downloads. The 404 itself is
+        # still in the access log.
+        log_not_found off;
     }
 
     # ---- Static SPA routing ----------------------------------------------

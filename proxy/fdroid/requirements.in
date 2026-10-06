@@ -1,0 +1,13 @@
+# Direct runtime dependencies of the reference F-Droid proxy. The image
+# installs the fully pinned requirements.txt generated from this file;
+# regenerate it (from the repo root) whenever this file changes:
+#
+#     uv pip compile proxy/fdroid/requirements.in --universal \
+#         --python-version 3.13 -c backend/requirements.txt \
+#         -o proxy/fdroid/requirements.txt
+#
+# ``-c backend/requirements.txt`` keeps every shared package on the exact
+# version the backend image ships (one set of versions to track/patch).
+fastapi[standard]>=0.136
+uvicorn[standard]>=0.47
+httpx>=0.27

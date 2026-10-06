@@ -8,9 +8,9 @@ The endpoint:
 """
 from __future__ import annotations
 
-import hashlib
+import json
+import re
 import uuid
-from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from urllib.parse import quote
 
@@ -19,18 +19,32 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, get_api_key_from_basic_auth, get_current_user_optional, is_public_mode
+from app.api.deps import (
+    DbSession,
+    _api_key_from_secret,
+    get_api_key_from_basic_auth,
+    get_current_user_optional,
+    is_public_mode,
+)
+from app.core.client_ip import client_ip, hash_ip
 from app.core.config import settings
 from app.core.download_token import verify_download_token, verify_media_token
-from app.core.security import parse_api_key, verify_api_key_secret
-from app.fdroid.repo_builder import REPO_PUBLIC_PREFIX, user_private_prefix
+from app.core.logging import get_logger
+from app.fdroid.repo_builder import (
+    REPO_PUBLIC_NSFW_PREFIX,
+    REPO_PUBLIC_PREFIX,
+    user_private_prefix,
+)
 from app.models.api_key import ApiKey
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppStatus, AppVisibility
 from app.models.audit import DownloadEvent
+from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
-from app.storage import get_storage
+from app.storage import Storage, get_storage
 from app.storage.local import LocalStorage
+
+log = get_logger(__name__)
 
 # Public + Basic-auth endpoints. Mounted at /fdroid/repo in main.py.
 router = APIRouter()
@@ -60,10 +74,53 @@ _INDEX_FILES = {
 }
 
 
-def _hash_ip(ip: str | None) -> str | None:
-    if not ip:
-        return None
-    return hashlib.sha256(ip.encode("utf-8")).hexdigest()
+# One storage-key segment — the alphabet every server-generated key uses,
+# and all ``LocalStorage`` accepts. A request naming anything else can't
+# match a stored file: 404 it up front rather than let the storage layer
+# raise (a 500 on e.g. ``icons/a%20b.png``). Also refuses separators and
+# dotfiles.
+_SAFE_SEGMENT = re.compile(r"[A-Za-z0-9._-]{1,255}")
+
+
+def _safe_segments(*segments: str) -> bool:
+    return all(
+        _SAFE_SEGMENT.fullmatch(seg) is not None and not seg.startswith(".")
+        for seg in segments
+    )
+
+
+async def _exists(storage: Storage, key: str) -> bool:
+    """``storage.exists`` for the serving paths. A key the backend refuses
+    to resolve is simply missing; a storage failure (S3 timeout, 5xx, 403)
+    is a 503 — never a "missing" that would serve another index variant or
+    locale in its place."""
+    try:
+        return await storage.exists(key)
+    except ValueError:
+        return False
+    except Exception as exc:  # noqa: BLE001 — any backend failure
+        log.warning("storage lookup failed", key=key, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage temporarily unavailable",
+            headers={"Retry-After": "5"},
+        ) from exc
+
+
+def _starts_download(range_header: str | None) -> bool:
+    """Whether an APK GET counts as a download: the whole file (no
+    ``Range``) or a range from byte 0. Resumes and parallel chunks
+    (``bytes=N-`` with N > 0, suffix ranges) belong to a download that was
+    already counted; an unparsable byte range isn't served as one."""
+    if not range_header:
+        return True
+    unit, _, ranges = range_header.partition("=")
+    if unit.strip().lower() != "bytes":
+        return True  # unknown unit: ignored, the whole file is sent
+    start, dash, _ = ranges.split(",", 1)[0].partition("-")
+    start = start.strip()
+    # ``isascii``: ``"²".isdigit()`` is true but ``int("²")`` raises.
+    return bool(dash) and start.isascii() and start.isdigit() and int(start) == 0
 
 
 def _cache_control_for(storage_key: str) -> str:
@@ -110,7 +167,12 @@ async def _serve_storage_object(
     headers = {"Cache-Control": _cache_control_for(storage_key)}
     storage = get_storage()
     if isinstance(storage, LocalStorage):
-        path = storage.local_path(storage_key)
+        try:
+            path = storage.local_path(storage_key)
+        except ValueError:  # not a key LocalStorage can hold
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+            ) from None
         if not path.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
         if allow_x_accel and settings.x_accel_redirect_enabled:
@@ -126,7 +188,7 @@ async def _serve_storage_object(
         # FileResponse sets Content-Length from the stat AND honours Range
         # requests (206), so a dropped download can be resumed.
         return FileResponse(str(path), media_type=content_type, headers=headers)
-    if not await storage.exists(storage_key):
+    if not await _exists(storage, storage_key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
     # Two response shapes depending on size:
     #
@@ -167,7 +229,7 @@ async def _dispatch_root(
 ) -> Response:
     """Shared dispatcher for both Basic-auth and path-token routes."""
     if filename in _INDEX_FILES:
-        return await _serve_index(filename, api_key)
+        return await _serve_index(filename, db, api_key)
     if filename.lower().endswith(".apk"):
         return await _serve_apk(
             filename,
@@ -227,8 +289,12 @@ async def _media_anonymously_visible(
         every <img> fetch) belonging to the owner / an admin.
       * Other API keys and anonymous callers are 404'd, indistinguishable
         from a typo.
-      * Repo-level media (no matching App row, e.g. the catalogue icon)
-        stays anonymous so the logged-out home page renders.
+      * No App row (deleted app, typo) → refused: the files of a deleted
+        app may outlive it. Repo-level media (the catalogue icon) has no
+        package and never gets here, so the logged-out pages still render.
+
+    Private mode (no anonymous access at all) is enforced by
+    ``_media_visible`` before this runs.
     """
     app_row = (
         await db.execute(
@@ -236,7 +302,7 @@ async def _media_anonymously_visible(
         )
     ).scalar_one_or_none()
     if app_row is None:
-        return True
+        return False
     if app_row.visibility == AppVisibility.PUBLIC and app_row.status == AppStatus.PUBLISHED:
         return True
     if (
@@ -266,6 +332,32 @@ async def _media_anonymously_visible(
     return False
 
 
+async def _media_visible(
+    *,
+    db,
+    package_name: str,
+    api_key: ApiKey | None,
+    bearer_user: User | None,
+    token: str | None,
+) -> bool:
+    """Gate for every per-package media file.
+
+    A media token (``?t=``, minted for a caller allowed to see the app)
+    always passes. In private mode anything else needs credentials — an API
+    key (Basic auth / ``/r/<key>``, which F-Droid clients send) or the SPA's
+    JWT (added by its Service Worker, ``frontend/public/sw.js``) — or the
+    route would leak images and confirm which packages exist. Then the
+    per-app rule of ``_media_anonymously_visible`` applies.
+    """
+    if token and verify_media_token(package_name, token):
+        return True
+    if api_key is None and bearer_user is None and not await is_public_mode(db):
+        return False
+    return await _media_anonymously_visible(
+        db=db, package_name=package_name, api_key=api_key, bearer_user=bearer_user,
+    )
+
+
 @router.get("/icons/{filename}")
 async def serve_icon(
     filename: str,
@@ -279,17 +371,19 @@ async def serve_icon(
     Refuse anonymously serving icons of private / unpublished apps — the
     file naming (``icons/<package>.png``) made the F-Droid serve route a
     package-name oracle for private packages (CWE-203). Catalogue
-    thumbnails of public apps stay public so the logged-out home page
-    still renders. Owners' SPA sessions pass a ``?t=<media_token>`` that
-    binds to the package (see ``download_token.sign_media_token``); the
-    token survives the lack of an Authorization header on ``<img>`` tags.
+    thumbnails of public apps stay public in public mode so the logged-out
+    home page still renders; the repo's own icon stays public in every
+    mode (login page). Owners' SPA sessions pass a ``?t=<media_token>``
+    that binds to the package (see ``download_token.sign_media_token``);
+    the token survives the lack of an Authorization header on ``<img>``.
     """
-    # Reject any path separator / dotfile before the name reaches the
-    # storage key, mirroring the segment guard the other media routes use.
-    # The FastAPI ``{filename}`` converter already refuses ``/`` and the
-    # local backend re-anchors under its root, but the S3 backend has no
-    # such barrier — so defend in depth here rather than rely on either.
-    if "/" in filename or "\\" in filename or filename.startswith("."):
+    # Reject any path separator / dotfile / character no storage key uses
+    # before the name reaches the storage key, mirroring the other media
+    # routes. The FastAPI ``{filename}`` converter already refuses ``/``
+    # and the local backend re-anchors under its root, but the S3 backend
+    # has no such barrier — so defend in depth here rather than rely on
+    # either.
+    if not _safe_segments(filename):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
     # Filename layout is ``<package>.png``, ``<package>-custom.png``,
     # ``fdroid-icon.png`` (the repo's own icon), or ``repo-icon-<ts>.png``.
@@ -298,16 +392,14 @@ async def serve_icon(
     package_name: str | None = None
     if not base.startswith("repo-icon") and base != "fdroid-icon":
         package_name = base.removesuffix("-custom")
-    if package_name:
-        token_ok = bool(t and verify_media_token(package_name, t))
-        if not token_ok and not await _media_anonymously_visible(
-            db=db, package_name=package_name, api_key=api_key,
-            bearer_user=bearer_user,
-        ):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
+    if package_name and not await _media_visible(
+        db=db, package_name=package_name, api_key=api_key,
+        bearer_user=bearer_user, token=t,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
     storage = get_storage()
     key = f"icons/{filename}"
-    if not await storage.exists(key):
+    if not await _exists(storage, key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Icon not found")
     return await _serve_storage_object(key, content_type=_content_type_for(filename))
 
@@ -359,20 +451,18 @@ async def serve_singleton_media(
 ) -> Response:
     if filename not in _ALLOWED_SINGLETON_MEDIA:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    for seg in (package, locale, filename):
-        if not seg or "/" in seg or seg.startswith("."):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    token_ok = bool(t and verify_media_token(package, t))
-    if not token_ok and not await _media_anonymously_visible(
-        db=db, package_name=package, api_key=api_key, bearer_user=bearer_user,
+    if not _safe_segments(package, locale, filename):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not await _media_visible(
+        db=db, package_name=package, api_key=api_key, bearer_user=bearer_user, token=t,
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     storage = get_storage()
     key = f"{package}/{locale}/{filename}"
-    if not await storage.exists(key):
+    if not await _exists(storage, key):
         if locale != _MEDIA_FALLBACK_LOCALE:
             fallback = f"{package}/{_MEDIA_FALLBACK_LOCALE}/{filename}"
-            if await storage.exists(fallback):
+            if await _exists(storage, fallback):
                 key = fallback
             else:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -398,20 +488,18 @@ async def serve_media(
     if kind not in _ALLOWED_MEDIA_KINDS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     # Defensive: refuse traversal-y components
-    for seg in (package, locale, kind, filename):
-        if not seg or "/" in seg or seg.startswith("."):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    token_ok = bool(t and verify_media_token(package, t))
-    if not token_ok and not await _media_anonymously_visible(
-        db=db, package_name=package, api_key=api_key, bearer_user=bearer_user,
+    if not _safe_segments(package, locale, kind, filename):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not await _media_visible(
+        db=db, package_name=package, api_key=api_key, bearer_user=bearer_user, token=t,
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     storage = get_storage()
     key = f"{package}/{locale}/{kind}/{filename}"
-    if not await storage.exists(key):
+    if not await _exists(storage, key):
         if locale != _MEDIA_FALLBACK_LOCALE:
             fallback = f"{package}/{_MEDIA_FALLBACK_LOCALE}/{kind}/{filename}"
-            if await storage.exists(fallback):
+            if await _exists(storage, fallback):
                 key = fallback
             else:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -436,26 +524,14 @@ def _content_type_for(filename: str) -> str:
 async def _api_key_from_token_path(token: str, db) -> ApiKey:
     """Resolve a URL-path token to an active ApiKey.
 
-    Tokens that don't parse, don't match, or aren't active all return 404 (not
-    401) so we don't leak information about which prefixes exist.
+    Same checks as the Basic-auth path (``deps._api_key_from_secret``:
+    parse, active, secret, enabled owner, throttled ``last_used_at``).
+    Every failure returns 404 (not 401) so we don't leak information about
+    which prefixes exist.
     """
-    parts = parse_api_key(token)
-    if parts is None:
+    key = await _api_key_from_secret(token, db)
+    if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    prefix, secret = parts
-    key = (
-        await db.execute(select(ApiKey).where(ApiKey.prefix == prefix))
-    ).scalar_one_or_none()
-    if key is None or not key.is_active:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if not verify_api_key_secret(secret, key.hashed_secret):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    # Same throttle as deps.py: bursts of F-Droid client requests share a
-    # single ``last_used_at`` write per minute.
-    now = datetime.now(UTC)
-    if key.last_used_at is None or (now - key.last_used_at) >= timedelta(minutes=1):
-        key.last_used_at = now
-        await db.flush()
     return key
 
 
@@ -518,27 +594,51 @@ async def serve_token_media(
 
 
 # --------------------------------------------------------------------------
-async def _serve_index(filename: str, api_key: ApiKey | None) -> Response:
-    """Return the right index variant for this caller.
+async def _index_prefix(db, storage: Storage, api_key: ApiKey | None) -> str:
+    """The index variant this caller gets — decided the same way whichever
+    of the three files is asked for, so a client never pairs an
+    ``entry.jar`` from one variant with an ``index-v2.json`` from another.
 
-    An API key with ``can_download_private`` resolves to its owner's per-user
-    private index (``repo/private/u_<user_id>/...``). If that user has no
-    private apps right now, the file is absent and we fall through to the
-    public index — which gives the same view as an anonymous caller would
-    get on a public-mode repo, plus access to private *download* URLs the
-    user owns elsewhere in the API.
+    An API key with ``can_download_private`` resolves to its owner's
+    per-user variant (``repo/private/u_<user_id>/...``) when:
+      * the user is in ``RepoConfig.private_index_owner_ids`` — the last
+        rebuild still produces their variant. A user the rebuild dropped
+        never gets their old files back, even if deleting them failed;
+      * its ``entry.jar`` exists: it is uploaded last and deleted first, so
+        the variant is complete.
+    Otherwise such a key whose user opted into NSFW gets the shared
+    public + NSFW variant (same completeness rule). Anyone else gets the
+    public index — the same view as an anonymous caller on a public-mode
+    repo.
     """
+    if api_key is None or not api_key.can_download_private:
+        return REPO_PUBLIC_PREFIX
+    raw = (
+        await db.execute(select(RepoConfig.private_index_owner_ids).limit(1))
+    ).scalar_one_or_none()
+    try:
+        owners = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        owners = []
+    if isinstance(owners, list) and str(api_key.user_id) in owners:
+        prefix = user_private_prefix(api_key.user_id)
+        if await _exists(storage, f"{prefix}/entry.jar"):
+            return prefix
+    show_nsfw = (
+        await db.execute(select(User.show_nsfw).where(User.id == api_key.user_id))
+    ).scalar_one_or_none()
+    if show_nsfw and await _exists(storage, f"{REPO_PUBLIC_NSFW_PREFIX}/entry.jar"):
+        return REPO_PUBLIC_NSFW_PREFIX
+    return REPO_PUBLIC_PREFIX
+
+
+async def _serve_index(filename: str, db, api_key: ApiKey | None) -> Response:
+    """Return the right index variant for this caller (see ``_index_prefix``).
+    A storage failure is a 503, never a silent fall back to the public
+    variant — a private user's client would drop their private apps."""
     storage = get_storage()
-
-    if api_key is not None and api_key.can_download_private:
-        per_user_key = f"{user_private_prefix(api_key.user_id)}/{filename}"
-        if await storage.exists(per_user_key):
-            return await _serve_storage_object(
-                per_user_key, content_type=_INDEX_FILES[filename],
-            )
-
-    storage_key = f"{REPO_PUBLIC_PREFIX}/{filename}"
-    if not await storage.exists(storage_key):
+    storage_key = f"{await _index_prefix(db, storage, api_key)}/{filename}"
+    if not await _exists(storage, storage_key):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
@@ -558,7 +658,9 @@ async def _serve_apk(
 ) -> Response:
     """Locate the APK by file name and serve it (with auth checks).
 
-    Two authentication channels feed into the private-app ACL:
+    Only APKs of PUBLISHED apps are served to everyone. Two authentication
+    channels feed into the private-app ACL — the same owner/admin rule
+    that also unlocks APKs of an app that is not (or no longer) published:
       * ``api_key`` — F-Droid client over HTTP Basic; must belong to
         the app's owner and carry the ``can_download_private`` scope.
       * ``signed_user_id`` — SPA-issued HMAC token (see
@@ -594,29 +696,30 @@ async def _serve_apk(
             if signed_user is not None and not signed_user.is_active:
                 signed_user = None
 
-    if app.visibility == AppVisibility.PRIVATE:
-        # API-key path — must be the owner's key and carry the scope.
-        owner_match = (
-            api_key is not None
-            and api_key.can_download_private
-            and app.owner_id is not None
-            and api_key.user_id == app.owner_id
+    # API-key path — must be the owner's key and carry the scope.
+    owner_match = (
+        api_key is not None
+        and api_key.can_download_private
+        and app.owner_id is not None
+        and api_key.user_id == app.owner_id
+    )
+    # Signed-URL path — accept whoever manages the app (owner,
+    # co-maintainer, admin), the people ``apks.issue_download_url`` mints
+    # links for. Rights are re-checked at click time (revalidation, not
+    # just signature check): a removed co-maintainer's link stops working.
+    from app.services.app_permissions import can_manage_app
+
+    signed_match = signed_user is not None and await can_manage_app(db, signed_user, app)
+    if app.visibility == AppVisibility.PRIVATE and not (owner_match or signed_match):
+        return Response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
         )
-        # Signed-URL path — accept owner or admin. Ownership transfer
-        # between sign-time and click-time invalidates the URL
-        # (revalidation, not just signature check).
-        signed_match = (
-            signed_user is not None
-            and (
-                signed_user.role == UserRole.ADMIN
-                or (app.owner_id is not None and signed_user.id == app.owner_id)
-            )
-        )
-        if not (owner_match or signed_match):
-            return Response(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                headers={"WWW-Authenticate": 'Basic realm="fdroid-store"'},
-            )
+    if app.status != AppStatus.PUBLISHED and not (owner_match or signed_match):
+        # Archived / rejected (taken down) or not yet live: the binaries go
+        # with the listing — except for the owner's key and the people who
+        # manage the app (signed links from ``apks.issue_download_url``).
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
 
     # Attribute the download. Precedence: API key (F-Droid Basic auth)
     # wins, then signed-URL SPA session, otherwise anonymous.
@@ -626,24 +729,28 @@ async def _serve_apk(
         else None
     )
 
-    # Record the download (best effort — never fail the response on this)
-    try:
-        ev = DownloadEvent(
-            apk_id=apk.id,
-            app_id=app.id,
-            user_id=attributed_user_id,
-            api_key_id=api_key.id if api_key else None,
-            ip_hash=_hash_ip(request.client.host if request.client else None),
-            user_agent=(request.headers.get("user-agent") or "")[:512] or None,
-            bytes_served=apk.size_bytes,
-            status_code=200,
-        )
-        db.add(ev)
-        if api_key is not None:
-            api_key.last_used_at = datetime.now(UTC)
-        await db.flush()
-    except Exception:  # noqa: BLE001
-        pass
+    # Record the download — once per download, not per resumed / parallel
+    # chunk. Best effort: the savepoint keeps a failed insert from
+    # poisoning the request's transaction (its commit would fail the
+    # response). ``api_key.last_used_at`` is already refreshed, throttled,
+    # by ``deps._api_key_from_secret``.
+    if _starts_download(request.headers.get("range")):
+        try:
+            async with db.begin_nested():
+                db.add(
+                    DownloadEvent(
+                        apk_id=apk.id,
+                        app_id=app.id,
+                        user_id=attributed_user_id,
+                        api_key_id=api_key.id if api_key else None,
+                        ip_hash=hash_ip(client_ip(request)),
+                        user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+                        bytes_served=apk.size_bytes,
+                        status_code=200,
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001 — stats must never fail a download
+            log.warning("could not record download", apk=apk.file_name, error=str(exc))
 
     return await _serve_storage_object(
         apk.storage_key,

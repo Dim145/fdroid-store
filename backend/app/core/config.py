@@ -144,7 +144,10 @@ class Settings(BaseSettings):
 
     # ----- Misc ---------------------------------------------------------------
     log_level: str = "INFO"
-    environment: Literal["development", "production", "test"] = "development"
+    # Production unless told otherwise: it is the setting that refuses the
+    # shipped default credentials, hides /api/docs and marks the session
+    # cookie Secure. Local hacking sets ENVIRONMENT=development.
+    environment: Literal["development", "production", "test"] = "production"
 
     # Directory used by the admin Backup feature for the working tarball
     # + extraction tree. A backup can grow to 2-3× the repo's storage

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import tempfile
 import uuid
@@ -7,14 +8,26 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, get_current_uploader, get_uploader_for_app
+from app.core.database import run_after_commit
 from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
 from app.core.rate_limit import limiter
+from app.core.uploads import normalize_image
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus, ReproducibilityStatus
 from app.models.apk_sbom import ApkCve, ApkSbom, ApkSbomStatus
@@ -39,6 +52,7 @@ from app.schemas.app import (
 )
 from app.services.audit import write_event
 from app.services.queue import enqueue_cve_scan, enqueue_reindex
+from app.services.suggested_version import recompute_auto
 from app.storage import get_storage
 
 router = APIRouter()
@@ -47,6 +61,9 @@ log = get_logger(__name__)
 # Loose BCP47: 2-3 letter primary subtag optionally followed by a region or
 # script subtag. Matches the shape used by the app localizations endpoint.
 _LOCALE_RE = re.compile(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,4})?$")
+# Shown inline by F-Droid under each anti-feature — keep it a sentence or a
+# short list, not an essay.
+_ANTI_FEATURE_REASON_MAX = 1000
 
 
 # --------------------------------------------------------------------------
@@ -87,6 +104,12 @@ async def save_upload_to_temp(upload: UploadFile, *, max_bytes: int) -> Path:
             path.unlink(missing_ok=True)
         raise
     return path
+
+
+# Staging (``/apks/inspect``): at most this many staged APKs per user and
+# window — matches the staging token's lifetime.
+_STAGING_WINDOW = 3600
+_MAX_STAGED_PER_WINDOW = 20
 
 
 async def _apk_size_cap_bytes(db) -> int:
@@ -148,8 +171,14 @@ async def attach_apk_to_app(
     tmp_path: Path,
     meta: ApkMetadata,
     uploader: User,
+    is_beta: bool = False,
 ) -> Apk:
-    """Validate + persist a parsed APK against an existing App."""
+    """Validate + persist a parsed APK against an existing App.
+
+    ``is_beta`` uploads a pre-release: it is published like any other APK
+    but never becomes the suggested version on its own, so F-Droid only
+    offers it to users who allowed beta updates for this app.
+    """
     if meta.package_name != app.package_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -207,14 +236,9 @@ async def attach_apk_to_app(
     # index always references a fresh hash for each version.
     if meta.icon_data and not app.icon_is_custom:
         try:
-            import io as _io
-            from PIL import Image as _Image
-            with _Image.open(_io.BytesIO(meta.icon_data)) as raw:
-                img = raw.convert("RGBA")
-                img.thumbnail((512, 512), _Image.LANCZOS)
-                buf = _io.BytesIO()
-                img.save(buf, format="PNG", optimize=True)
-                png_bytes = buf.getvalue()
+            # Same format allowlist + bomb guard as user-uploaded images:
+            # the icon bytes come out of an untrusted APK.
+            png_bytes = await normalize_image(meta.icon_data, (512, 512))
             icon_key = f"icons/{app.package_name}.png"
             await storage.put(icon_key, png_bytes, content_type="image/png")
             app.icon_path = icon_key
@@ -244,6 +268,7 @@ async def attach_apk_to_app(
         status=initial_status,
         uploaded_by_id=uploader.id,
         published_at=datetime.now(UTC) if initial_status == ApkStatus.PUBLISHED else None,
+        is_beta=is_beta,
     )
     db.add(apk)
     if initial_status == ApkStatus.PUBLISHED:
@@ -261,14 +286,16 @@ async def attach_apk_to_app(
                     first_locked_at=datetime.now(UTC),
                 )
             )
-        # Auto-bump the suggested version only when the owner hasn't pinned
+        # Auto-track the suggested version only when the owner hasn't pinned
         # one. With a manual pin the F-Droid client keeps offering the chosen
-        # version even after a new (possibly regressed) upload.
-        if not app.suggested_version_is_manual:
-            app.suggested_version_code = max(app.suggested_version_code or 0, meta.version_code)
-            app.suggested_version_name = meta.version_name
+        # version even after a new (possibly regressed) upload; a beta upload
+        # is skipped the same way. The new row isn't in ``app.apks`` yet.
+        recompute_auto(app, [*app.apks, apk])
         app.status = AppStatus.PUBLISHED
-        app.last_published_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        app.last_published_at = now
+        if app.first_published_at is None:
+            app.first_published_at = now
 
     await db.flush()
     log.info(
@@ -322,7 +349,7 @@ async def inspect_apk(
         try:
             from app.fdroid.anti_feature_scan import scan_apk, summarise
 
-            detected = summarise(scan_apk(tmp_path))
+            detected = summarise(await asyncio.to_thread(scan_apk, tmp_path))
         except Exception:  # noqa: BLE001
             detected = {}
         # Stage the bytes under ``staging/<sha256>.apk`` so the create
@@ -333,7 +360,15 @@ async def inspect_apk(
         staging_token: str | None = None
         try:
             from app.core.download_token import sign_staging_token
+            from app.core.one_time import bump_counter
 
+            # Staged bytes aren't billed to anyone until redeemed: past a
+            # burst, stop staging (the SPA falls back to re-uploading on
+            # confirm) instead of letting one account fill the storage.
+            # Unredeemed objects are purged by the worker after the token
+            # TTL (``purge_stale_staging``).
+            if await bump_counter(f"staging:{user.id}", _STAGING_WINDOW) > _MAX_STAGED_PER_WINDOW:
+                raise RuntimeError("staging quota for this hour reached")
             storage = get_storage()
             staging_key = f"staging/{meta.sha256}.apk"
             with tmp_path.open("rb") as fh:
@@ -429,6 +464,7 @@ async def _discard_staged_apk(content_hash: str) -> None:
 async def inspect_github(
     request: Request,
     payload: GithubInspectRequest,
+    db: DbSession,
     user: Annotated[User, Depends(get_current_uploader)],
 ) -> GithubApkInspect:
     """Resolve the latest matching release on a GitHub repo, download
@@ -506,7 +542,7 @@ async def inspect_github(
     import asyncio as _asyncio
 
     dl_result, repo_meta = await _asyncio.gather(
-        download_asset(asset),
+        download_asset(asset, max_bytes=await _apk_size_cap_bytes(db)),
         fetch_repo_metadata(
             repo, provider=provider, base_url=base_url, token=inspect_token
         ),
@@ -527,7 +563,7 @@ async def inspect_github(
         try:
             from app.fdroid.anti_feature_scan import scan_apk, summarise
 
-            detected = summarise(scan_apk(tmp_path))
+            detected = summarise(await asyncio.to_thread(scan_apk, tmp_path))
         except Exception:  # noqa: BLE001
             detected = {}
         return GithubApkInspect(
@@ -707,7 +743,7 @@ async def inspect_proxy_source(
         try:
             from app.fdroid.anti_feature_scan import scan_apk, summarise
 
-            detected = summarise(scan_apk(tmp_path))
+            detected = summarise(await asyncio.to_thread(scan_apk, tmp_path))
         except Exception:  # noqa: BLE001
             detected = {}
         return ProxyApkInspect(
@@ -740,9 +776,11 @@ from pydantic import BaseModel as _BaseModel, Field as _Field
 
 
 class _StagedAttachBody(_BaseModel):
-    """Body for the ``upload-staged`` endpoint. Just the redemption
-    token — every other field is derived from the staged APK itself."""
+    """Body for the ``upload-staged`` endpoint. The redemption token plus
+    the release channel — every other field is derived from the staged APK
+    itself."""
     staging_token: str = _Field(min_length=10, max_length=512)
+    beta: bool = False
 
 
 @router.post(
@@ -800,10 +838,10 @@ async def upload_apk_staged(
             )
         await _maybe_scan_upload(db, tmp_path=tmp_path)
         apk = await attach_apk_to_app(
-            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user, is_beta=body.beta
         )
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
         from app.services.audit import write_event
         await write_event(
             db,
@@ -813,7 +851,7 @@ async def upload_apk_staged(
             target_id=apk.id,
             summary=(
                 f"uploaded (staged) {app.package_name} v{meta.version_name} "
-                f"({meta.version_code})"
+                f"({meta.version_code}){' as beta' if body.beta else ''}"
             ),
             payload={
                 "app_id": str(app.id),
@@ -822,6 +860,7 @@ async def upload_apk_staged(
                 "version_name": meta.version_name,
                 "size_bytes": meta.size_bytes,
                 "sha256": meta.sha256,
+                "beta": body.beta,
                 "credential": {"kind": "staging"},
             },
             request=request,
@@ -847,6 +886,7 @@ async def upload_apk(
     request: Request,
     user: Annotated[User, Depends(get_uploader_for_app)],
     file: UploadFile = File(...),
+    beta: bool = Form(False),
 ) -> ApkRead:
     """Upload a new APK for an existing app.
 
@@ -856,6 +896,9 @@ async def upload_apk(
     the management-permission check below because that check is
     enforced inside the auth dependency itself (the token *is* the
     per-app capability).
+
+    ``beta=true`` (multipart field) publishes a pre-release on the F-Droid
+    Beta channel — the "testing track" for CI nightlies.
     """
     app = (
         await db.execute(
@@ -889,14 +932,14 @@ async def upload_apk(
         meta = await parse_or_400(tmp_path)
         await _maybe_scan_upload(db, tmp_path=tmp_path)
         apk = await attach_apk_to_app(
-            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user, is_beta=beta
         )
         # Retention policy: trim down to the cap, if any. Runs AFTER
         # the new APK lands so the just-uploaded version stays even
         # when it ends up being the oldest in the new set (e.g. a
         # backfill of an older versionCode).
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
         # Audit trail. Includes the credential descriptor stashed by
         # ``get_uploader_for_app`` so a leaked deploy token's activity
         # is traceable to the token prefix even after the resulting
@@ -911,7 +954,8 @@ async def upload_apk(
             target_id=apk.id,
             summary=(
                 f"uploaded {app.package_name} v{meta.version_name} "
-                f"({meta.version_code}) via {cred.get('kind', 'unknown')}"
+                f"({meta.version_code}){' as beta' if beta else ''} "
+                f"via {cred.get('kind', 'unknown')}"
             ),
             payload={
                 "app_id": str(app.id),
@@ -920,6 +964,7 @@ async def upload_apk(
                 "version_name": meta.version_name,
                 "size_bytes": meta.size_bytes,
                 "sha256": meta.sha256,
+                "beta": beta,
                 "credential": cred,
             },
             request=request,
@@ -936,10 +981,12 @@ async def update_apk(
     apk_id: uuid.UUID,
     payload: ApkUpdate,
     db: DbSession,
+    request: Request,
     user: Annotated[User, Depends(get_current_uploader)],
 ) -> ApkRead:
-    """Edit a previously-uploaded APK's mutable fields: the changelog and the
-    anti-feature flags surfaced to F-Droid clients.
+    """Edit a previously-uploaded APK's mutable fields: the changelog, the
+    anti-feature flags (+ their reasons) surfaced to F-Droid clients, and
+    the beta flag.
 
     Whitespace is normalized on save and "" maps to NULL so the index
     builder can cleanly omit the field instead of emitting an empty
@@ -947,7 +994,9 @@ async def update_apk(
     """
     apk = (
         await db.execute(
-            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
         )
     ).scalar_one_or_none()
     if apk is None:
@@ -966,7 +1015,7 @@ async def update_apk(
             # is the same loose BCP47 we accept for app localizations.
             cleaned: dict[str, str] = {}
             for locale, text in payload.whats_new.items():
-                if not isinstance(locale, str) or not _LOCALE_RE.match(locale):
+                if not isinstance(locale, str) or not _LOCALE_RE.fullmatch(locale):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Invalid locale tag: {locale!r}",
@@ -997,6 +1046,65 @@ async def update_apk(
             seen.add(stripped)
             normalized.append(stripped)
         apk.anti_features = normalized
+    if "anti_feature_reasons" in payload.model_fields_set:
+        reasons: dict[str, str] = {}
+        for flag, text in (payload.anti_feature_reasons or {}).items():
+            flag, text = flag.strip(), (text or "").strip()
+            if not flag or not text:
+                continue
+            if len(text) > _ANTI_FEATURE_REASON_MAX:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"anti_feature_reasons[{flag}] exceeds {_ANTI_FEATURE_REASON_MAX} chars",
+                )
+            reasons[flag] = text
+        apk.anti_feature_reasons = reasons or None
+    # A reason only makes sense next to its flag — drop orphans so
+    # un-ticking a chip also clears its explanation.
+    if apk.anti_feature_reasons:
+        active = set(apk.anti_features or [])
+        kept = {f: r for f, r in apk.anti_feature_reasons.items() if f in active}
+        if kept != apk.anti_feature_reasons:
+            apk.anti_feature_reasons = kept or None
+    if (
+        "is_beta" in payload.model_fields_set
+        and payload.is_beta is not None
+        and payload.is_beta != apk.is_beta
+    ):
+        # Flipping the flag moves the suggested version in auto mode:
+        # marking the current suggestion as beta falls back to the previous
+        # stable APK, clearing it promotes this version. With a manual pin,
+        # promoting a newer published version moves the pin onto it —
+        # otherwise it would stay held back above the pinned one.
+        apk.is_beta = payload.is_beta
+        app = apk.app
+        if (
+            not apk.is_beta
+            and app.suggested_version_is_manual
+            and apk.status == ApkStatus.PUBLISHED
+            and apk.version_code > (app.suggested_version_code or 0)
+        ):
+            app.suggested_version_code = apk.version_code
+            app.suggested_version_name = apk.version_name
+        recompute_auto(app)
+        await write_event(
+            db,
+            action="apk.channel_changed",
+            actor=user,
+            target_type="apk",
+            target_id=apk.id,
+            summary=(
+                f"{apk.app.package_name} v{apk.version_name} ({apk.version_code}) "
+                f"marked as {'beta' if apk.is_beta else 'stable'}"
+            ),
+            payload={
+                "app_id": str(apk.app.id),
+                "version_code": apk.version_code,
+                "beta": apk.is_beta,
+                "suggested_version_code": apk.app.suggested_version_code,
+            },
+            request=request,
+        )
     await db.flush()
     await enqueue_reindex()
     return ApkRead.model_validate(apk)
@@ -1025,11 +1133,13 @@ async def issue_download_url(
     if apk is None or apk.status != ApkStatus.PUBLISHED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
     app = apk.app
-    # Same visibility rules as the F-Droid serve handler. Owners and admins
-    # always see their own / all apps; anyone else needs the app to be
-    # public + published.
-    if app.visibility == AppVisibility.PRIVATE:
-        if user.role != UserRole.ADMIN and app.owner_id != user.id:
+    # Same visibility rules as the F-Droid serve handler. Whoever manages
+    # the app (owner, co-maintainer, admin) always gets a URL; anyone else
+    # needs the app to be public + published.
+    if app.visibility == AppVisibility.PRIVATE or app.status != AppStatus.PUBLISHED:
+        from app.services.app_permissions import can_manage_app
+
+        if not await can_manage_app(db, user, app):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
 
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
@@ -1054,7 +1164,9 @@ async def delete_apk(
 ) -> None:
     apk = (
         await db.execute(
-            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
         )
     ).scalar_one_or_none()
     if apk is None:
@@ -1062,11 +1174,24 @@ async def delete_apk(
     from app.services.app_permissions import assert_can_manage_app
     await assert_can_manage_app(db, user, apk.app)
 
-    storage = get_storage()
-    try:
-        await storage.delete(apk.storage_key)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("storage delete failed", key=apk.storage_key, error=str(exc))
+    storage_key = apk.storage_key
+
+    async def _delete_file() -> None:
+        try:
+            await get_storage().delete(storage_key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("storage delete failed", key=storage_key, error=str(exc))
+
+    # The file goes once the row deletion is committed: a request failing
+    # before that must not leave a published row without its file.
+    run_after_commit(f"delete-apk:{apk.id}", _delete_file)
+    # Deleting the suggested version must not leave the index pointing at
+    # nothing (and holding every newer version back as Beta). A manual pin
+    # on the deleted version goes with it: back to auto-tracking.
+    app = apk.app
+    if app.suggested_version_is_manual and app.suggested_version_code == apk.version_code:
+        app.suggested_version_is_manual = False
+    recompute_auto(app, [a for a in app.apks if a is not apk])
     await db.delete(apk)
     await db.flush()
     await enqueue_reindex()
@@ -1122,9 +1247,12 @@ def _extract_sha256_candidates(text: str) -> list[str]:
 async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
     """Fetch ``url`` and return ``(all_extracted_hashes, source_url)``. Reuses
     the SSRF guard from :mod:`github_releases` so an admin can't pivot
-    through the backend into the host's private network."""
+    through the backend into the host's private network — and connects
+    through the pinned transport, so the host can't rebind between that
+    check and the connection."""
     import httpx
 
+    from app.core.ssrf import is_blocked_public_ip, make_ssrf_client
     from app.services.github_releases import assert_fetch_url_safe
 
     try:
@@ -1134,27 +1262,36 @@ async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
             status_code=400, detail=f"reference_url rejected: {exc}"
         ) from exc
 
+    # F-Droid verification JSONs are sub-kB; even with multiple
+    # timestamps embedded they don't exceed a few KB. 32 KiB is plenty,
+    # and only that much is read off the wire — a giant body isn't buffered.
+    max_body = 32_768
+    body = b""
     timeout = httpx.Timeout(10.0, connect=5.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+    async with make_ssrf_client(
+        is_blocked_public_ip, timeout=timeout, follow_redirects=False
+    ) as client:
         try:
-            res = await client.get(
+            async with client.stream(
+                "GET",
                 safe_url,
                 headers={"accept": "application/json, text/plain, */*;q=0.5"},
-            )
+            ) as res:
+                if res.status_code >= 400:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"reference_url returned HTTP {res.status_code}",
+                    )
+                async for chunk in res.aiter_bytes():
+                    body += chunk
+                    if len(body) >= max_body:
+                        break
         except httpx.HTTPError as exc:
             raise HTTPException(
                 status_code=400,
                 detail=f"could not fetch reference_url: {exc}",
             ) from exc
-    if res.status_code >= 400:
-        raise HTTPException(
-            status_code=400,
-            detail=f"reference_url returned HTTP {res.status_code}",
-        )
-    # F-Droid verification JSONs are sub-kB; even with multiple
-    # timestamps embedded they don't exceed a few KB. 32 KiB is plenty
-    # while still capping a hostile redirect into a giant body.
-    text = res.text[:32_768]
+    text = body[:max_body].decode("utf-8", errors="replace")
     hashes = _extract_sha256_candidates(text)
     if not hashes:
         raise HTTPException(
@@ -1199,10 +1336,17 @@ async def _apply_reproducibility(
     reference_candidates: list[str] | None = None,
     reference_url: str | None,
     notes: str | None,
+    compared: bool = False,
 ) -> Apk:
     """Shared write path used by both endpoints. Auto-decides the status
     from a hash comparison when a reference is present; falls back to
     the caller-supplied ``status_override`` for declarative paths.
+
+    VERIFIED is shown to everyone, so only an admin or an actual
+    comparison against a fetched reference (``compared=True``, the
+    verify-from-url path) may produce it. Anyone else can keep an existing
+    verdict (e.g. edit the notes) but not create one — neither by status
+    nor by pasting the APK's own, public, SHA-256 as the reference.
 
     ``reference_sha256`` is the single-hash path used by the manual
     ``POST /reproducibility`` endpoint. ``reference_candidates`` is the
@@ -1214,6 +1358,11 @@ async def _apply_reproducibility(
     matched (or the first candidate if none did, so the admin can see
     what they compared against).
     """
+    before = (
+        apk.reproducibility_status,
+        apk.reproducibility_reference_sha256,
+        apk.reproducibility_reference_url,
+    )
     candidates: list[str] = []
     if reference_candidates:
         for raw in reference_candidates:
@@ -1250,6 +1399,26 @@ async def _apply_reproducibility(
                 status_code=400, detail="reference_url must be http(s)://"
             )
         apk.reproducibility_reference_url = cleaned_url
+
+    after = (
+        apk.reproducibility_status,
+        apk.reproducibility_reference_sha256,
+        apk.reproducibility_reference_url,
+    )
+    if (
+        after[0] == ReproducibilityStatus.VERIFIED
+        and after != before
+        and not compared
+        and actor.role != UserRole.ADMIN
+    ):
+        # Nothing is persisted: the request's transaction rolls back.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Only an admin can mark an APK as verified by hand; use "
+                "verify-from-url to compare it against a published reference."
+            ),
+        )
 
     if notes is not None:
         apk.reproducibility_notes = (notes.strip() or None)
@@ -1288,7 +1457,8 @@ async def set_reproducibility(
     Body shape:
       * ``status`` — one of ``unknown``, ``not_attempted``, ``verified``,
         ``failed``. Optional when ``reference_sha256`` is provided
-        (auto-decide wins).
+        (auto-decide wins). Reaching ``verified`` here (by status or by a
+        matching hash) is admin-only; uploaders use verify-from-url.
       * ``reference_sha256`` — 64-char hex. When present, the handler
         compares it to ``Apk.sha256`` and sets ``verified`` / ``failed``
         accordingly.
@@ -1383,6 +1553,7 @@ async def verify_reproducibility_from_url(
         reference_candidates=ref_hashes,
         reference_url=ref_url,
         notes=payload.notes,
+        compared=True,
     )
     await db.flush()
     return ApkRead.model_validate(apk)
@@ -1461,7 +1632,32 @@ async def get_sbom(
         cve_summary=sbom.cve_summary or {},
         cves=cves,
         sbom=None if summary else sbom.sbom_json,
+        known_vuln_reason=known_vuln_reason(cves),
     )
+
+
+_KNOWN_VULN_SEVERITIES = ("CRITICAL", "HIGH")
+_KNOWN_VULN_LISTED = 5
+
+
+def known_vuln_reason(cves: list[CveFinding]) -> str | None:
+    """Suggested ``KnownVuln`` reason built from the CRITICAL / HIGH
+    findings (``cves`` sorted most severe first), or ``None`` when there
+    are none. F-Droid 2.0 appends this text to the red "known security
+    vulnerability" banner, so it lists the CVEs and their fixed versions.
+    Only a suggestion: SBOM scans flag plenty of unreachable library code,
+    so the owner decides whether to apply it."""
+    serious = [c for c in cves if c.severity in _KNOWN_VULN_SEVERITIES]
+    if not serious:
+        return None
+    parts = []
+    for c in serious[:_KNOWN_VULN_LISTED]:
+        where = f" in {c.package_name}" if c.package_name else ""
+        fixed = f", fixed in {c.fixed_version}" if c.fixed_version else ""
+        parts.append(f"{c.cve_id} ({c.severity.lower()}){where}{fixed}")
+    if len(serious) > _KNOWN_VULN_LISTED:
+        parts.append(f"+{len(serious) - _KNOWN_VULN_LISTED} more")
+    return "; ".join(parts)[:_ANTI_FEATURE_REASON_MAX]
 
 
 @router.post("/{apk_id}/sbom/rescan", response_model=SbomRead)

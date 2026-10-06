@@ -102,18 +102,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=python-builder /opt/venv /opt/venv
 
-# Non-root execution. The user owns /data so volume mounts can be written
-# to without giving up the read-only root filesystem we want at runtime.
+# Non-root execution. The user owns /data (and its home dir) so volume
+# mounts can be written to without giving up the read-only root
+# filesystem we want at runtime. Nothing else is writable by it.
 RUN groupadd --system --gid 1001 fdroid && \
     useradd  --system --uid 1001 --gid fdroid --home-dir /home/fdroid --create-home --shell /usr/sbin/nologin fdroid && \
     mkdir -p /data/storage /data/keystores && \
     chown -R fdroid:fdroid /data
 
 WORKDIR /app
-COPY --chown=fdroid:fdroid . /app
-# Compile to .pyc once at build time as the unprivileged user; with a
-# read-only root filesystem Python would otherwise try (and silently fail)
-# to write bytecode on every cold import.
+# Application code stays root-owned (world-readable, not writable by the
+# runtime user): even without ``read_only: true`` a compromised process
+# can't rewrite the code it runs.
+COPY . /app
+# Compile to .pyc once at build time (as root, so the __pycache__ dirs are
+# root-owned too); with a read-only root filesystem Python would otherwise
+# try (and silently fail) to write bytecode on every cold import.
 RUN /opt/venv/bin/python -m compileall -q /app/app /opt/venv/lib
 
 USER fdroid:fdroid

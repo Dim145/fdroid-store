@@ -17,7 +17,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, Bug, CheckCircle2, Download, Eye, GripVertical, ImagePlus, Loader2, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowLeft, Bug, CheckCircle2, Download, Eye, GripVertical, ImagePlus, Loader2, MessageSquareText, Plus, RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, Upload, X, XCircle } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -40,6 +40,8 @@ import { Sheet } from "@/components/ui/sheet";
 import { api, mediaUrl, type Apk, type AppDetail, type Category, type CveSeverity, type ReproducibilityStatus, type SbomRead, type Screenshot } from "@/lib/api";
 import { COMMON_LOCALES, localeLabel } from "@/lib/locales";
 import { useAuth } from "@/lib/auth-store";
+import { categoryDescription, useCategoryLabel } from "@/lib/categories";
+import { isBetaVersion, unattendedUpdatesBlockedFrom } from "@/lib/fdroid-client";
 import { useRepoInfo } from "@/lib/repo-store";
 import { toast } from "@/lib/toast-store";
 import { cn, formatBytes, formatDate, pickLocalizedText } from "@/lib/utils";
@@ -56,6 +58,13 @@ type PendingShot = {
   screenshot?: Screenshot;
   error?: string;
 };
+
+/** Same ids, in any order. */
+function sameIds(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const wanted = new Set(a);
+  return b.every((id) => wanted.has(id));
+}
 
 function ManageAppInner() {
   const { t } = useTranslation();
@@ -112,6 +121,8 @@ function ManageAppInner() {
   const [pendingShots, setPendingShots] = useState<PendingShot[]>([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Publish the next upload on the F-Droid Beta channel ("testing track").
+  const [uploadAsBeta, setUploadAsBeta] = useState(false);
 
   // The changelog draft is a per-APK dict of locale → text. ``activeLocale``
   // is just the tab the user is editing right now; saving sends the whole
@@ -248,29 +259,55 @@ function ManageAppInner() {
     }
   }
 
-  async function load() {
+  // Server copy the listing form was last filled from. ``load`` runs after
+  // every side action (uploads, banners, polled imports…) and must not
+  // wipe what the user is typing, and ``save`` only sends what changed
+  // since — see ``hydrateForm``.
+  const listingBase = useRef<AppDetail | null>(null);
+
+  function hydrateForm(detail: AppDetail, refill: boolean) {
+    const prev = refill ? null : listingBase.current;
+    listingBase.current = detail;
+    // A field still showing what the server sent last time takes the new
+    // server value; one the user has edited since keeps the edit.
+    function sync<T>(
+      set: React.Dispatch<React.SetStateAction<T>>,
+      pick: (d: AppDetail) => T,
+      same: (a: T, b: T) => boolean = Object.is,
+    ) {
+      const now = pick(detail);
+      if (!prev) { set(now); return; }
+      const was = pick(prev);
+      set((cur) => (same(cur, was) ? now : cur));
+    }
+    sync(setName, (d) => d.name);
+    sync(setSummary, (d) => d.summary || "");
+    sync(setDescription, (d) => d.description || "");
+    sync(setLicense, (d) => d.license || "");
+    sync(setWebsite, (d) => d.website || "");
+    sync(setSourceCode, (d) => d.source_code || "");
+    sync(setIssueTracker, (d) => d.issue_tracker || "");
+    sync(setAuthorName, (d) => d.author_name || "");
+    sync(setAuthorEmail, (d) => d.author_email || "");
+    sync(setDonate, (d) => d.donate || "");
+    sync(setLiberapay, (d) => d.liberapay || "");
+    sync(setBitcoin, (d) => d.bitcoin || "");
+    sync(setOpenCollective, (d) => d.open_collective || "");
+    sync(setTranslation, (d) => d.translation || "");
+    sync(setVisibility, (d) => d.visibility);
+    sync(setSelectedCategoryIds, (d) => d.categories.map((c) => c.id), sameIds);
+  }
+
+  /** ``refill`` resets every listing field to the server copy (first load,
+   *  after saving the listing); otherwise only untouched fields follow. */
+  async function load({ refill = false }: { refill?: boolean } = {}) {
     try {
       // raw=true returns canonical en-US fields, not the localized overlay —
       // otherwise editing the Title field would prefill the user's preferred-
       // locale translation and saving would write it back into the default.
       const detail = await api.apps.get(id, { raw: true });
       setApp(detail);
-      setName(detail.name);
-      setSummary(detail.summary || "");
-      setDescription(detail.description || "");
-      setLicense(detail.license || "");
-      setWebsite(detail.website || "");
-      setSourceCode(detail.source_code || "");
-      setIssueTracker(detail.issue_tracker || "");
-      setAuthorName(detail.author_name || "");
-      setAuthorEmail(detail.author_email || "");
-      setDonate(detail.donate || "");
-      setLiberapay(detail.liberapay || "");
-      setBitcoin(detail.bitcoin || "");
-      setOpenCollective(detail.open_collective || "");
-      setTranslation(detail.translation || "");
-      setVisibility(detail.visibility);
-      setSelectedCategoryIds(detail.categories.map((c) => c.id));
+      hydrateForm(detail, refill);
       setScreenshots(
         [...detail.screenshots].sort((a, b) => a.display_order - b.display_order),
       );
@@ -278,7 +315,7 @@ function ManageAppInner() {
       setError(e instanceof Error ? e.message : t("myApps.edit.loadFailed"));
     }
   }
-  useEffect(() => { if (id) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+  useEffect(() => { if (id) load({ refill: true }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
   useEffect(() => {
     let cancelled = false;
     api.categories.list()
@@ -301,28 +338,38 @@ function ManageAppInner() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!app) return;
+    const base = listingBase.current ?? app;
+    // Only what changed since the form was filled goes out: ``undefined``
+    // (dropped from the JSON) leaves a field alone, ``null`` clears it. So
+    // a stale field can't overwrite a newer server value, and
+    // ``visibility`` — refused for co-maintainers — is only sent when it
+    // was actually flipped.
+    const edited = (value: string, was: string | null) =>
+      value === (was ?? "") ? undefined : value || null;
     setSaving(true);
     try {
       await api.apps.update(app.id, {
-        name,
-        summary: summary || undefined,
-        description: description || undefined,
-        license: license || undefined,
-        website: website || undefined,
-        source_code: sourceCode || undefined,
-        issue_tracker: issueTracker || undefined,
-        author_name: authorName || undefined,
-        author_email: authorEmail || undefined,
-        donate: donate || undefined,
-        liberapay: liberapay || undefined,
-        bitcoin: bitcoin || undefined,
-        open_collective: openCollective || undefined,
-        translation: translation || undefined,
-        visibility,
-        category_ids: selectedCategoryIds,
+        name: name !== base.name ? name : undefined,
+        summary: edited(summary, base.summary),
+        description: edited(description, base.description),
+        license: edited(license, base.license),
+        website: edited(website, base.website),
+        source_code: edited(sourceCode, base.source_code),
+        issue_tracker: edited(issueTracker, base.issue_tracker),
+        author_name: edited(authorName, base.author_name),
+        author_email: edited(authorEmail, base.author_email),
+        donate: edited(donate, base.donate),
+        liberapay: edited(liberapay, base.liberapay),
+        bitcoin: edited(bitcoin, base.bitcoin),
+        open_collective: edited(openCollective, base.open_collective),
+        translation: edited(translation, base.translation),
+        visibility: visibility !== base.visibility ? visibility : undefined,
+        category_ids: sameIds(selectedCategoryIds, base.categories.map((c) => c.id))
+          ? undefined
+          : selectedCategoryIds,
       });
       toast.success(t("myApps.edit.saved"));
-      await load();
+      await load({ refill: true });
     } catch (e) {
       toast.error(t("myApps.edit.saveFailed"), e instanceof Error ? e.message : undefined);
     } finally { setSaving(false); }
@@ -337,11 +384,13 @@ function ManageAppInner() {
       // second multipart upload (network-rare case, S3 down, etc.).
       const info = await api.apps.inspectApk(file);
       if (info.staging_token) {
-        await api.apps.uploadApkStaged(app.id, info.staging_token);
+        await api.apps.uploadApkStaged(app.id, info.staging_token, { beta: uploadAsBeta });
       } else {
-        await api.apps.uploadApk(app.id, file);
+        await api.apps.uploadApk(app.id, file, { beta: uploadAsBeta });
       }
-      toast.success(t("myApps.edit.versions.uploaded"));
+      toast.success(
+        uploadAsBeta ? t("myApps.edit.versions.uploadedBeta") : t("myApps.edit.versions.uploaded"),
+      );
       await load();
     } catch (e) {
       toast.error(t("myApps.edit.versions.uploadFailed"), e instanceof Error ? e.message : undefined);
@@ -459,6 +508,52 @@ function ManageAppInner() {
     setSavingApkId(apk.id);
     try {
       await api.apps.updateApk(apk.id, { anti_features: next });
+      await load();
+    } catch (e) {
+      toast.error(t("myApps.edit.saveFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setSavingApkId(null);
+    }
+  }
+  async function saveAntiFeatureReasons(apk: Apk, reasons: Record<string, string>) {
+    setSavingApkId(apk.id);
+    try {
+      await api.apps.updateApk(apk.id, { anti_feature_reasons: reasons });
+      toast.success(t("myApps.edit.antiFeatureReasons.saved"));
+      await load();
+    } catch (e) {
+      toast.error(t("myApps.edit.saveFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setSavingApkId(null);
+    }
+  }
+  /** Flag a version ``KnownVuln`` with the reason suggested by the CVE
+   *  scan — F-Droid 2.0 then warns users who have it installed. */
+  async function applyKnownVuln(apk: Apk, reason: string) {
+    setSavingApkId(apk.id);
+    try {
+      const flags = apk.anti_features || [];
+      await api.apps.updateApk(apk.id, {
+        anti_features: flags.includes("KnownVuln") ? flags : [...flags, "KnownVuln"],
+        anti_feature_reasons: { ...(apk.anti_feature_reasons || {}), KnownVuln: reason },
+      });
+      toast.success(t("myApps.edit.cve.knownVulnApplied"));
+      await load();
+    } catch (e) {
+      toast.error(t("myApps.edit.saveFailed"), e instanceof Error ? e.message : undefined);
+    } finally {
+      setSavingApkId(null);
+    }
+  }
+  async function setApkBeta(apk: Apk, beta: boolean) {
+    setSavingApkId(apk.id);
+    try {
+      await api.apps.updateApk(apk.id, { is_beta: beta });
+      toast.success(
+        beta
+          ? t("myApps.edit.versions.markedBeta", { name: apk.version_name })
+          : t("myApps.edit.versions.promoted", { name: apk.version_name }),
+      );
       await load();
     } catch (e) {
       toast.error(t("myApps.edit.saveFailed"), e instanceof Error ? e.message : undefined);
@@ -592,6 +687,10 @@ function ManageAppInner() {
 
   const published = [...app.apks].filter((a) => a.status === "published").sort((a, b) => b.version_code - a.version_code);
   const latest = published[0];
+  // Owner-only settings (visibility, the release sources): the API answers
+  // 403 to co-maintainers, so they get them read-only.
+  const isOwnerOrAdmin =
+    !!currentUser && (currentUser.role === "admin" || currentUser.id === app.owner_id);
 
   // Section roster — drives both the sidebar rail and the section
   // chrome. Order matches the visual flow; "permissions" only renders
@@ -655,7 +754,9 @@ function ManageAppInner() {
               id="vis"
               value={visibility}
               onChange={(e) => setVisibility(e.target.value as "public" | "private")}
-              className="h-12 w-full rounded-xl border border-outline bg-surface px-3 text-sm focus:border-primary focus:outline-none"
+              disabled={!isOwnerOrAdmin}
+              title={isOwnerOrAdmin ? undefined : t("myApps.edit.fields.visibilityOwnerOnly")}
+              className="h-12 w-full rounded-xl border border-outline bg-surface px-3 text-sm focus:border-primary focus:outline-none disabled:opacity-60"
             >
               <option value="public">{t("myApps.edit.fields.visibilityPublic")}</option>
               <option value="private">{t("myApps.edit.fields.visibilityPrivate")}</option>
@@ -697,11 +798,13 @@ function ManageAppInner() {
           <FormField label={t("myApps.edit.fields.donateUrl")} htmlFor="don">
             <Input id="don" type="url" value={donate} onChange={(e) => setDonate(e.target.value)} />
           </FormField>
+          {/* Liberapay / Open Collective take the account name (what F-Droid
+              expects); a full profile URL is accepted and reduced on export. */}
           <FormField label={t("myApps.edit.fields.liberapay")} htmlFor="lib">
-            <Input id="lib" type="url" placeholder={t("myApps.edit.fields.liberapayPlaceholder")} value={liberapay} onChange={(e) => setLiberapay(e.target.value)} />
+            <Input id="lib" placeholder={t("myApps.edit.fields.liberapayPlaceholder")} value={liberapay} onChange={(e) => setLiberapay(e.target.value)} />
           </FormField>
           <FormField label={t("myApps.edit.fields.openCollective")} htmlFor="oc">
-            <Input id="oc" type="url" placeholder={t("myApps.edit.fields.openCollectivePlaceholder")} value={openCollective} onChange={(e) => setOpenCollective(e.target.value)} />
+            <Input id="oc" placeholder={t("myApps.edit.fields.openCollectivePlaceholder")} value={openCollective} onChange={(e) => setOpenCollective(e.target.value)} />
           </FormField>
           <FormField label={t("myApps.edit.fields.bitcoin")} htmlFor="btc">
             <Input id="btc" placeholder={t("myApps.edit.fields.bitcoinPlaceholder")} value={bitcoin} onChange={(e) => setBitcoin(e.target.value)} />
@@ -885,6 +988,18 @@ function ManageAppInner() {
               className="sr-only"
             />
           </label>
+          <label
+            className="inline-flex cursor-pointer items-center gap-2 text-sm text-ink-soft"
+            title={t("myApps.edit.versions.betaUploadHint")}
+          >
+            <input
+              type="checkbox"
+              checked={uploadAsBeta}
+              onChange={(e) => setUploadAsBeta(e.target.checked)}
+              disabled={uploading}
+            />
+            {t("myApps.edit.versions.betaUpload")}
+          </label>
           {uploading && (
             <span className="text-sm text-ink-soft">{t("myApps.edit.versions.uploading")}</span>
           )}
@@ -911,6 +1026,10 @@ function ManageAppInner() {
               const isEditing = editingChangelog?.apkId === apk.id;
               const isSuggested = apk.version_code === app.suggested_version_code;
               const canPin = apk.status === "published" && !isSuggested;
+              const heldBack =
+                apk.status === "published" &&
+                isBetaVersion(apk.version_code, app.suggested_version_code);
+              const autoUpdateBlockedFrom = unattendedUpdatesBlockedFrom(apk.target_sdk);
               return (
                 <Fragment key={apk.id}>
                   <li
@@ -930,6 +1049,15 @@ function ManageAppInner() {
                             {app.suggested_version_is_manual ? t("myApps.edit.versions.pinned") : t("myApps.edit.versions.suggested")}
                           </Badge>
                         )}
+                        {heldBack && (
+                          <Badge
+                            variant="outline"
+                            className="font-mono uppercase tracking-wider"
+                            title={t("myApps.edit.versions.betaHint")}
+                          >
+                            {t("myApps.edit.versions.beta")}
+                          </Badge>
+                        )}
                       </div>
                       <div className="mt-0.5 text-xs text-ink-mute">
                         {t("myApps.edit.versions.metaLine", {
@@ -939,6 +1067,18 @@ function ManageAppInner() {
                           max: apk.target_sdk ?? "?",
                         })}
                       </div>
+                      {autoUpdateBlockedFrom && (
+                        <p
+                          className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-mute"
+                          title={t("myApps.edit.versions.autoUpdateHint")}
+                        >
+                          <TriangleAlert className="h-3 w-3 shrink-0 text-accent" />
+                          {t("myApps.edit.versions.autoUpdateBlocked", {
+                            android: autoUpdateBlockedFrom,
+                            target: apk.target_sdk,
+                          })}
+                        </p>
+                      )}
                       {(() => {
                         const preview = pickLocalizedText(apk.whats_new);
                         const locales = apk.whats_new ? Object.keys(apk.whats_new) : [];
@@ -966,6 +1106,7 @@ function ManageAppInner() {
                         apk={apk}
                         disabled={savingApkId === apk.id}
                         onToggle={(flag) => toggleApkAntiFeature(apk, flag)}
+                        onSaveReasons={(reasons) => saveAntiFeatureReasons(apk, reasons)}
                       />
                       {repo.reproducibleBuildsEnabled && (
                         <ReproducibilityRow
@@ -973,9 +1114,40 @@ function ManageAppInner() {
                           onUpdated={(updated) => updateApkInPlace(updated)}
                         />
                       )}
-                      <CveRow apk={apk} />
+                      <CveRow
+                        apk={apk}
+                        busy={savingApkId === apk.id}
+                        onApplyKnownVuln={(reason) => applyKnownVuln(apk, reason)}
+                      />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
+                      {/* Beta toggle: promote a beta, or move the current
+                          suggestion to the Beta channel. Older versions sit
+                          below the suggested one, where the flag would have
+                          no effect. With a pinned suggestion the pin alone
+                          decides the channel: newer versions are already
+                          held back as beta and "suggest this one" releases
+                          them, so only promoting a flagged beta is offered. */}
+                      {apk.status === "published" &&
+                        (apk.is_beta ||
+                          (!app.suggested_version_is_manual &&
+                            apk.version_code >= (app.suggested_version_code ?? 0))) && (
+                        <Button
+                          size="sm"
+                          variant="text"
+                          disabled={savingApkId === apk.id}
+                          onClick={() => setApkBeta(apk, !apk.is_beta)}
+                          title={
+                            apk.is_beta
+                              ? t("myApps.edit.versions.promoteTitle")
+                              : t("myApps.edit.versions.markBetaTitle")
+                          }
+                        >
+                          {apk.is_beta
+                            ? t("myApps.edit.versions.promote")
+                            : t("myApps.edit.versions.markBeta")}
+                        </Button>
+                      )}
                       {canPin && (
                         <Button
                           size="sm"
@@ -1078,7 +1250,7 @@ function ManageAppInner() {
         title={t("myApps.edit.sections.githubSource")}
         subtitle={t("myApps.edit.sections.githubSourceSubtitle")}
       >
-        <GithubSourceSection appId={app.id} onImported={() => void load()} />
+        <GithubSourceSection appId={app.id} canEdit={isOwnerOrAdmin} onImported={() => void load()} />
       </Section>
 
       {/* ──── Proxy-driven sources (F-Droid mirror, Patreon, private registry, …) ──── */}
@@ -1088,7 +1260,7 @@ function ManageAppInner() {
         title={t("myApps.edit.sections.proxySources")}
         subtitle={t("myApps.edit.sections.proxySourcesSubtitle")}
       >
-        <ProxySourcesSection appId={app.id} onImported={() => void load()} />
+        <ProxySourcesSection appId={app.id} canEdit={isOwnerOrAdmin} onImported={() => void load()} />
       </Section>
 
       {/* ──── CI deploy tokens ──── */}
@@ -1336,12 +1508,16 @@ function RetentionBanner({ app }: { app: AppDetail }) {
         </div>
         {nextEvicted ? (
           <p className="mt-0.5">
+            {/* version_name comes from the APK manifest: escape it so it
+                renders as text instead of being parsed as Trans tags. */}
             <Trans
               i18nKey="myApps.edit.versions.retentionNextEvict"
               values={{
                 name: nextEvicted.version_name,
                 code: nextEvicted.version_code,
               }}
+              tOptions={{ interpolation: { escapeValue: true } }}
+              shouldUnescape
               components={{ b: <span className="font-mono text-ink" /> }}
             />
           </p>
@@ -2194,12 +2370,20 @@ function CategoryPicker({
   onToggle: (id: string) => void;
   onClear: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const label = useCategoryLabel();
   if (available.length === 0) {
     return <p className="text-xs italic text-ink-mute">{t("myApps.edit.categories.loading")}</p>;
   }
-  const selected = available.filter((c) => selectedIds.includes(c.id));
-  const rest = available.filter((c) => !selectedIds.includes(c.id));
+  // Localized labels for official F-Droid IDs; non-official ones are flagged
+  // because F-Droid 2.0 files them under "Miscellaneous".
+  const byLabel = (a: Category, b: Category) => label(a).localeCompare(label(b));
+  const hint = (c: Category) =>
+    [categoryDescription(c, i18n.language), c.official === false ? t("myApps.edit.categories.custom") : null]
+      .filter(Boolean)
+      .join(" — ") || undefined;
+  const selected = available.filter((c) => selectedIds.includes(c.id)).sort(byLabel);
+  const rest = available.filter((c) => !selectedIds.includes(c.id)).sort(byLabel);
 
   return (
     <div className="space-y-3">
@@ -2229,10 +2413,12 @@ function CategoryPicker({
                 <button
                   type="button"
                   onClick={() => onToggle(c.id)}
+                  title={hint(c)}
                   className="group inline-flex items-center gap-1.5 rounded-pill bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg shadow-e1 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
-                  aria-label={t("myApps.edit.categories.remove", { name: c.name })}
+                  aria-label={t("myApps.edit.categories.remove", { name: label(c) })}
                 >
-                  {c.name}
+                  {label(c)}
+                  {c.official === false && <span aria-hidden className="opacity-70">*</span>}
                   <X className="h-3 w-3 opacity-75 transition-opacity group-hover:opacity-100" strokeWidth={2.6} />
                 </button>
               </li>
@@ -2256,32 +2442,41 @@ function CategoryPicker({
                 <button
                   type="button"
                   onClick={() => onToggle(c.id)}
+                  title={hint(c)}
                   className="inline-flex items-center gap-1.5 rounded-pill border border-outline-soft bg-surface px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-primary hover:bg-primary-container hover:text-primary-on-container focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30"
-                  aria-label={t("myApps.edit.categories.add", { name: c.name })}
+                  aria-label={t("myApps.edit.categories.add", { name: label(c) })}
                 >
                   <Plus className="h-3 w-3 opacity-70" strokeWidth={2.6} />
-                  {c.name}
+                  {label(c)}
+                  {c.official === false && <span aria-hidden className="opacity-70">*</span>}
                 </button>
               </li>
             ))}
           </ul>
         )}
       </div>
+      {available.some((c) => c.official === false) && (
+        <p className="px-1 text-[11px] text-ink-mute">* {t("myApps.edit.categories.custom")}</p>
+      )}
     </div>
   );
 }
 
-// The set the F-Droid client recognises and renders as warning badges. Order
-// roughly matches how upstream metadata lists them, with the security/privacy
-// ones first.
+// The standard anti-feature IDs (fdroiddata ``config/antiFeatures.yml`` plus
+// NSFW / UpstreamNonFree). The backend ships a definition for each in the
+// index — F-Droid 2.0 hides any anti-feature its repo doesn't define. Order
+// roughly matches how upstream metadata lists them, with the
+// security/privacy ones first.
 const KNOWN_ANTI_FEATURES = [
   "Tracking",
+  "Ads",
   "NonFreeNet",
   "NonFreeAdd",
   "KnownVuln",
   "NoSourceSince",
   "NonFreeAssets",
   "NonFreeDep",
+  "TetheredNet",
   "UpstreamNonFree",
   "DisabledAlgorithm",
   "NSFW",
@@ -2291,13 +2486,17 @@ function AntiFeatureChips({
   apk,
   disabled,
   onToggle,
+  onSaveReasons,
 }: {
   apk: Apk;
   disabled: boolean;
   onToggle: (flag: string) => void;
+  onSaveReasons: (reasons: Record<string, string>) => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
   const active = new Set(apk.anti_features || []);
+  const reasons = apk.anti_feature_reasons || {};
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <ShieldAlert className="h-3.5 w-3.5 text-ink-mute" />
@@ -2312,6 +2511,7 @@ function AntiFeatureChips({
             type="button"
             disabled={disabled}
             onClick={() => onToggle(flag)}
+            title={on ? reasons[flag] || undefined : undefined}
             className={cn(
               "rounded-pill border px-2 py-0.5 text-[10px] font-semibold transition-colors",
               on
@@ -2321,10 +2521,109 @@ function AntiFeatureChips({
             )}
           >
             {flag}
+            {on && reasons[flag] ? " ·" : ""}
           </button>
         );
       })}
+      {active.size > 0 && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setEditing(true)}
+          className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:text-ink-mute"
+          title={t("myApps.edit.antiFeatureReasons.hint")}
+        >
+          <MessageSquareText className="h-3 w-3" /> {t("myApps.edit.antiFeatureReasons.edit")}
+        </button>
+      )}
+      {editing && (
+        <AntiFeatureReasonsSheet
+          apk={apk}
+          flags={[...active]}
+          onClose={() => setEditing(false)}
+          onSave={async (next) => {
+            await onSaveReasons(next);
+            setEditing(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** One free-text reason per active anti-feature. F-Droid 2.0 shows it under
+ *  the flag on the app page (and in the red banner for ``KnownVuln``). */
+function AntiFeatureReasonsSheet({
+  apk,
+  flags,
+  onClose,
+  onSave,
+}: {
+  apk: Apk;
+  flags: string[];
+  onClose: () => void;
+  onSave: (reasons: Record<string, string>) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const flag of flags) initial[flag] = apk.anti_feature_reasons?.[flag] || "";
+    return initial;
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const cleaned: Record<string, string> = {};
+      for (const [flag, text] of Object.entries(draft)) {
+        if (text.trim()) cleaned[flag] = text.trim();
+      }
+      await onSave(cleaned);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Sheet
+      open={true}
+      onClose={onClose}
+      title={t("myApps.edit.antiFeatureReasons.title")}
+      eyebrow={
+        <span className="rounded-pill border border-outline-soft bg-surface-2 px-2 py-0.5 text-ink">
+          v{apk.version_name}
+        </span>
+      }
+      footer={
+        <>
+          <Button size="md" variant="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button size="md" variant="filled" onClick={save} disabled={saving}>
+            {saving ? t("common.saving") : t("common.save")}
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-4 text-sm text-ink-soft">{t("myApps.edit.antiFeatureReasons.body")}</p>
+      <div className="space-y-3">
+        {flags.map((flag) => (
+          <div key={flag}>
+            <Label htmlFor={`reason-${apk.id}-${flag}`} className="font-mono text-xs">
+              {flag}
+            </Label>
+            <Input
+              id={`reason-${apk.id}-${flag}`}
+              maxLength={1000}
+              value={draft[flag] || ""}
+              onChange={(e) => setDraft((prev) => ({ ...prev, [flag]: e.target.value }))}
+              placeholder={t("myApps.edit.antiFeatureReasons.placeholder")}
+            />
+          </div>
+        ))}
+      </div>
+    </Sheet>
   );
 }
 
@@ -2538,7 +2837,16 @@ function ReproducibilityRow({
 
 const _SEVERITY_ORDER: CveSeverity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"];
 
-function CveRow({ apk }: { apk: Apk }) {
+function CveRow({
+  apk,
+  busy,
+  onApplyKnownVuln,
+}: {
+  apk: Apk;
+  busy: boolean;
+  /** Flag the version ``KnownVuln`` with the suggested reason. */
+  onApplyKnownVuln: (reason: string) => Promise<void>;
+}) {
   const { t } = useTranslation();
   const [sbom, setSbom] = useState<SbomRead | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2602,6 +2910,12 @@ function CveRow({ apk }: { apk: Apk }) {
 
   const sheetDisabled =
     !sbom || status === "pending" || status === "scanning" || status === "skipped" || status === "never_scanned";
+  // CRITICAL / HIGH findings → offer the KnownVuln flag (never automatic:
+  // SBOM scans flag plenty of unreachable library code).
+  const knownVulnReason =
+    sbom?.known_vuln_reason && !(apk.anti_features || []).includes("KnownVuln")
+      ? sbom.known_vuln_reason
+      : null;
 
   return (
     <div className="mt-2">
@@ -2643,6 +2957,17 @@ function CveRow({ apk }: { apk: Apk }) {
           <span className="text-[10px] text-ink-mute">
             {t("myApps.edit.cve.lastScan", { date: formatDate(sbom.scanned_at) })}
           </span>
+        )}
+        {knownVulnReason && (
+          <button
+            type="button"
+            onClick={() => void onApplyKnownVuln(knownVulnReason)}
+            disabled={busy}
+            title={`${t("myApps.edit.cve.knownVulnHint")}\n\n${knownVulnReason}`}
+            className="text-[11px] font-semibold text-danger hover:underline disabled:text-ink-mute disabled:no-underline"
+          >
+            {t("myApps.edit.cve.applyKnownVuln")}
+          </button>
         )}
       </div>
       {sbom?.error_message && (

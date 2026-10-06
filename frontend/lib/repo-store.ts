@@ -133,46 +133,69 @@ export function useRepoInfo() {
 /* Deep-link helpers                                                   */
 /* ------------------------------------------------------------------ */
 
-/** Build the right F-Droid deep-link scheme for a given http(s) repo URL.
- *  `fdroidrepos://` opens HTTPS, `fdroidrepo://` opens HTTP — using the
- *  wrong one makes the F-Droid client connect on a port it can't reach. */
-export function fdroidScheme(url: string): "fdroidrepos" | "fdroidrepo" {
-  return url.startsWith("https://") ? "fdroidrepos" : "fdroidrepo";
+/** True for a plain-HTTP repo URL. F-Droid 2.0 no longer opens
+ *  ``fdroidrepo://`` links and F-Droid Basic 2.0 refuses cleartext
+ *  traffic altogether (only the full flavour still allows it). */
+export function isPlainHttp(url: string): boolean {
+  return /^http:\/\//i.test(url);
 }
 
-/* Build an F-Droid deep-link URL.
+/** True when the URL's authority carries an explicit port. */
+function hasExplicitPort(hostAndPath: string): boolean {
+  return /^[^/]*:\d+(\/|$)/.test(hostAndPath);
+}
+
+/** The username half of Basic-auth credentials is ignored server-side; it
+ *  must still be URL-safe because the client splits userinfo naively on
+ *  ``@`` and ``:``. */
+function safeUsername(username: string): string {
+  return /^[A-Za-z0-9._~-]+$/.test(username) ? username : "fdroid";
+}
+
+/* Build an F-Droid "add repository" link.
  *
- * IMPORTANT — auth strategy:
+ * What F-Droid 2.0 accepts: ``fdroidrepos://…`` and ``https://fdroid.link/#…``
+ * (``fdroidrepo://`` and bare ``…/fdroid/repo`` URLs were dropped from its
+ * manifest).
  *
- *   - WITHOUT credentials: standard public repo URL. Public apps only.
- *   - WITH credentials: we do NOT embed `user:pass@` in the URL. The F-Droid
- *     Android client has a parser bug in `RepoUriGetter` (libs/database/.../
- *     RepoUriGetter.kt) where Android's `Uri.Builder.authority(value)` URL-
- *     encodes the rebuilt host, turning `host:port` into `host%3Aport` for
- *     any URL that combines userinfo *and* a port. Instead, we encode the
- *     API key as a URL *path segment* (/r/{token}/fdroid/repo/...) and the
- *     backend resolves it via a dedicated route. F-Droid sees a normal URL
- *     and never re-encodes anything.
+ *   - public HTTPS:  fdroidrepos://host/fdroid/repo?fingerprint=…
+ *   - public HTTP:   https://fdroid.link/#http://host/fdroid/repo?fingerprint=…
+ *                    (still opens the app; only the full flavour can then
+ *                    reach a cleartext repo)
+ *   - private, no explicit port:
+ *                    fdroidrepos://user:<key>@host/fdroid/repo?fingerprint=…
+ *     The client strips the userinfo into the repo's Basic-auth credentials
+ *     and keeps the canonical address, so every request is authenticated.
+ *   - private with an explicit port:
+ *                    fdroidrepo(s)://host:port/r/<key>/fdroid/repo?fingerprint=…
+ *     ``RepoUriGetter`` rebuilds the host with ``Uri.Builder.authority()``,
+ *     which percent-encodes ``host:port`` into ``host%3Aport`` whenever
+ *     userinfo is present — so the key travels as a path segment instead
+ *     (the backend's ``/r/{token}/…`` routes). Caveat: the client stores
+ *     that URL as a *mirror* of the canonical (public) address and fetches
+ *     the index from the canonical address first, so this form is only
+ *     reliable on a private-mode repo.
  *
- * Net result the F-Droid client gets:
- *   - public:  fdroidrepo(s)://host/fdroid/repo?fingerprint=...
- *   - private: fdroidrepo(s)://host/r/<TOKEN>/fdroid/repo?fingerprint=...
+ * Credentials are never sent through fdroid.link: it's a third-party page.
  */
 export function fdroidDeepLink(
   url: string,
   options?: { credentials?: { username: string; secret: string } | null; fingerprint?: string | null },
 ): string {
-  const scheme = fdroidScheme(url);
-  const trimmed = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const https = !isPlainHttp(url);
+  const trimmed = url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
   const fp = options?.fingerprint ? `?fingerprint=${options.fingerprint}` : "";
+  const secret = options?.credentials?.secret;
 
-  if (options?.credentials?.secret) {
-    // The token *is* the secret (the public-facing "full key" from the
-    // create-key flow). We replace the /fdroid/repo path with /r/<token>/
-    // fdroid/repo, which the backend `/r/{token}/...` router resolves
-    // back to the same content but with the credential applied.
+  if (secret) {
+    if (https && !hasExplicitPort(trimmed)) {
+      const user = safeUsername(options?.credentials?.username || "");
+      return `fdroidrepos://${user}:${encodeURIComponent(secret)}@${trimmed}${fp}`;
+    }
     const withoutFDroid = trimmed.replace(/\/fdroid\/repo$/, "");
-    return `${scheme}://${withoutFDroid}/r/${encodeURIComponent(options.credentials.secret)}/fdroid/repo${fp}`;
+    const scheme = https ? "fdroidrepos" : "fdroidrepo";
+    return `${scheme}://${withoutFDroid}/r/${encodeURIComponent(secret)}/fdroid/repo${fp}`;
   }
-  return `${scheme}://${trimmed}${fp}`;
+  if (https) return `fdroidrepos://${trimmed}${fp}`;
+  return `https://fdroid.link/#http://${trimmed}${fp}`;
 }

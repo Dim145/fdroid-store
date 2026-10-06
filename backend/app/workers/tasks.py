@@ -16,12 +16,16 @@ Available jobs:
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from arq import cron
+from arq import Retry, cron
 from arq.connections import RedisSettings
+from redis.asyncio.lock import Lock
 from sqlalchemy import desc, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
@@ -33,22 +37,70 @@ from app.models.apk_scan import ApkScan, ApkScanStatus
 from app.models.app import App
 from app.models.github_source import GithubSource, GithubSourceStatus
 from app.models.repo_config import RepoConfig
+from app.services.queue import REINDEX_DIRTY_KEY, REINDEX_LOCK_KEY, REINDEX_QUEUED_KEY
 from app.storage import get_storage
 from app.storage.local import LocalStorage
 
 log = get_logger(__name__)
 
 
-async def rebuild_index(ctx: dict) -> dict:
-    async with SessionLocal() as db:
+# Single-flight index rebuild: the lock is held for the whole build and
+# refreshed while it runs, so a crashed worker frees it within a TTL.
+_REINDEX_LOCK_TTL = 120
+# How long a second rebuild job waits for the running one before retrying.
+_REINDEX_LOCK_WAIT = 900
+
+
+async def _keep_lock(lock: Lock) -> None:
+    while True:
+        await asyncio.sleep(_REINDEX_LOCK_TTL / 3)
         try:
-            await rebuild_repo_index(db)
-            await db.commit()
-            return {"ok": True}
-        except Exception as exc:
-            await db.rollback()
-            log.exception("rebuild_index failed", error=str(exc))
-            raise
+            await lock.reacquire()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("rebuild_index lock refresh failed", error=str(exc))
+            return
+
+
+async def rebuild_index(ctx: dict, force: bool = False) -> dict:
+    """Regenerate every index variant — one build at a time.
+
+    ``enqueue_reindex`` marks the index dirty after each committed change.
+    The job takes the dirty flag *before* reading the database, so a change
+    committed during the build re-marks it and its own (queued) job
+    rebuilds; a job that finds the flag already consumed by an earlier build
+    has nothing new to publish. Concurrent jobs wait on the lock instead of
+    writing the same index files at the same time.
+    """
+    redis = ctx["redis"]
+    await redis.delete(REINDEX_QUEUED_KEY)
+    lock = redis.lock(
+        REINDEX_LOCK_KEY, timeout=_REINDEX_LOCK_TTL, blocking_timeout=_REINDEX_LOCK_WAIT
+    )
+    if not await lock.acquire():
+        raise Retry(defer=30)
+    keepalive = asyncio.create_task(_keep_lock(lock))
+    try:
+        dirty = await redis.getdel(REINDEX_DIRTY_KEY)
+        if dirty is None and not force:
+            return {"ok": True, "skipped": "index already up to date"}
+        async with SessionLocal() as db:
+            try:
+                await rebuild_repo_index(db)
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                # Leave the work for the retry / next job.
+                await redis.set(REINDEX_DIRTY_KEY, "1")
+                log.exception("rebuild_index failed", error=str(exc))
+                # arq only re-runs a job that raises Retry (bounded by
+                # max_tries); a plain exception would leave the index stale
+                # until some unrelated change enqueues the next build.
+                raise Retry(defer=30) from exc
+        return {"ok": True}
+    finally:
+        keepalive.cancel()
+        with contextlib.suppress(Exception):
+            await lock.release()
 
 
 async def scan_apks_periodic(ctx: dict, force: bool = False) -> dict:
@@ -110,25 +162,40 @@ async def scan_apks_periodic(ctx: dict, force: bool = False) -> dict:
                 continue
             if not local.exists():
                 continue
-            result = await scan_path(local)
             row = ApkScan(
                 apk_id=apk.id,
                 scanner="clamav",
                 scanned_at=datetime.now(UTC),
             )
-            if result.clean:
-                row.status = ApkScanStatus.CLEAN
-            elif result.signature:
-                row.status = ApkScanStatus.INFECTED
-                row.signatures = result.signature
-                infected += 1
-            else:
+            try:
+                result = await scan_path(local)
+            except Exception as exc:  # noqa: BLE001 — one APK must not sink the whole run
+                log.warning("periodic scan failed", apk_id=str(apk.id), error=str(exc))
                 row.status = ApkScanStatus.ERROR
-                row.error = result.error
-                errors += 1
+                row.error = f"scan failed: {exc}"[:1000]
+            else:
+                if result.clean:
+                    row.status = ApkScanStatus.CLEAN
+                elif result.signature:
+                    row.status = ApkScanStatus.INFECTED
+                    row.signatures = result.signature
+                else:
+                    row.status = ApkScanStatus.ERROR
+                    row.error = result.error
             db.add(row)
+            # One commit per APK: the verdicts already obtained survive a
+            # later failure (or a worker restart) in the middle of the run.
+            try:
+                await db.commit()
+            except SQLAlchemyError as exc:
+                await db.rollback()
+                log.warning("could not record scan", apk_id=str(apk.id), error=str(exc))
+                continue
             scanned += 1
-        await db.commit()
+            if row.status == ApkScanStatus.INFECTED:
+                infected += 1
+            elif row.status == ApkScanStatus.ERROR:
+                errors += 1
         log.info(
             "scan_apks_periodic complete",
             scanned=scanned,
@@ -160,17 +227,22 @@ async def scan_github_sources_periodic(ctx: dict) -> dict:
         log.info("scan_github_sources: nothing to do")
         return {"queued": 0}
 
+    # The job id carries the day: it dedupes a re-run of today's
+    # coordinator, while a fixed id would collide with yesterday's result
+    # (kept ``keep_result`` = 24h) and arq would silently drop the enqueue.
+    day = datetime.now(UTC).strftime("%Y%m%d")
     pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         queued = 0
         for s in sources:
             sid = str(s.id)
-            await pool.enqueue_job(
+            job = await pool.enqueue_job(
                 "fetch_github_source",
                 sid,
-                _job_id=f"fetch_github_source:{sid}",
+                _job_id=f"fetch_github_source:{sid}:{day}",
             )
-            queued += 1
+            if job is not None:
+                queued += 1
     finally:
         await pool.close()
     log.info("scan_github_sources queued", queued=queued)
@@ -276,8 +348,10 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
             }
 
         # ---- 2. Download the asset to a tmpfile ------------------------
+        config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+        cap_bytes = (config.upload_max_apk_mb if config else 200) * 1024 * 1024
         try:
-            tmp_path = await download_asset(asset)
+            tmp_path = await download_asset(asset, max_bytes=cap_bytes)
         except GithubReleaseError as exc:
             await _mark_source_error(db, source, f"Download failed: {exc}")
             await db.commit()
@@ -314,12 +388,15 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
                 }
 
             try:
+                # A forge pre-release lands on the F-Droid Beta channel:
+                # only users who allowed beta updates for the app get it.
                 apk = await attach_apk_to_app(
                     db,
                     app=app,
                     tmp_path=tmp_path,
                     meta=meta,
                     uploader=owner,
+                    is_beta=asset.is_prerelease,
                 )
             except Exception as exc:  # noqa: BLE001
                 detail = getattr(exc, "detail", None) or str(exc)
@@ -345,7 +422,7 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
             # path so the worker can't grow an app unbounded by
             # cron-driven imports.
             from app.services.apk_eviction import evict_oldest_if_needed
-            await evict_oldest_if_needed(db, app=app, actor_id=owner.id)
+            await evict_oldest_if_needed(db, app=app, actor_id=owner.id, keep=apk.id)
 
             await write_event(
                 db,
@@ -399,6 +476,25 @@ async def shutdown(ctx: dict) -> None:
     log.info("arq worker shutting down")
 
 
+async def purge_stale_staging(ctx: dict) -> dict:
+    """Delete staged uploads (``/apks/inspect``) nobody redeemed: they
+    outlive their one-hour staging token otherwise and pile up in storage
+    without counting against any quota."""
+    from app.core.download_token import _STAGING_DEFAULT_TTL
+
+    storage = get_storage()
+    cutoff = datetime.now(UTC) - timedelta(seconds=_STAGING_DEFAULT_TTL + 600)
+    deleted = 0
+    for key, modified in await storage.list_prefix("staging/"):
+        if modified < cutoff:
+            try:
+                await storage.delete(key)
+                deleted += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("could not purge staged upload", key=key, error=str(exc))
+    return {"deleted": deleted}
+
+
 from app.workers.backup_tasks import (
     cleanup_expired_backups,
     run_backup_job,
@@ -423,6 +519,7 @@ class WorkerSettings:
         run_backup_job,
         run_restore_job,
         cleanup_expired_backups,
+        purge_stale_staging,
         # Per-APK SBOM + CVE scanning via trivy. Auto-enqueued when
         # an APK reaches PARSED; short-circuits when the feature is
         # disabled in RepoConfig.
@@ -444,12 +541,13 @@ class WorkerSettings:
         # hour later so dial-out bursts don't overlap on a slow uplink.
         cron(scan_apk_proxy_sources_periodic, hour={5}, minute={0}, run_at_startup=False),
         cron(cleanup_expired_backups, minute={30}, run_at_startup=False),
+        cron(purge_stale_staging, minute={45}, run_at_startup=False),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup
     on_shutdown = shutdown
-    # rebuild_index is dedup-coalesced by job_id at enqueue time, so we don't
-    # need a high concurrency.
+    # rebuild_index is coalesced at enqueue time and single-flight (redis
+    # lock), so a second slot never runs two builds at once.
     max_jobs = 2
     # Backups on large repos can run for tens of minutes; bump the timeout
     # generously so a real-world repo finishes inside one job lifetime.
@@ -459,3 +557,12 @@ class WorkerSettings:
     # page survives restarts and idle periods. 30s (the prior value) made
     # the history vanish almost immediately after every run.
     keep_result = 86400
+    # Refresh the health-check key every minute (arq's default is hourly,
+    # with a TTL of interval + 1 s): the compose healthcheck runs
+    # ``arq --check`` every 30 s and must see a dead worker within minutes.
+    health_check_interval = 60
+    # Pick at most one job per poll. With a bigger batch, arq's poll loop
+    # waits on the job semaphore whenever more jobs are queued than slots
+    # are free (the daily source fan-out) and neither refreshes the health
+    # key nor runs crons until the batch is started.
+    queue_read_limit = 1

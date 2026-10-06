@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
 from app.core.logging import get_logger
 from app.core.security import hash_password
+from app.fdroid.categories_catalog import DEFAULT_CATEGORY_IDS
 from app.fdroid.default_icon import generate_default_repo_icon
 from app.models import (  # noqa: F401 — ensure all models register with Base.metadata
     Apk,
@@ -143,6 +144,17 @@ async def _create_tables_if_needed() -> None:
             # the badge / per-APK editor visible (matches the behaviour
             # in 1.1.x when the feature first shipped without a toggle).
             "ALTER TABLE repo_config ADD COLUMN IF NOT EXISTS reproducible_builds_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+            # v1.5 — F-Droid 2.0 alignment. ``first_published_at`` feeds the
+            # index ``added`` field ("New apps" carousel); legacy published
+            # apps are backfilled with ``created_at`` — the value ``added``
+            # had so far — so no existing app suddenly shows up as new.
+            "ALTER TABLE apps ADD COLUMN IF NOT EXISTS first_published_at"
+            " TIMESTAMP WITH TIME ZONE",
+            "UPDATE apps SET first_published_at = created_at"
+            " WHERE first_published_at IS NULL AND last_published_at IS NOT NULL",
+            # Beta release channel + free-text anti-feature reasons per APK.
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS is_beta BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE apks ADD COLUMN IF NOT EXISTS anti_feature_reasons JSON",
             # Convert apks.whats_new from TEXT → JSON, wrapping any existing
             # text values as ``{"en-US": <text>}`` so the F-Droid spec's
             # per-locale shape is the only one the app code ever sees.
@@ -218,27 +230,9 @@ async def _create_tables_if_needed() -> None:
                 log.info("skipping enum migration step", stmt=stmt, error=str(exc))
 
 
-# Mirrors F-Droid's default category list (subset, can be edited by admin)
-DEFAULT_CATEGORIES = [
-    "Connectivity",
-    "Development",
-    "Games",
-    "Graphics",
-    "Internet",
-    "Money",
-    "Multimedia",
-    "Navigation",
-    "Phone & SMS",
-    "Reading",
-    "Science & Education",
-    "Security",
-    "Sports & Health",
-    "System",
-    "Theming",
-    "Time",
-    "Writing",
-    "Misc",
-]
+# Subset of F-Droid's official category IDs (can be edited by admin). See
+# ``app.fdroid.categories_catalog`` for why the exact IDs matter.
+DEFAULT_CATEGORIES = list(DEFAULT_CATEGORY_IDS)
 
 
 async def bootstrap_first_run() -> None:
@@ -268,8 +262,13 @@ async def bootstrap_first_run() -> None:
             await db.rollback()
             log.info("admin seed skipped", reason=str(exc))
 
-    # ---- Default categories -- one-at-a-time so collisions don't poison the rest
-    for cat in DEFAULT_CATEGORIES:
+    # ---- Default categories -- first boot only: re-seeding on every start
+    # brought back the ones an admin had deleted or merged away. Existing
+    # installs keep their list; official IDs come from the catalogue.
+    # One-at-a-time so collisions don't poison the rest.
+    async with SessionLocal() as db:
+        has_categories = (await db.execute(select(Category.id).limit(1))).first() is not None
+    for cat in () if has_categories else DEFAULT_CATEGORIES:
         async with SessionLocal() as db:
             try:
                 exists = (

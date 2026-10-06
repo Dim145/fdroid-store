@@ -12,8 +12,9 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, setTokens, type AuthMethodsInfo } from "@/lib/api";
-import { useAuth } from "@/lib/auth-store";
+import { api, type AuthMethodsInfo, type CurrentUser } from "@/lib/api";
+import { beginOidcLogin, useAuth } from "@/lib/auth-store";
+import { safeNext } from "@/lib/utils";
 
 export default function LoginPage() {
   return (
@@ -23,29 +24,28 @@ export default function LoginPage() {
   );
 }
 
-// Defence against open redirects via ``?next=...``. The cheap
-// ``startsWith`` checks missed several browser-tolerated bypasses
-// (single backslash, percent-encoded slash, tab/whitespace). Parse the
-// value with the standard ``URL`` constructor against our own origin —
-// anything that resolves to a different origin is rejected outright.
-function safeNext(raw: string | null): string {
-  if (!raw || raw.length > 512) return "/apps";
-  if (typeof window === "undefined") return "/apps";
-  try {
-    const url = new URL(raw, window.location.origin);
-    if (url.origin !== window.location.origin) return "/apps";
-    return url.pathname + url.search + url.hash;
-  } catch {
-    return "/apps";
-  }
-}
+// Stable reasons the SSO callback reports on ``?oidc_error=``. Each maps to
+// ``auth.login.oidcErrors.<code>``; anything else shows the generic message
+// — the raw query value is never rendered.
+const OIDC_ERROR_CODES = new Set([
+  "token_exchange_failed",
+  "missing_claims",
+  "email_unverified",
+  "signup_disabled",
+  "signup_closed",
+  "invite_required",
+  "invite_invalid",
+  "invite_used",
+  "account_disabled",
+  "identity_conflict",
+]);
 
 function LoginForm() {
   const { t } = useTranslation();
   const router = useRouter();
   const search = useSearchParams();
   const next = safeNext(search.get("next"));
-  const { user, login, finishMfaLogin } = useAuth();
+  const { user, login, finishMfaLogin, acceptTokens } = useAuth();
 
   const [methods, setMethods] = useState<AuthMethodsInfo | null>(null);
   const [email, setEmail] = useState("");
@@ -84,12 +84,26 @@ function LoginForm() {
   }, []);
 
   // Surface server-side errors returned from the OIDC callback (e.g. invite
-  // required, signup closed). The backend redirects back with ?oidc_error=...
-  // instead of dumping a raw 400.
+  // required, signup closed). The backend redirects back with a stable code
+  // in ?oidc_error=... instead of dumping a raw 400.
   useEffect(() => {
     const e = search.get("oidc_error");
-    if (e) setError(e);
-  }, [search]);
+    if (e) {
+      setError(t(OIDC_ERROR_CODES.has(e) ? `auth.login.oidcErrors.${e}` : "auth.login.oidcErrors.generic"));
+    }
+  }, [search, t]);
+
+  // Common tail of every successful sign-in: a first-run admin lands on the
+  // setup wizard, everyone else on ``next``.
+  async function landAfterLogin(me: CurrentUser) {
+    if (me.role === "admin") {
+      try {
+        const status = await api.setup.status();
+        if (!status.setup_complete) { router.replace("/admin/setup"); return; }
+      } catch { /* ignore */ }
+    }
+    router.replace(next);
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -105,14 +119,7 @@ function LoginForm() {
         setEnrollmentToken(outcome.enrollmentToken);
         return;
       }
-      const me = outcome.user;
-      if (me.role === "admin") {
-        try {
-          const status = await api.setup.status();
-          if (!status.setup_complete) { router.replace("/admin/setup"); return; }
-        } catch { /* ignore */ }
-      }
-      router.replace(next);
+      await landAfterLogin(outcome.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -131,25 +138,19 @@ function LoginForm() {
           optionsJSON: options as unknown as Parameters<typeof startAuthentication>[0]["optionsJSON"],
         });
         const tokens = await api.webauthn.mfaFinish(mfaToken, challenge_token, cred);
-        setTokens(tokens.access_token, tokens.refresh_token);
-        const me = await api.me();
-        if (me.role === "admin") {
-          try {
-            const status = await api.setup.status();
-            if (!status.setup_complete) { router.replace("/admin/setup"); return; }
-          } catch { /* ignore */ }
-        }
-        router.replace(next);
+        await landAfterLogin(await acceptTokens(tokens.access_token, tokens.refresh_token));
         return;
       }
-      const me = await finishMfaLogin(mfaToken, mfaCode.trim());
-      if (me.role === "admin") {
-        try {
-          const status = await api.setup.status();
-          if (!status.setup_complete) { router.replace("/admin/setup"); return; }
-        } catch { /* ignore */ }
+      const outcome = await finishMfaLogin(mfaToken, mfaCode.trim());
+      if (outcome.kind === "enrollment") {
+        // The code was right, but the role must also register a passkey:
+        // switch to the same enrolment form as after the password step.
+        setMfaToken(null);
+        setMfaCode("");
+        setEnrollmentToken(outcome.enrollmentToken);
+        return;
       }
-      router.replace(next);
+      await landAfterLogin(outcome.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invalid code");
     } finally {
@@ -170,15 +171,7 @@ function LoginForm() {
         optionsJSON: options as unknown as Parameters<typeof startAuthentication>[0]["optionsJSON"],
       });
       const tokens = await api.webauthn.loginFinish(challenge_token, cred);
-      setTokens(tokens.access_token, tokens.refresh_token);
-      const me = await api.me();
-      if (me.role === "admin") {
-        try {
-          const status = await api.setup.status();
-          if (!status.setup_complete) { router.replace("/admin/setup"); return; }
-        } catch { /* ignore */ }
-      }
-      router.replace(next);
+      await landAfterLogin(await acceptTokens(tokens.access_token, tokens.refresh_token));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Authentication failed";
       // Cancel from the browser prompt isn't an error worth surfacing.
@@ -209,15 +202,7 @@ function LoginForm() {
         challenge_token,
         cred,
       );
-      setTokens(tokens.access_token, tokens.refresh_token);
-      const me = await api.me();
-      if (me.role === "admin") {
-        try {
-          const status = await api.setup.status();
-          if (!status.setup_complete) { router.replace("/admin/setup"); return; }
-        } catch { /* ignore */ }
-      }
-      router.replace(next);
+      await landAfterLogin(await acceptTokens(tokens.access_token, tokens.refresh_token));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Enrolment failed";
       if (!/cancel|denied|abort|NotAllowed/i.test(msg)) setError(msg);
@@ -226,20 +211,28 @@ function LoginForm() {
     }
   }
 
-  // For invite-mode repos, append ?invite=... to the OIDC login URL so the
-  // backend can carry it through the IdP round-trip in the session.
-  //
   // Defensive: validate the scheme is http/https so a compromised or
-  // misconfigured /auth/methods response can't slip a ``javascript:`` /
-  // ``data:`` URL into our <a href>.
-  const oidcHref = (() => {
+  // misconfigured /auth/methods response can't send the browser to a
+  // ``javascript:`` / ``data:`` URL.
+  const oidcLoginUrl = (() => {
     const base = methods?.oidc_login_url;
-    if (!base || !/^https?:\/\//i.test(base)) return null;
-    const trimmed = oidcInvite.trim();
-    if (!trimmed) return base;
-    const sep = base.includes("?") ? "&" : "?";
-    return `${base}${sep}invite=${encodeURIComponent(trimmed)}`;
+    return base && /^https?:\/\//i.test(base) ? base : null;
   })();
+
+  // Start SSO. A fresh nonce and the post-login target go to sessionStorage
+  // first (the success page needs both to redeem the callback's one-time
+  // code); the login URL then carries ``bind=<nonce>`` and, for invite-mode
+  // repos, ``invite=...`` so the backend can keep it through the IdP
+  // round-trip in the session.
+  function startOidc() {
+    if (!oidcLoginUrl) return;
+    const href = beginOidcLogin(oidcLoginUrl, { next, invite: oidcInvite.trim() || undefined });
+    if (!href) {
+      setError(t("auth.login.oidcErrors.generic"));
+      return;
+    }
+    window.location.assign(href);
+  }
 
   return (
     <AuthShell title={t("auth.login.title")} lede={t("auth.login.subtitle")}>
@@ -367,7 +360,7 @@ function LoginForm() {
         </form>
       )}
 
-      {methods?.oidc && oidcHref && (
+      {methods?.oidc && oidcLoginUrl && (
         <>
           <Divider />
           {methods.registration_policy === "invite" && (
@@ -381,8 +374,8 @@ function LoginForm() {
               />
             </Field>
           )}
-          <Button asChild variant="outlined" size="lg" className="w-full">
-            <a href={oidcHref}>{t("auth.login.oidcButton")}</a>
+          <Button type="button" variant="outlined" size="lg" className="w-full" onClick={startOidc}>
+            {t("auth.login.oidcButton")}
           </Button>
         </>
       )}

@@ -12,7 +12,6 @@ caught by structlog at log level WARNING.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
 from typing import Any
@@ -20,6 +19,7 @@ from typing import Any
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import client_ip, hash_ip
 from app.core.logging import get_logger
 from app.models.audit_log import AuditLog
 from app.models.user import User
@@ -28,21 +28,11 @@ log = get_logger(__name__)
 
 
 def _hash_ip(ip: str | None) -> str | None:
-    if not ip:
-        return None
-    return hashlib.sha256(ip.encode("utf-8")).hexdigest()
+    return hash_ip(ip)
 
 
 def _client_ip(request: Request | None) -> str | None:
-    if request is None:
-        return None
-    # Behind the bundled nginx, the real client IP arrives in
-    # X-Forwarded-For. We trust the first hop only — anything else is
-    # forwardable by the client itself.
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",", 1)[0].strip() or None
-    return request.client.host if request.client else None
+    return client_ip(request) if request is not None else None
 
 
 def _user_agent(request: Request | None) -> str | None:

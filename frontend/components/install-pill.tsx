@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { storeAppLink } from "@/lib/fdroid-client";
 import { fdroidDeepLink, useRepoInfo } from "@/lib/repo-store";
 import { cn } from "@/lib/utils";
 
@@ -18,23 +19,27 @@ type Props = {
   /** APK row id, used to exchange the user's JWT for a signed download URL
    *  in private mode (anchor clicks carry no Authorization header). */
   apkId?: string;
+  /** When set, deeplink mode also offers "Open in F-Droid" — a
+   *  ``market://details`` link F-Droid 2.0 resolves to the app's page once
+   *  this repository is added. */
+  packageName?: string;
   /** Visual emphasis — XL is the detail-page hero pill. */
   size?: "md" | "lg" | "xl";
   /** ``deeplink`` (default) renders the F-Droid Install pill plus a small
    *  "Or download .apk" fallback — the right shape on a mobile device that
    *  actually has an F-Droid client. ``download`` renders a single big pill
    *  that directly downloads the APK — the only useful action on desktop,
-   *  where the fdroidrepo:// scheme is a dead end. */
+   *  where the F-Droid deep links are a dead end. */
   mode?: Mode;
   className?: string;
 };
 
-/* Signature install CTA. The deep-link scheme matches the configured repo
- * URL (fdroidrepo:// for HTTP, fdroidrepos:// for HTTPS) so we never hand
- * F-Droid a URL on the wrong port. */
+/* Signature install CTA. The deep link (see ``fdroidDeepLink``) matches the
+ * configured repo URL so we never hand F-Droid a URL on the wrong port. */
 export function InstallPill({
   apkFileName,
   apkId,
+  packageName,
   size = "lg",
   mode = "deeplink",
   className,
@@ -129,6 +134,19 @@ export function InstallPill({
           <span>{t("appDetail.install")}</span>
         </a>
       </Button>
+      {packageName && (
+        <Button
+          asChild
+          variant="outlined"
+          size="sm"
+          className="self-stretch"
+          title={t("appDetail.openInFdroidHint")}
+        >
+          <a href={storeAppLink(packageName)} className="text-xs">
+            {t("appDetail.openInFdroid")}
+          </a>
+        </Button>
+      )}
       {apkLink && (
         <Button asChild variant="tonal" size="sm" className="self-stretch" disabled={busy}>
           <a href={apkLink} onClick={onClickApk} download className="text-xs">

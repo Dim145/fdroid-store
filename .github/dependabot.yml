@@ -1,0 +1,18 @@
+# Keep the commit-SHA pins of the GitHub Actions used in .github/workflows
+# current: Dependabot opens a weekly PR bumping each ``uses: …@<sha>`` (and
+# its ``# vX.Y.Z`` comment) to the latest release. Grouped into one PR so a
+# routine bump is a single review. The cooldown skips releases younger than
+# a week, so a hijacked action release has time to be spotted and pulled
+# before it's proposed here (security updates are not delayed).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"

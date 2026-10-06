@@ -147,6 +147,12 @@ async def upsert_github_source(
                 token_action = "cleared"
             elif new_token_blob is not None:
                 token_action = "set"
+        elif (provider_changed or base_url_changed) and existing.access_token_encrypted:
+            # A token belongs to one forge: moving the source to another
+            # provider or host without supplying a new one must not send the
+            # stored token there (metadata fetch, immediate scan).
+            existing.access_token_encrypted = None  # type: ignore[assignment]
+            token_action = "cleared"
         # When the repo, provider or base URL changes, reset the import
         # bookmark so the next scan considers the newest release rather
         # than dedup'ing against a tag from a different source.

@@ -5,11 +5,14 @@ create, with-github-source create, worker-driven release fetch). When
 the per-app count exceeds the effective cap, we evict the oldest APKs
 by ``version_code`` ascending until the count is back in range.
 
-Two safeguards:
+Three safeguards:
 
   * The suggested version (``App.suggested_version_code``) is never
     evicted — F-Droid clients rely on it to know which version to
     install. We skip past it and pull the next-oldest eligible row.
+  * Neither is the newest version: a beta upload sits above the
+    suggested one, so with a tight cap it would otherwise be evicted the
+    moment it lands.
   * ``0`` on the per-app override is a sentinel for "no cap on this
     app even if the repo default would impose one" — useful for a
     long-history library where the admin wants the global eviction
@@ -22,6 +25,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import run_after_commit
 from app.core.logging import get_logger
 from app.models.apk import Apk
 from app.models.app import App
@@ -63,9 +67,15 @@ async def evict_oldest_if_needed(
     *,
     app: App,
     actor_id: uuid.UUID | None = None,
+    keep: uuid.UUID | None = None,
 ) -> list[uuid.UUID]:
     """Trim ``app.apks`` down to the effective cap. Returns the list
     of deleted APK ids (empty when no eviction was needed).
+
+    ``keep`` is the APK the caller just attached: an upload of an older
+    versionCode must not be evicted by the request that created it. Inside
+    a request the evicted files are only deleted once the transaction has
+    committed, so a failing request leaves no indexed row without its file.
 
     Safe to call on every upload. Idempotent: a second invocation when
     the count is already under the cap returns immediately.
@@ -88,18 +98,27 @@ async def evict_oldest_if_needed(
 
     storage = get_storage()
     deleted: list[uuid.UUID] = []
+    doomed_keys: list[str] = []
     # Walk the oldest-first list; whenever we hit the suggested version,
     # skip it and look at the next candidate. We stop as soon as the
     # remaining count matches the cap.
     suggested_code = app.suggested_version_code
+    newest_code = rows[-1].version_code
     remaining = len(rows)
     for row in rows:
         if remaining <= cap:
             break
-        if suggested_code is not None and row.version_code == suggested_code:
-            # Protected — never evict the suggested version even if it's
-            # the oldest. Note the skip in the audit log so an admin can
-            # see why a particular app stays above the cap.
+        protected = None
+        if keep is not None and row.id == keep:
+            protected = "just_uploaded"
+        elif suggested_code is not None and row.version_code == suggested_code:
+            protected = "suggested_version"
+        elif row.version_code == newest_code:
+            protected = "newest_version"
+        if protected is not None:
+            # Protected — never evict the suggested nor the newest version
+            # even if it's the oldest. Note the skip in the audit log so an
+            # admin can see why a particular app stays above the cap.
             await write_event(
                 db,
                 action="apk.retention_skip",
@@ -108,29 +127,19 @@ async def evict_oldest_if_needed(
                 target_id=row.id,
                 summary=(
                     f"retention kept {app.package_name} v{row.version_name} "
-                    f"({row.version_code}) — suggested version"
+                    f"({row.version_code}) — {protected.replace('_', ' ')}"
                 ),
                 payload={
                     "app_id": str(app.id),
                     "package_name": app.package_name,
                     "version_code": row.version_code,
                     "version_name": row.version_name,
-                    "reason": "suggested_version",
+                    "reason": protected,
                     "cap": cap,
                 },
             )
             continue
-        try:
-            await storage.delete(row.storage_key)
-        except Exception as exc:  # noqa: BLE001
-            # Storage failures shouldn't poison the DB delete — log
-            # and continue. Worst case: an orphaned object on disk
-            # that doesn't affect correctness.
-            log.warning(
-                "storage delete failed during retention eviction",
-                key=row.storage_key,
-                error=str(exc),
-            )
+        doomed_keys.append(row.storage_key)
         await db.delete(row)
         deleted.append(row.id)
         remaining -= 1
@@ -155,6 +164,23 @@ async def evict_oldest_if_needed(
         )
     if deleted:
         await db.flush()
+
+        async def _delete_files() -> None:
+            for key in doomed_keys:
+                try:
+                    await storage.delete(key)
+                except Exception as exc:  # noqa: BLE001
+                    # Storage failures shouldn't poison the eviction — worst
+                    # case: an orphaned object that doesn't affect correctness.
+                    log.warning(
+                        "storage delete failed during retention eviction",
+                        key=key,
+                        error=str(exc),
+                    )
+
+        if not run_after_commit(f"evict:{app.id}", _delete_files):
+            # Worker / script context: no request transaction to wait for.
+            await _delete_files()
     return deleted
 
 

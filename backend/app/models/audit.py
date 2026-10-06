@@ -38,7 +38,8 @@ class DownloadEvent(Base, IdMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("api_keys.id", ondelete="SET NULL")
     )
 
-    ip_hash: Mapped[str | None] = mapped_column(String(64))  # SHA-256 of IP, never raw
+    # Keyed (HMAC) fingerprint of the client IP (core.client_ip), never raw.
+    ip_hash: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(512))
     bytes_served: Mapped[int | None] = mapped_column(Integer)
     status_code: Mapped[int] = mapped_column(Integer, default=200, nullable=False)

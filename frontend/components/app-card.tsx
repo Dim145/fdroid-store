@@ -8,6 +8,7 @@ import { AppIcon } from "@/components/app-icon";
 import { NsfwTag } from "@/components/nsfw-tag";
 import { Badge } from "@/components/ui/badge";
 import { type AppSummary } from "@/lib/api";
+import { useCategoryLabel } from "@/lib/categories";
 import { cn } from "@/lib/utils";
 
 type Variant = "list" | "tile" | "feature" | "mini";
@@ -44,6 +45,7 @@ function ListItem({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const categoryLabel = useCategoryLabel();
   return (
     <Link
       href={`/apps/${app.package_name}`}
@@ -65,7 +67,7 @@ function ListItem({
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-ink">{app.name}</div>
         <div className="truncate text-xs text-ink-mute">
-          {app.author_name || app.categories[0]?.name || t("appCard.selfHosted")}
+          {app.author_name || (app.categories[0] && categoryLabel(app.categories[0])) || t("appCard.selfHosted")}
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-mute">
           {app.suggested_version_name && (
@@ -87,6 +89,7 @@ function ListItem({
 /* -------------------------------------------------------------------------- */
 function Tile({ app, className }: { app: AppSummary; className?: string }) {
   const { t } = useTranslation();
+  const categoryLabel = useCategoryLabel();
   return (
     <Link
       href={`/apps/${app.package_name}`}
@@ -111,7 +114,7 @@ function Tile({ app, className }: { app: AppSummary; className?: string }) {
       <div className="w-full min-w-0">
         <div className="truncate text-sm font-semibold text-ink">{app.name}</div>
         <div className="truncate text-xs text-ink-mute">
-          {app.categories[0]?.name || t("appCard.selfHosted")}
+          {(app.categories[0] && categoryLabel(app.categories[0])) || t("appCard.selfHosted")}
         </div>
       </div>
     </Link>
@@ -121,6 +124,7 @@ function Tile({ app, className }: { app: AppSummary; className?: string }) {
 /* -------------------------------------------------------------------------- */
 function Feature({ app, className }: { app: AppSummary; className?: string }) {
   const { t } = useTranslation();
+  const categoryLabel = useCategoryLabel();
   // Soft tinted backdrop derived from the app name — gives each hero card a
   // distinct color without baking real palette extraction into the build.
   let h = 0;
@@ -164,7 +168,7 @@ function Feature({ app, className }: { app: AppSummary; className?: string }) {
         <div className="min-w-0">
           <div className="text-xl font-bold tracking-tight text-ink">{app.name}</div>
           <div className="truncate text-sm text-ink-mute">
-            {app.author_name || app.categories[0]?.name || t("appCard.selfHosted")}
+            {app.author_name || (app.categories[0] && categoryLabel(app.categories[0])) || t("appCard.selfHosted")}
           </div>
           <p className="mt-2 text-sm text-ink-soft line-clamp-2">
             {app.summary || "—"}

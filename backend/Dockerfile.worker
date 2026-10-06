@@ -19,6 +19,20 @@
 # freshly-baked API image.
 # ============================================================================
 ARG API_IMAGE=ghcr.io/dim145/fdroid-store-backend:latest
+# Trivy CLI source: the official image, pinned to the same release as the
+# ``trivy`` server service in docker-compose.yml (keep the two in sync —
+# client and server must speak the same protocol). Copying the binary out
+# of it replaces an unverified ``curl | tar`` of the GitHub release
+# tarball: the image layers are content-addressed and pulled through the
+# same registry trust as every other base image, and BuildKit picks the
+# right architecture from the multi-arch manifest.
+ARG TRIVY_IMAGE=aquasec/trivy:0.70.0
+
+
+# ----------------------------------------------------------------------------
+# trivy — only the statically linked CLI binary is used (see TRIVY_IMAGE).
+# ----------------------------------------------------------------------------
+FROM ${TRIVY_IMAGE} AS trivy
 
 
 # ----------------------------------------------------------------------------
@@ -67,13 +81,6 @@ ENV PATH="/opt/venv/bin:/opt/jre-min/bin:$PATH" \
 # postgresql-client-16 pinned via the PostgreSQL apt repo (Trixie's
 # default is the 17-series client which emits SET directives that
 # PG 16 refuses on restore — hence the pin).
-#
-# Trivy is installed as a CLI binary (~80 MB) and used in CLIENT MODE
-# only: when ``TRIVY_SERVER_URL`` is set in the env, the worker calls
-# ``trivy fs --server ...``; the vulnerability DB lives on the trivy
-# server container (see docker-compose.yml ``trivy`` profile). Without
-# ``TRIVY_SERVER_URL``, the scan worker short-circuits to SKIPPED and
-# the binary is unused.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -85,18 +92,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update && apt-get install -y --no-install-recommends \
         postgresql-client-16 \
-    && TRIVY_VERSION="0.70.0" \
-    && TRIVY_ARCH="$(case "$(dpkg --print-architecture)" in \
-            amd64) echo "64bit" ;; \
-            arm64) echo "ARM64" ;; \
-            *) echo "64bit" ;; \
-        esac)" \
-    && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" -o /tmp/trivy.tgz \
-    && tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy \
-    && rm /tmp/trivy.tgz \
-    && chmod +x /usr/local/bin/trivy \
     && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc /usr/share/man
+
+# Trivy CLI, used in CLIENT MODE only: when ``TRIVY_SERVER_URL`` is set in
+# the env, the worker calls ``trivy fs --server ...``; the vulnerability DB
+# lives on the trivy server container (see docker-compose.yml ``trivy``
+# profile). Without ``TRIVY_SERVER_URL``, the scan worker short-circuits to
+# SKIPPED and the binary is unused. Static Go binary, so the Alpine-based
+# source image is fine for this Debian runtime.
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 
 # Minimal JDK + apksigner (from builder stages above). We copy
 # apksigner.jar to where its shipped wrapper script looks for it
@@ -122,8 +127,10 @@ RUN mkdir -p /data/backup-tmp && \
 # makes the worker's app code track the working tree directly, regardless of
 # FROM-cache timing. (Python deps still come from the inherited ``/opt/venv``;
 # a *dependency* change — pyproject.toml — still needs a fresh API image, but
-# app-code changes — the common case — are now always current.)
-COPY --chown=fdroid:fdroid app /app/app
+# app-code changes — the common case — are now always current.) Copied
+# root-owned like in the API image: the runtime user can read, not rewrite,
+# the code it runs.
+COPY app /app/app
 RUN /opt/venv/bin/python -m compileall -q /app/app || true
 
 USER fdroid:fdroid

@@ -10,6 +10,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import aliased, selectinload
 
 from app.api.deps import DbSession, get_current_admin
+from app.core.database import run_after_commit
 from app.core.security import hash_password
 from app.core.uploads import normalize_image, read_capped
 from app.models.api_key import ApiKey
@@ -28,6 +29,7 @@ from app.schemas.repo import RepoConfigRead, RepoConfigUpdate
 from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserRead
 from app.services.audit import write_event
 from app.services.queue import enqueue_reindex
+from app.services.suggested_version import recompute_auto
 from app.storage import get_storage
 
 router = APIRouter()
@@ -60,9 +62,14 @@ async def create_user(
 ) -> UserRead:
     existing = (
         await db.execute(
-            select(User).where((User.email == payload.email) | (User.username == payload.username))
+            select(User.id)
+            .where(
+                (func.lower(User.email) == str(payload.email).lower())
+                | (User.username == payload.username)
+            )
+            .limit(1)
         )
-    ).scalar_one_or_none()
+    ).first()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email or username already exists")
     user = User(
@@ -328,6 +335,8 @@ async def admin_update_app(
         app.status = payload.status
         if payload.status == AppStatus.PUBLISHED:
             app.last_published_at = datetime.now(UTC)
+            if app.first_published_at is None:
+                app.first_published_at = app.last_published_at
     # Retention override — admin-only. Reset flag wins over the value.
     # ``0`` means "no cap for this app" (sentinel pulled by
     # effective_max_versions) so we accept it as a real write target.
@@ -377,22 +386,33 @@ async def admin_publish_apk(
 ) -> dict:
     apk = (
         await db.execute(
-            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
         )
     ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
+    pin = (
+        await db.execute(
+            select(PackageSignerPin).where(PackageSignerPin.package_name == apk.app.package_name)
+        )
+    ).scalar_one_or_none()
+    # The signer lock is checked at upload, but two versions can sit in
+    # review before the first publish locks it: re-check here so a second
+    # signing key can't ship.
+    locked = apk.app.locked_signer_sha256 or (pin.signer_sha256 if pin else None)
+    if locked is not None and apk.signer_sha256 != locked:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This APK is signed with a different key than the published versions",
+        )
     apk.status = ApkStatus.PUBLISHED
     apk.published_at = datetime.now(UTC)
     apk.app.status = AppStatus.PUBLISHED
     if apk.app.locked_signer_sha256 is None:
         apk.app.locked_signer_sha256 = apk.signer_sha256
     # Lock the signer in the cross-App pin table too (C1).
-    pin = (
-        await db.execute(
-            select(PackageSignerPin).where(PackageSignerPin.package_name == apk.app.package_name)
-        )
-    ).scalar_one_or_none()
     if pin is None:
         db.add(
             PackageSignerPin(
@@ -402,14 +422,19 @@ async def admin_publish_apk(
                 first_locked_at=datetime.now(UTC),
             )
         )
-    if not apk.app.suggested_version_is_manual:
-        apk.app.suggested_version_code = max(
-            apk.app.suggested_version_code or 0, apk.version_code
-        )
-        apk.app.suggested_version_name = apk.version_name
-    apk.app.last_published_at = datetime.now(UTC)
+    # Auto mode only, and a beta upload never becomes the suggestion.
+    recompute_auto(apk.app)
+    now = datetime.now(UTC)
+    apk.app.last_published_at = now
+    if apk.app.first_published_at is None:
+        apk.app.first_published_at = now
     await db.flush()
     await enqueue_reindex()
+    # Uploads that went through review were skipped by the SBOM/CVE scan
+    # while pending; scan them now that they ship.
+    from app.services.queue import enqueue_cve_scan
+
+    await enqueue_cve_scan(apk.id)
     return {"status": "published"}
 
 
@@ -418,15 +443,35 @@ async def admin_reject_apk(
     apk_id: uuid.UUID,
     db: DbSession,
     _: Annotated[User, Depends(get_current_admin)],
-    reason: str = "Rejected by administrator",
+    reason: str = Query(default="Rejected by administrator", max_length=512),
 ) -> dict:
-    apk = (await db.execute(select(Apk).where(Apk.id == apk_id))).scalar_one_or_none()
+    apk = (
+        await db.execute(
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
+    was_published = apk.status == ApkStatus.PUBLISHED
     apk.status = ApkStatus.REJECTED
     apk.rejection_reason = reason
+    _release_suggestion(apk)
     await db.flush()
+    if was_published:
+        # Taking a published version down must reach the index.
+        await enqueue_reindex()
     return {"status": "rejected"}
+
+
+def _release_suggestion(apk: Apk) -> None:
+    """``apk`` stops being published: a manual pin on it would point the
+    index at a version nobody can install — fall back to auto-tracking."""
+    app = apk.app
+    if app.suggested_version_is_manual and app.suggested_version_code == apk.version_code:
+        app.suggested_version_is_manual = False
+    recompute_auto(app, [a for a in app.apks if a is not apk])
 
 
 @router.delete("/apks/{apk_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, response_class=Response)
@@ -436,29 +481,43 @@ async def admin_delete_apk(
     request: Request,
     admin: Annotated[User, Depends(get_current_admin)],
 ) -> None:
-    apk = (await db.execute(select(Apk).where(Apk.id == apk_id))).scalar_one_or_none()
+    apk = (
+        await db.execute(
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
-    storage = get_storage()
-    try:
-        await storage.delete(apk.storage_key)
-    except Exception:  # noqa: BLE001
-        pass
+    package_name = apk.app.package_name
     await write_event(
         db,
         action="apk.deleted",
         actor=admin,
         target_type="apk",
         target_id=apk.id,
-        summary=f"deleted {apk.package_name} v{apk.version_name} ({apk.version_code})",
+        summary=f"deleted {package_name} v{apk.version_name} ({apk.version_code})",
         payload={
-            "package_name": apk.package_name,
+            "package_name": package_name,
             "version_code": apk.version_code,
         },
         request=request,
     )
+    _release_suggestion(apk)
+    storage_key = apk.storage_key
     await db.delete(apk)
     await db.flush()
+
+    async def _delete_file() -> None:
+        try:
+            await get_storage().delete(storage_key)
+        except Exception:  # noqa: BLE001 — the row is gone; an orphan file is harmless
+            pass
+
+    # The file goes only once the row deletion is committed: a failure
+    # before that must not leave a published row pointing at nothing.
+    run_after_commit(f"delete-apk:{apk_id}", _delete_file)
     await enqueue_reindex()
 
 
@@ -610,6 +669,50 @@ async def trigger_reindex(
     # enqueues elsewhere (upload, edit, …) keep the coalescing default.
     await enqueue_reindex(force=True)
     return {"queued": True}
+
+
+@router.get("/repo/additional-repos.json")
+async def additional_repos_json(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+) -> Response:
+    """Pre-install snippet for ROM / device-fleet builders.
+
+    F-Droid 2.0 only reads JSON (the old ``additional_repos.xml`` is gone)
+    from ``/{system_ext,product,vendor}/etc/fdroid/additional_repos.json``.
+    ``certificate`` is the hex-encoded DER certificate the client pins the
+    repo to. The format has no credentials field: on a private-mode repo
+    every device still needs an API key afterwards.
+    """
+    import json as _json
+    from pathlib import Path
+
+    from app.core.config import settings as _settings
+    from app.fdroid.keystore import KeystoreError, read_certificate_hex
+
+    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one()
+    try:
+        certificate = await read_certificate_hex(
+            Path(_settings.keystore_path), _settings.keystore_password
+        )
+    except KeystoreError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Repository keystore unavailable: {exc}",
+        ) from exc
+    entry = {
+        "name": config.name,
+        "address": config.address,
+        "mirrors": config.mirrors,
+        "description": config.description or "",
+        "certificate": certificate,
+        "enabled": True,
+    }
+    return Response(
+        content=_json.dumps([entry], ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="additional_repos.json"'},
+    )
 
 
 @router.get("/jobs", response_model=dict)

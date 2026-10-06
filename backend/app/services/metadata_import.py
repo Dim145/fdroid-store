@@ -71,6 +71,14 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid YAML: {exc}",
         ) from exc
+    except Exception as exc:
+        # The composer recurses per nesting level, so ``[[[[…`` within the
+        # 32 KiB cap raises RecursionError; constructors raise plain
+        # ValueError too (``2020-13-45`` as a date). Same 400 as bad syntax.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid YAML: nested too deeply or holds an invalid value",
+        ) from exc
     if not isinstance(data, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -88,6 +96,10 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
 
     def _l(key: str) -> list[str]:
         v = data.get(key)
+        if isinstance(v, dict):
+            # Current fdroiddata writes AntiFeatures as a map
+            # ``{Tracking: {en-US: reason}}`` — the flags are the keys.
+            return [str(k).strip() for k in v if str(k).strip()]
         if isinstance(v, list):
             return [str(item).strip() for item in v if str(item).strip()]
         if isinstance(v, str):
@@ -114,7 +126,8 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
         "source_code": _s("SourceCode"),
         "issue_tracker": _s("IssueTracker"),
         "translation": _s("Translation"),
-        "donate": _s("Donate"),
+        # ``Donate`` is a list in current fdroiddata; we keep the first URL.
+        "donate": _s("Donate") or next(iter(_l("Donate")), None),
         "liberapay": _s("Liberapay") or _s("LiberapayID"),
         "open_collective": _s("OpenCollective"),
         "bitcoin": _s("Bitcoin"),
