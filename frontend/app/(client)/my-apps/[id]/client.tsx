@@ -1075,12 +1075,14 @@ function ManageAppInner() {
                       {/* Beta toggle: promote a beta, or move the current
                           suggestion to the Beta channel. Older versions sit
                           below the suggested one, where the flag would have
-                          no effect; versions held back by a pinned
-                          suggestion are already on the Beta channel —
-                          "suggest this one" is how they get released. */}
+                          no effect. With a pinned suggestion the pin alone
+                          decides the channel: newer versions are already
+                          held back as beta and "suggest this one" releases
+                          them, so only promoting a flagged beta is offered. */}
                       {apk.status === "published" &&
                         (apk.is_beta ||
-                          (!heldBack && apk.version_code >= (app.suggested_version_code ?? 0))) && (
+                          (!app.suggested_version_is_manual &&
+                            apk.version_code >= (app.suggested_version_code ?? 0))) && (
                         <Button
                           size="sm"
                           variant="text"
