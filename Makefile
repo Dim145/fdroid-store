@@ -34,8 +34,10 @@ shell-backend:
 shell-frontend:
 	docker compose exec frontend sh
 
+# Expanded INSIDE the container (single quotes), so it uses the role / DB the
+# postgres container was actually started with — not the host shell's env.
 shell-db:
-	docker compose exec postgres psql -U $${POSTGRES_USER:-fdroid} -d $${POSTGRES_DB:-fdroid}
+	docker compose exec postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
 reindex:
 	docker compose exec backend python -c "import asyncio; from app.services.queue import enqueue_reindex; asyncio.run(enqueue_reindex())"

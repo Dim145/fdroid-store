@@ -6,7 +6,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fdroid}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_postgres}
+      # Required: no built-in fallback password any more. Installs created
+      # with the old implicit default must set it explicitly in .env to
+      # the value their database was initialised with.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: ${POSTGRES_DB:-fdroid}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -64,8 +67,19 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-fdroid}
       REDIS_URL: redis://redis:6379/0
+      # Peers whose X-Forwarded-For / X-Forwarded-Proto uvicorn honours, so
+      # ``request.client.host`` is the client the frontend nginx forwards
+      # (the real one once TRUSTED_PROXY_CIDRS is set on the frontend)
+      # instead of the nginx container's IP. uvicorn's default trusts only
+      # 127.0.0.1. The frontend's IP on the compose network is dynamic, so
+      # the default trusts the private ranges Docker allocates networks
+      # from; the backend port is published on host loopback only, so only
+      # containers on this network / host-local processes can reach it.
+      # Tighten it to your compose subnet
+      # (``docker network inspect fdroid-store_default``) if you like.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       # ClamAV is opt-in: defaults to empty (feature off). To enable, set
       # CLAMAV_HOST=clamav in .env and bring the stack up with
       # ``docker compose --profile clamav up -d`` so the scanner container
@@ -124,11 +138,12 @@ services:
       - backup_tmp:/data/backup-tmp
     # Bind to the host LOOPBACK only. The backend trusts ``X-Forwarded-For``
     # for per-IP rate limiting (the frontend nginx overwrites it with the
-    # real client IP). If the API port were published on 0.0.0.0, any remote
-    # client could hit the API directly and forge ``X-Forwarded-For`` to
-    # evade the auth-endpoint rate limits — so it's reachable only from the
-    # host itself (local dev / curl), never from the network. Production
-    # traffic always goes through the frontend on :8080.
+    # real client IP; see FORWARDED_ALLOW_IPS above). If the API port were
+    # published on 0.0.0.0, any remote client could hit the API directly and
+    # forge ``X-Forwarded-For`` to evade the auth-endpoint rate limits — so
+    # it's reachable only from the host itself (local dev / curl), never
+    # from the network. Production traffic always goes through the frontend
+    # on :8080.
     #
     # Host port is 8011 (not 8000) purely to dodge a common local collision
     # on 8000; the in-container port stays 8000, so the frontend's
@@ -160,7 +175,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:-changeme_postgres}@postgres:5432/${POSTGRES_DB:-fdroid}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fdroid}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-fdroid}
       REDIS_URL: redis://redis:6379/0
       # ClamAV is opt-in: defaults to empty (feature off). To enable, set
       # CLAMAV_HOST=clamav in .env and bring the stack up with
@@ -197,10 +212,12 @@ services:
       # Shared with the backend so the worker can write the backup
       # output where the streaming download endpoint can find it.
       - backup_tmp:/data/backup-tmp
-    # arq publishes a heartbeat key in Redis on every cycle (default
-    # interval 60 s, TTL 90 s); ``--check`` reads it and returns 0
-    # iff fresh. If Redis is unreachable or the worker stopped pumping,
-    # exit is non-zero and compose flips the container to unhealthy.
+    # arq re-publishes a heartbeat key in Redis every
+    # ``health_check_interval`` seconds — 60 s, set in WorkerSettings
+    # (arq's own default is 3600 s) — with a TTL of interval + 1 s.
+    # ``--check`` returns 0 iff the key exists, so a worker that stopped
+    # pumping turns unhealthy within ~3 min (key expiry, then 3 failed
+    # probes 30 s apart). If Redis is unreachable every probe fails.
     healthcheck:
       test: ["CMD", "python", "-m", "arq", "app.workers.tasks.WorkerSettings", "--check"]
       interval: 30s
@@ -238,15 +255,15 @@ services:
   # fdroid-store instance, …. ~350 lines of FastAPI + httpx, no
   # persistent state, no JDK / native deps.
   #
-  # Opt-in via the ``proxy-fdroid`` compose profile. After ``docker
-  # compose --profile proxy-fdroid up -d``, register the proxy in
-  # fdroid-store's /admin/sources/proxies UI with:
+  # Opt-in via the ``proxy-fdroid`` compose profile. Set
+  # ``PROXY_FDROID_SECRET`` in .env (e.g. ``openssl rand -hex 32``), run
+  # ``docker compose --profile proxy-fdroid up -d``, then register the
+  # proxy in fdroid-store's /admin/proxies UI with:
   #   * Base URL: http://proxy-fdroid:8000
-  #   * Shared secret: same as ``PROXY_FDROID_SECRET`` below
+  #   * Shared secret: same as ``PROXY_FDROID_SECRET``
   #
-  # Without the profile + ``PROXY_FDROID_SECRET`` unset, this service
-  # stays down and fdroid-store simply doesn't see the F-Droid provider
-  # in any catalogue.
+  # Without the profile this service stays down and fdroid-store simply
+  # doesn't see the F-Droid provider in any catalogue.
   proxy-fdroid:
     profiles: ["proxy-fdroid"]
     image: ghcr.io/dim145/fdroid-store-proxy-fdroid:latest
@@ -255,9 +272,12 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      # Shared bearer secret the fdroid-store backend will use to
-      # authenticate every /sources + /resolve call. Empty = open
-      # mode (deployments on isolated networks may prefer that).
+      # Shared bearer secret the fdroid-store backend uses to authenticate
+      # every /sources + /resolve call. Empty = open mode: any container on
+      # this network can drive the proxy, and it logs a WARNING at startup.
+      # (A ``:?`` guard can't be used here: compose interpolates every
+      # service, profile or not, so it would break stacks without the
+      # proxy.)
       PROXY_SHARED_SECRET: ${PROXY_FDROID_SECRET:-}
     # Same lockdown shape as the other services. The proxy is stateless
     # — no volume, no writable surface beyond /tmp.
@@ -268,6 +288,13 @@ services:
       - ALL
     tmpfs:
       - /tmp:rw,size=32m,mode=1777
+    # Upstream indexes are attacker-influenced (any repo URL a user
+    # registers): the proxy caps the download, the decompressed JSON and
+    # the number of concurrent fetches, and these limits contain whatever
+    # still slips through (a parsed official f-droid.org index needs a few
+    # hundred MB) so it can't take the host's memory or PIDs with it.
+    mem_limit: ${PROXY_FDROID_MEM_LIMIT:-2g}
+    pids_limit: ${PROXY_FDROID_PIDS_LIMIT:-128}
     # Internal-only: the worker dials it via the compose network. No
     # host port published — admins should never expose proxies to the
     # public internet directly.
@@ -291,11 +318,30 @@ services:
       # pinning HSTS after a single visit.
       ENABLE_HSTS: ${ENABLE_HSTS:-0}
       HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
+      # Behind a reverse proxy (BunkerWeb, Traefik, Caddy, a CDN…): its
+      # address(es) as seen by this container, comma/space separated IPs or
+      # CIDRs. nginx then takes the client IP from that proxy's
+      # X-Forwarded-For, so per-IP rate limits, audit logs and access logs
+      # see real clients instead of one shared proxy IP. Empty = off (the
+      # TCP peer is the client — right when nginx is the edge).
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      # Request-body caps. UPLOAD_MAX_BODY_SIZE applies only to the upload
+      # routes (APK upload/inspect, app media, backup restore — listed in
+      # frontend/nginx.conf.template) and must cover the admin APK size cap
+      # (upload_max_apk_mb, max 2000 MB) plus multipart overhead; every
+      # other request is capped at API_MAX_BODY_SIZE.
+      API_MAX_BODY_SIZE: ${API_MAX_BODY_SIZE:-10m}
+      UPLOAD_MAX_BODY_SIZE: ${UPLOAD_MAX_BODY_SIZE:-2100m}
+      # DNS server nginx resolves UPSTREAM_BACKEND with (Docker's embedded
+      # DNS here; change it for podman / k8s / a non-Docker runtime).
+      NGINX_RESOLVER: ${NGINX_RESOLVER:-127.0.0.11}
     # Same lockdown as the backend. nginx writes its pid to /tmp (the
     # unprivileged base image already moved it there), and the official
     # entrypoint expands /etc/nginx/templates → /etc/nginx/conf.d at start,
     # which needs a writable conf.d. Both are sized tmpfs so a crash loop
-    # can't fill the host's RAM.
+    # can't fill the host's RAM. /tmp also hosts nginx's body temp dirs;
+    # the template never spools proxied bodies there (streamed instead),
+    # so 32 MB is enough even for multi-GB uploads and downloads.
     read_only: true
     security_opt:
       - no-new-privileges:true

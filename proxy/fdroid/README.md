@@ -39,8 +39,10 @@ de/fdroid/repo`, `https://guardianproject.info/fdroid/repo`, etc.
 Per `POST /resolve`:
 
 1. Parse the URL into `(repo_url, package_name)`.
-2. Fetch `<repo_url>/index-v1.jar` (capped at 32 MB).
-3. Open it as a ZIP, read `index-v1.json` out of it.
+2. Fetch `<repo_url>/index-v1.jar` (capped at 32 MB, 120 s overall),
+   connecting only to public addresses (see *Limits + caveats*).
+3. Open it as a ZIP, read `index-v1.json` out of it (capped at 256 MB
+   decompressed).
 4. Find `packages[<package_name>]`, pick the entry with the highest
    `versionCode`.
 5. Return `release_id = "<package>@<versionCode>"`, `package_name`,
@@ -72,7 +74,7 @@ PROXY_FDROID_SECRET=<shared secret matching what you'll set in fdroid-store>
 docker compose --profile proxy-fdroid up -d
 ```
 
-Then in `fdroid-store`'s admin UI, go to **/admin/sources/proxies →
+Then in `fdroid-store`'s admin UI, go to **/admin/proxies →
 Add proxy**:
 
 - **Name**: `F-Droid mirror` (or whatever you want to call it)
@@ -91,25 +93,40 @@ docker run --rm -p 8000:8000 \
     ghcr.io/dim145/fdroid-store-proxy-fdroid:latest
 ```
 
-Or from source:
+Or from source (same pinned versions as the image; `requirements.in`
+lists the direct deps and how to regenerate the lock):
 
 ```bash
-pip install 'fastapi[standard]' 'httpx>=0.27' 'uvicorn[standard]'
+pip install -r requirements.txt
 PROXY_SHARED_SECRET=$(openssl rand -hex 32) \
     uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ## Configuration
 
-| Env var                | Default | Notes                                         |
-|------------------------|---------|-----------------------------------------------|
-| `PROXY_SHARED_SECRET`  | empty   | Bearer token the calling fdroid-store sends. Empty = open mode (still parses the header). |
+| Env var                         | Default | Notes |
+|---------------------------------|---------|-------|
+| `PROXY_SHARED_SECRET`           | empty   | Bearer token the calling fdroid-store sends. Empty = open mode (still parses the header) and a WARNING at startup. In the compose stack, set `PROXY_FDROID_SECRET` in `.env` instead. |
+| `PROXY_MAX_INDEX_JSON_MB`       | `256`   | Cap on the decompressed `index-v1.json` (zip-bomb guard). |
+| `PROXY_FETCH_DEADLINE_SECONDS`  | `120`   | Wall-clock budget for one index download, redirects included. |
+| `PROXY_MAX_CONCURRENT_FETCHES`  | `2`     | Index fetch + parse running at once (each can take a few hundred MB for a big repo); further `/resolve` calls wait. |
+
+The compose service also gets `mem_limit` / `pids_limit`
+(`PROXY_FDROID_MEM_LIMIT`, default `2g`; `PROXY_FDROID_PIDS_LIMIT`,
+default `128`).
 
 ## Limits + caveats
 
-- **Index size cap**: 32 MB. The proxy refuses indexes larger than
-  that with a `502 upstream` error. The official F-Droid index is
-  ~12 MB; the cap exists for hostile / misconfigured upstreams.
+- **Index size caps**: 32 MB for the downloaded jar, 256 MB for the
+  `index-v1.json` inside it. Larger indexes are refused with a
+  `502 too_large` error. The official F-Droid jar is ~12 MB; the caps
+  exist for hostile / misconfigured upstreams.
+- **Public upstreams only**: the repo host (and every redirect hop) must
+  resolve to public unicast addresses only — private, loopback,
+  link-local / cloud-metadata, CGNAT, ULA, … are refused, including when
+  disguised as IPv4-mapped, 6to4 or NAT64 IPv6 addresses. The connection
+  goes to the exact address that was checked (no second DNS lookup, so
+  DNS rebinding can't swap it), with the hostname kept for `Host` and TLS.
 - **No fragment-only URLs**: a `<repo>` without `#<package>` or
   `?package=<package>` is rejected with `400 bad_request`. The
   package_name must be expressed in the URL because the protocol's

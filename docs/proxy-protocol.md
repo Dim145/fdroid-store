@@ -439,16 +439,21 @@ This spec is **v1**. Future revisions will:
 
 ## Reference implementation
 
-`fdroid-store` ships an **F-Droid source proxy** in `proxy/` as a
-reference, enabled by the `proxy-fdroid` compose profile. It implements
-the spec end-to-end against any F-Droid-compatible repo (the official
-F-Droid one, IzzyOnDroid, the Guardian Project, the user's own
-`fdroid-store` instance, etc.). Read it as the canonical example of a
-v1 implementation.
+`fdroid-store` ships an **F-Droid source proxy** in `proxy/fdroid/` as a
+reference, enabled by the `proxy-fdroid` compose profile and published as
+`ghcr.io/dim145/fdroid-store-proxy-fdroid`. It implements the spec
+end-to-end against any F-Droid-compatible repo (the official F-Droid one,
+IzzyOnDroid, the Guardian Project, the user's own `fdroid-store`
+instance, etc.). Read it as the canonical example of a v1
+implementation.
 
 ```bash
+# Shared secret in .env (compose hands it to the proxy as
+# PROXY_SHARED_SECRET); enter the same value in /admin/proxies.
+echo "PROXY_FDROID_SECRET=$(openssl rand -hex 32)" >> .env
+
 docker compose --profile proxy-fdroid up -d
-# proxy now reachable at http://fdroid-proxy:8000 from the worker network
+# proxy now reachable at http://proxy-fdroid:8000 from the compose network
 ```
 
 The proxy code (~ 400 lines) lives at `proxy/fdroid/` and is MIT-licensed

@@ -90,6 +90,10 @@ The most important ones:
 SECRET_KEY=<run: python -c 'import secrets;print(secrets.token_urlsafe(64))'>
 INITIAL_ADMIN_EMAIL=you@example.com
 INITIAL_ADMIN_PASSWORD=change-me-now
+# Required: compose refuses to start without it (no built-in fallback).
+# Upgrading an install that relied on the old implicit default? Set it to
+# the password the database was initialised with (changeme_postgres).
+POSTGRES_PASSWORD=<long random string>
 
 # --- public URLs (the F-Droid client + browser hit these) --------------------
 PUBLIC_REPO_URL=https://apks.your-domain.tld/fdroid/repo
@@ -130,6 +134,27 @@ TRIVY_SERVER_URL=http://trivy:4954
 # Bind a persistent volume here (the stock compose mounts ``backup_tmp``).
 # The default ``/tmp`` tmpfs is 512 MB and too small for real-sized repos.
 BACKUP_TMP_DIR=/data/backup-tmp
+
+# --- frontend nginx / client IP (defaults shown) -----------------------------
+# Behind a reverse proxy (BunkerWeb, Traefik, a CDN…): its address(es) as
+# seen by the frontend container, comma/space-separated IPs or CIDRs. nginx
+# then takes the client IP from that proxy's X-Forwarded-For, so per-IP
+# rate limits / audit logs see real clients. Empty = off (nginx is the edge).
+TRUSTED_PROXY_CIDRS=
+# Peers the backend (uvicorn) accepts X-Forwarded-For / -Proto from, i.e.
+# the frontend container; its compose IP is dynamic, hence Docker's ranges.
+FORWARDED_ALLOW_IPS=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+# Body caps: uploads (APK, app media, backup restore) vs every other route.
+# UPLOAD_MAX_BODY_SIZE must cover the admin APK cap (max 2000 MB) + overhead.
+UPLOAD_MAX_BODY_SIZE=2100m
+API_MAX_BODY_SIZE=10m
+# DNS server nginx resolves the backend with (Docker's embedded DNS).
+NGINX_RESOLVER=127.0.0.11
+
+# --- optional: reference F-Droid proxy (``proxy-fdroid`` profile) ------------
+PROXY_FDROID_SECRET=<openssl rand -hex 32>   # same value in /admin/proxies
+PROXY_FDROID_MEM_LIMIT=2g
+PROXY_FDROID_PIDS_LIMIT=128
 
 # --- optional: forge tokens (per-source PATs override these in the UI) -------
 GITHUB_TOKEN=ghp_…
@@ -479,6 +504,9 @@ fields (name, description, links, categories) without re-typing.
   scan-now `20/min`, APK inspect `10/min`.
 - **CSP, HSTS, X-Frame-Options, X-Content-Type-Options** are emitted by
   the frontend nginx layer; HSTS is opt-in via `ENABLE_HSTS=1`.
+- **No credentials in nginx logs**: the access log masks the `/r/<key>/`
+  path token and `?t=` download tokens (including path-token APK downloads
+  served through `X-Accel-Redirect`), and `/r/` only logs `crit` errors.
 - **Containers** run `read_only` with `no-new-privileges` and all caps
   dropped. The first-run bootstrap is guarded by a Postgres advisory
   lock so concurrent boots can't double-create the admin.

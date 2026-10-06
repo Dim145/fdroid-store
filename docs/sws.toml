@@ -12,7 +12,10 @@ host             = "::"
 port             = 8080
 root             = "/site"
 log-level        = "info"
-page404          = "/404.html"
+# A filesystem path, not a URL: "/404.html" pointed at the image's root
+# directory, where no such file exists, so SWS fell back to its generic
+# error page. Absolute path to the copy under ``root``.
+page404          = "/site/404.html"
 compression      = true
 directory-listing = false
 
