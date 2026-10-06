@@ -4,7 +4,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -14,8 +14,8 @@ from app.fdroid.categories_catalog import (
     localized_descriptions,
     localized_names,
 )
-from app.models.app import App, Category, app_categories_table
-from app.models.user import User
+from app.models.app import App, AppStatus, AppVisibility, Category, app_categories_table
+from app.models.user import User, UserRole
 from app.schemas.app import (
     CategoryCreate,
     CategoryMerge,
@@ -32,7 +32,7 @@ router = APIRouter()
 @router.get("", response_model=list[CategoryWithCount])
 async def list_categories(
     db: DbSession,
-    _: Annotated[User | None, Depends(require_browse_access)],
+    user: Annotated[User | None, Depends(require_browse_access)],
 ) -> list[CategoryWithCount]:
     """Every category + how many apps reference it.
 
@@ -40,15 +40,26 @@ async def list_categories(
     glance before renaming or deleting. Anonymous browse access is preserved
     because the catalogue's category filter calls this same endpoint.
     """
+    # Admins count every app (usage before renaming / deleting); everyone
+    # else counts what the catalogue shows them, so private or unpublished
+    # apps don't leak through the numbers.
+    visible = App.id == app_categories_table.c.app_id
+    if user is None or user.role != UserRole.ADMIN:
+        visible = and_(
+            visible,
+            App.visibility == AppVisibility.PUBLIC,
+            App.status == AppStatus.PUBLISHED,
+        )
     stmt = (
         select(
             Category,
-            func.count(app_categories_table.c.app_id).label("app_count"),
+            func.count(App.id).label("app_count"),
         )
         .outerjoin(
             app_categories_table,
             Category.id == app_categories_table.c.category_id,
         )
+        .outerjoin(App, visible)
         .group_by(Category.id)
         .order_by(Category.name)
     )

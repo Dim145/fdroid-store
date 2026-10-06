@@ -17,7 +17,7 @@ from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.mixins import IdMixin, TimestampMixin
@@ -50,7 +50,14 @@ class DeployToken(Base, IdMixin, TimestampMixin):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    app = relationship("App", backref="deploy_tokens", passive_deletes=True)
+    # ``passive_deletes`` belongs on the collection side: deleting an App
+    # must let the FK's ON DELETE CASCADE drop its tokens, not have the ORM
+    # NULL the NOT NULL ``app_id`` (IntegrityError → app deletion was
+    # impossible once a CI token had ever been minted).
+    app = relationship(
+        "App",
+        backref=backref("deploy_tokens", cascade="all, delete-orphan", passive_deletes=True),
+    )
 
     @property
     def is_active(self) -> bool:

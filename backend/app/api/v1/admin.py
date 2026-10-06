@@ -10,6 +10,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import aliased, selectinload
 
 from app.api.deps import DbSession, get_current_admin
+from app.core.database import run_after_commit
 from app.core.security import hash_password
 from app.core.uploads import normalize_image, read_capped
 from app.models.api_key import ApiKey
@@ -392,17 +393,26 @@ async def admin_publish_apk(
     ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
+    pin = (
+        await db.execute(
+            select(PackageSignerPin).where(PackageSignerPin.package_name == apk.app.package_name)
+        )
+    ).scalar_one_or_none()
+    # The signer lock is checked at upload, but two versions can sit in
+    # review before the first publish locks it: re-check here so a second
+    # signing key can't ship.
+    locked = apk.app.locked_signer_sha256 or (pin.signer_sha256 if pin else None)
+    if locked is not None and apk.signer_sha256 != locked:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This APK is signed with a different key than the published versions",
+        )
     apk.status = ApkStatus.PUBLISHED
     apk.published_at = datetime.now(UTC)
     apk.app.status = AppStatus.PUBLISHED
     if apk.app.locked_signer_sha256 is None:
         apk.app.locked_signer_sha256 = apk.signer_sha256
     # Lock the signer in the cross-App pin table too (C1).
-    pin = (
-        await db.execute(
-            select(PackageSignerPin).where(PackageSignerPin.package_name == apk.app.package_name)
-        )
-    ).scalar_one_or_none()
     if pin is None:
         db.add(
             PackageSignerPin(
@@ -428,15 +438,35 @@ async def admin_reject_apk(
     apk_id: uuid.UUID,
     db: DbSession,
     _: Annotated[User, Depends(get_current_admin)],
-    reason: str = "Rejected by administrator",
+    reason: str = Query(default="Rejected by administrator", max_length=512),
 ) -> dict:
-    apk = (await db.execute(select(Apk).where(Apk.id == apk_id))).scalar_one_or_none()
+    apk = (
+        await db.execute(
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
+    was_published = apk.status == ApkStatus.PUBLISHED
     apk.status = ApkStatus.REJECTED
     apk.rejection_reason = reason
+    _release_suggestion(apk)
     await db.flush()
+    if was_published:
+        # Taking a published version down must reach the index.
+        await enqueue_reindex()
     return {"status": "rejected"}
+
+
+def _release_suggestion(apk: Apk) -> None:
+    """``apk`` stops being published: a manual pin on it would point the
+    index at a version nobody can install — fall back to auto-tracking."""
+    app = apk.app
+    if app.suggested_version_is_manual and app.suggested_version_code == apk.version_code:
+        app.suggested_version_is_manual = False
+    recompute_auto(app, [a for a in app.apks if a is not apk])
 
 
 @router.delete("/apks/{apk_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, response_class=Response)
@@ -446,29 +476,43 @@ async def admin_delete_apk(
     request: Request,
     admin: Annotated[User, Depends(get_current_admin)],
 ) -> None:
-    apk = (await db.execute(select(Apk).where(Apk.id == apk_id))).scalar_one_or_none()
+    apk = (
+        await db.execute(
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
+        )
+    ).scalar_one_or_none()
     if apk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
-    storage = get_storage()
-    try:
-        await storage.delete(apk.storage_key)
-    except Exception:  # noqa: BLE001
-        pass
+    package_name = apk.app.package_name
     await write_event(
         db,
         action="apk.deleted",
         actor=admin,
         target_type="apk",
         target_id=apk.id,
-        summary=f"deleted {apk.package_name} v{apk.version_name} ({apk.version_code})",
+        summary=f"deleted {package_name} v{apk.version_name} ({apk.version_code})",
         payload={
-            "package_name": apk.package_name,
+            "package_name": package_name,
             "version_code": apk.version_code,
         },
         request=request,
     )
+    _release_suggestion(apk)
+    storage_key = apk.storage_key
     await db.delete(apk)
     await db.flush()
+
+    async def _delete_file() -> None:
+        try:
+            await get_storage().delete(storage_key)
+        except Exception:  # noqa: BLE001 — the row is gone; an orphan file is harmless
+            pass
+
+    # The file goes only once the row deletion is committed: a failure
+    # before that must not leave a published row pointing at nothing.
+    run_after_commit(f"delete-apk:{apk_id}", _delete_file)
     await enqueue_reindex()
 
 

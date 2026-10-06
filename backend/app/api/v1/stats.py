@@ -28,13 +28,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbSession, get_current_user_optional
 from app.fdroid.categories_catalog import localized_names
 from app.models.apk import Apk, ApkStatus
-from app.models.app import App, AppVisibility, Category, app_categories_table
+from app.models.app import (
+    NOT_NSFW_APP,
+    App,
+    AppStatus,
+    AppVisibility,
+    Category,
+    app_categories_table,
+)
 from app.models.audit import DownloadEvent
 from app.models.repo_config import RepoConfig
 from app.models.user import User, UserRole
@@ -100,7 +107,13 @@ async def get_stats(
     if include_private:
         app_filter = App.id.is_not(None)
     else:
-        app_filter = App.visibility == AppVisibility.PUBLIC
+        # What the catalogue shows: drafts, pending, rejected or archived
+        # apps (and NSFW ones unless opted in) must not surface by name.
+        app_filter = and_(
+            App.visibility == AppVisibility.PUBLIC, App.status == AppStatus.PUBLISHED
+        )
+        if not (viewer is not None and viewer.show_nsfw):
+            app_filter = and_(app_filter, NOT_NSFW_APP)
 
     # --- totals ---------------------------------------------------------
     total_apps = (

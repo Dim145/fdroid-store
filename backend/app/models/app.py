@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Column,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -158,6 +159,16 @@ class App(Base, IdMixin, TimestampMixin):
                 if isinstance(flag, str) and flag.strip().lower() == "nsfw":
                     return True
         return False
+
+
+# SQL twin of ``App.is_nsfw`` (any APK flagged NSFW, case-insensitive), for
+# filtering *before* LIMIT/OFFSET. Valid wherever ``apps`` is in the FROM
+# clause under its table name.
+NOT_NSFW_APP = text(
+    "NOT EXISTS (SELECT 1 FROM apks AS nsfw_apk,"
+    " json_array_elements_text(nsfw_apk.anti_features) AS f(flag)"
+    " WHERE nsfw_apk.app_id = apps.id AND lower(btrim(f.flag)) = 'nsfw')"
+)
 
 
 class Category(Base, IdMixin, TimestampMixin):
