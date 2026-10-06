@@ -232,31 +232,90 @@ async def generate_keystore(
     return await read_keystore_info(path, keystore_password)
 
 
+def check_signing_keystore(content: bytes, keystore_password: str, alias: str) -> None:
+    """Refuse a PKCS#12 the worker couldn't sign the index with.
+
+    ``jarsigner`` signs with ``SHA256withRSA`` under ``settings.key_alias``,
+    so the store must hold an RSA private key, whose certificate matches it,
+    stored under that alias (PKCS#12 aliases are case-insensitive to the
+    JDK). Parsing alone accepted certificate-only stores, EC keys and other
+    aliases — all of which only failed later, at the first reindex.
+    """
+    pwd_bytes = (keystore_password or "").encode("utf-8")
+    try:
+        pfx = pkcs12.load_pkcs12(content, pwd_bytes if pwd_bytes else None)
+    except (ValueError, TypeError) as exc:
+        raise KeystoreError(f"keystore parse failed — {exc}") from exc
+    if pfx.key is None:
+        raise KeystoreError("keystore has no private key")
+    if not isinstance(pfx.key, rsa.RSAPrivateKey):
+        raise KeystoreError("the signing key must be RSA (the index is signed with SHA256withRSA)")
+    if pfx.cert is None:
+        raise KeystoreError("keystore has no certificate for its private key")
+    spki = (serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    cert_public = pfx.cert.certificate.public_key().public_bytes(*spki)
+    if cert_public != pfx.key.public_key().public_bytes(*spki):
+        raise KeystoreError("the keystore certificate does not match its private key")
+    friendly = pfx.cert.friendly_name
+    found = friendly.decode("utf-8", "replace") if friendly else None
+    if found is None or found.lower() != alias.lower():
+        raise KeystoreError(f"key alias is {found!r}, expected {alias!r} (KEY_ALIAS)")
+
+
+def _backup_path(path: Path) -> Path:
+    ts = int(datetime.now(UTC).timestamp())
+    candidate = path.with_suffix(path.suffix + f".bak-{ts}")
+    n = 1
+    while candidate.exists():
+        candidate = path.with_suffix(path.suffix + f".bak-{ts}-{n}")
+        n += 1
+    return candidate
+
+
+def _install_keystore_sync(
+    path: Path, content: bytes, keystore_password: str, alias: str, backup: bool
+) -> None:
+    check_signing_keystore(content, keystore_password, alias)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Unique 0600 temp file in the same directory: never world-readable,
+    # and the final ``os.replace`` is an atomic same-filesystem rename.
+    tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content)
+        if backup and path.exists():
+            # Same recovery path as the generate mode: the previous signer
+            # identity stays on disk next to the new one.
+            saved = _backup_path(path)
+            shutil.copy2(path, saved)
+            try:
+                os.chmod(saved, 0o600)
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 async def import_keystore(
     path: Path,
     *,
     content: bytes,
     keystore_password: str,
+    alias: str,
+    backup: bool = False,
 ) -> KeystoreInfo:
-    """Atomically write an externally-provided keystore and validate it."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(content)
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    try:
-        info = await read_keystore_info(tmp, keystore_password)
-    except KeystoreError:
-        tmp.unlink(missing_ok=True)
-        raise
-    shutil.move(str(tmp), str(path))
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return info
+    """Validate an externally-provided keystore, then atomically install it.
+
+    Nothing on disk changes unless ``content`` passes
+    :func:`check_signing_keystore`. With ``backup``, an existing keystore is
+    first copied to ``<path>.bak-<unix ts>``.
+    """
+    await asyncio.to_thread(
+        _install_keystore_sync, path, content, keystore_password, alias, backup
+    )
+    return await read_keystore_info(path, keystore_password)
 
 
 def _read_keystore_info_sync(path: Path, keystore_password: str) -> KeystoreInfo:

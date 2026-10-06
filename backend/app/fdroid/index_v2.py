@@ -17,7 +17,7 @@ from typing import Any
 from app.fdroid.anti_features import definitions_for as anti_feature_definitions
 from app.fdroid.categories_catalog import localized_descriptions, localized_names
 from app.fdroid.donations import funding_for
-from app.fdroid.index_v1 import F_DROID_INDEX_VERSION
+from app.fdroid.index_v1 import F_DROID_INDEX_VERSION, suggestion_fallback
 from app.models.apk import Apk
 from app.models.app import App
 from app.models.repo_config import RepoConfig
@@ -38,13 +38,15 @@ _RELEASE_CHANNELS: dict[str, Any] = {
 }
 
 
-def is_beta_version(app: App, apk: Apk) -> bool:
+def is_beta_version(app: App, apk: Apk, published: list[Apk] | None = None) -> bool:
     """fdroidserver's rule: anything above the suggested (CurrentVersionCode)
     version is Beta. Covers both a pinned suggested version (newer uploads
     are held back) and APKs uploaded as beta (they never bump the suggested
     version). Without a suggested version there is no stable baseline, so
-    nothing is held back."""
-    suggested = app.suggested_version_code
+    nothing is held back. Pass the ``published`` APKs the index carries to
+    resolve a dangling pin (see ``index_v1.suggestion_fallback``)."""
+    fallback = suggestion_fallback(app, published) if published is not None else None
+    suggested = fallback.version_code if fallback else app.suggested_version_code
     return suggested is not None and apk.version_code > suggested
 
 
@@ -241,7 +243,7 @@ def _build_package(
                 flag: ({DEFAULT_LOCALE: reasons[flag]} if reasons.get(flag) else {})
                 for flag in apk.anti_features
             }
-        if is_beta_version(app, apk):
+        if is_beta_version(app, apk, apks):
             version_obj["releaseChannels"] = [RELEASE_CHANNEL_BETA]
         versions[apk.sha256] = version_obj
 

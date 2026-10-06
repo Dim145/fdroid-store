@@ -5,9 +5,30 @@ from typing import BinaryIO
 
 import aioboto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from app.core.config import settings
 from app.storage.base import Storage
+
+# What S3-compatible servers answer for a missing key: HEAD has no body, so
+# botocore reports the bare status ("404"); GET says "NoSuchKey".
+_NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
+
+
+def _is_not_found(exc: ClientError) -> bool:
+    response = exc.response or {}
+    code = str(response.get("Error", {}).get("Code", ""))
+    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return code in _NOT_FOUND_CODES or status == 404
+
+
+async def _file_chunks(
+    head: list[bytes], fileobj: BinaryIO, size: int
+) -> AsyncIterator[bytes]:
+    for chunk in head:
+        yield chunk
+    while chunk := fileobj.read(size):
+        yield chunk
 
 
 class S3Storage(Storage):
@@ -53,8 +74,21 @@ class S3Storage(Storage):
 
     # ------------------------------------------------------------------
     async def put(self, key: str, data: bytes | BinaryIO, content_type: str | None = None) -> None:
+        if isinstance(data, (bytes, bytearray)):
+            body = bytes(data)
+        else:
+            # A file object (an APK on its way in): never hold more than a
+            # couple of parts in RAM. Anything larger than one part goes up
+            # as a multipart upload; a small file stays a single PUT.
+            first = data.read(self.CHUNK)
+            second = data.read(self.CHUNK)
+            if second:
+                await self.put_stream(
+                    key, _file_chunks([first, second], data, self.CHUNK), content_type
+                )
+                return
+            body = first
         async with self._client() as s3:
-            body = data if isinstance(data, (bytes, bytearray)) else data.read()
             extra: dict = {}
             if content_type:
                 extra["ContentType"] = content_type
@@ -143,12 +177,17 @@ class S3Storage(Storage):
             await s3.delete_object(Bucket=self.bucket, Key=key)
 
     async def exists(self, key: str) -> bool:
+        """``False`` only when the server says the key is missing. Anything
+        else (timeout, 5xx, 403) raises: callers pick an index variant or
+        drop an icon on ``False``, which a transient outage must not cause."""
         async with self._client() as s3:
             try:
                 await s3.head_object(Bucket=self.bucket, Key=key)
                 return True
-            except Exception:  # noqa: BLE001 — ClientError 404
-                return False
+            except ClientError as exc:
+                if _is_not_found(exc):
+                    return False
+                raise
 
     async def size(self, key: str) -> int:
         async with self._client() as s3:
