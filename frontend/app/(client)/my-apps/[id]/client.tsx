@@ -1073,11 +1073,14 @@ function ManageAppInner() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {/* Beta toggle: promote a beta, or move the current
-                          suggestion (or anything newer) to the Beta channel.
-                          Older versions sit below the suggested one, where
-                          the flag would have no effect. */}
+                          suggestion to the Beta channel. Older versions sit
+                          below the suggested one, where the flag would have
+                          no effect; versions held back by a pinned
+                          suggestion are already on the Beta channel —
+                          "suggest this one" is how they get released. */}
                       {apk.status === "published" &&
-                        (apk.is_beta || apk.version_code >= (app.suggested_version_code ?? 0)) && (
+                        (apk.is_beta ||
+                          (!heldBack && apk.version_code >= (app.suggested_version_code ?? 0))) && (
                         <Button
                           size="sm"
                           variant="text"

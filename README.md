@@ -508,6 +508,10 @@ this is the operator-relevant summary.
   stay and are flagged "custom", with a merge action in
   `/admin/categories`). The index ships localized names + descriptions.
   Renaming / deleting / merging a category now triggers a reindex.
+- **Fix: deleted categories came back on restart.** Default categories
+  are now seeded on first boot only (empty table). An upgraded install
+  keeps its list as is; official IDs are added from the catalogue or
+  picked as merge targets.
 - **Beta channel.** Versions above the suggested one are emitted as
   `releaseChannels: ["Beta"]`, so a pinned suggested version is honoured
   by index-v2 clients. New "upload as beta" (UI checkbox, `beta=true` on

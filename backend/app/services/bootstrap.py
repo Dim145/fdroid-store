@@ -262,8 +262,13 @@ async def bootstrap_first_run() -> None:
             await db.rollback()
             log.info("admin seed skipped", reason=str(exc))
 
-    # ---- Default categories -- one-at-a-time so collisions don't poison the rest
-    for cat in DEFAULT_CATEGORIES:
+    # ---- Default categories -- first boot only: re-seeding on every start
+    # brought back the ones an admin had deleted or merged away. Existing
+    # installs keep their list; official IDs come from the catalogue.
+    # One-at-a-time so collisions don't poison the rest.
+    async with SessionLocal() as db:
+        has_categories = (await db.execute(select(Category.id).limit(1))).first() is not None
+    for cat in () if has_categories else DEFAULT_CATEGORIES:
         async with SessionLocal() as db:
             try:
                 exists = (
