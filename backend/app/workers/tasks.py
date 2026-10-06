@@ -314,12 +314,15 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
                 }
 
             try:
+                # A forge pre-release lands on the F-Droid Beta channel:
+                # only users who allowed beta updates for the app get it.
                 apk = await attach_apk_to_app(
                     db,
                     app=app,
                     tmp_path=tmp_path,
                     meta=meta,
                     uploader=owner,
+                    is_beta=asset.is_prerelease,
                 )
             except Exception as exc:  # noqa: BLE001
                 detail = getattr(exc, "detail", None) or str(exc)

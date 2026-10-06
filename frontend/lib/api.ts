@@ -411,19 +411,22 @@ export const api = {
     update: (id: string, payload: AppUpdatePayload) =>
       apiFetch<AppSummary>(`/api/v1/apps/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
     remove: (id: string) => apiFetch<void>(`/api/v1/apps/${id}`, { method: "DELETE" }),
-    uploadApk: async (appId: string, file: File) => {
+    /** ``beta`` publishes the version on the F-Droid Beta channel: only
+     *  users who allowed beta updates for the app receive it. */
+    uploadApk: async (appId: string, file: File, opts: { beta?: boolean } = {}) => {
       await _assertWithinUploadCap(file);
       const fd = new FormData();
       fd.append("file", file);
+      if (opts.beta) fd.append("beta", "true");
       return apiFetch<Apk>(`/api/v1/apks/upload/${appId}`, { method: "POST", body: fd });
     },
     /** Redeem a previously-staged APK against an existing app instead
      *  of re-uploading the bytes — same net effect as ``uploadApk``,
      *  but the network cost is a small JSON post. */
-    uploadApkStaged: (appId: string, stagingToken: string) =>
+    uploadApkStaged: (appId: string, stagingToken: string, opts: { beta?: boolean } = {}) =>
       apiFetch<Apk>(`/api/v1/apks/upload-staged/${appId}`, {
         method: "POST",
-        body: JSON.stringify({ staging_token: stagingToken }),
+        body: JSON.stringify({ staging_token: stagingToken, beta: !!opts.beta }),
       }),
     inspectApk: (file: File) => {
       const fd = new FormData();
@@ -483,7 +486,18 @@ export const api = {
         `/api/v1/apks/${apkId}/download-url`,
         { method: "POST" },
       ),
-    updateApk: (apkId: string, payload: { whats_new?: Record<string, string> | null; anti_features?: string[] }) =>
+    updateApk: (
+      apkId: string,
+      payload: {
+        whats_new?: Record<string, string> | null;
+        anti_features?: string[];
+        /** Replaces the whole ``{flag: reason}`` map; reasons for flags
+         *  that aren't set are dropped server-side. */
+        anti_feature_reasons?: Record<string, string> | null;
+        /** Move the version to / from the Beta channel (false = promote). */
+        is_beta?: boolean;
+      },
+    ) =>
       apiFetch<Apk>(`/api/v1/apks/${apkId}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
@@ -639,6 +653,15 @@ export const api = {
       }),
     remove: (id: string) =>
       apiFetch<void>(`/api/v1/categories/${id}`, { method: "DELETE" }),
+    /** Official F-Droid category IDs (icon + Discover group in F-Droid 2.0). */
+    catalog: () =>
+      apiFetch<OfficialCategory[]>("/api/v1/categories/catalog", { anonymous: !getAccessToken() }),
+    /** Move every app of ``id`` onto ``targetId`` and drop ``id``. */
+    merge: (id: string, targetId: string) =>
+      apiFetch<Category>(`/api/v1/categories/${id}/merge`, {
+        method: "POST",
+        body: JSON.stringify({ target_id: targetId }),
+      }),
   },
 
   users: {
@@ -941,6 +964,9 @@ export const api = {
     updateRepo: (payload: Partial<RepoConfigInfo>) =>
       apiFetch<RepoConfigInfo>("/api/v1/admin/repo", { method: "PATCH", body: JSON.stringify(payload) }),
     reindex: () => apiFetch<{ queued: boolean }>("/api/v1/admin/repo/reindex", { method: "POST" }),
+    /** ``additional_repos.json`` entry for ROM / device-fleet builders. */
+    additionalRepos: () =>
+      apiFetch<AdditionalRepoEntry[]>("/api/v1/admin/repo/additional-repos.json"),
     rescanAll: () =>
       apiFetch<RescanResult>("/api/v1/admin/apks/rescan", { method: "POST" }),
     rescanApp: (appId: string) =>
@@ -1187,6 +1213,34 @@ export type Category = {
    *  list endpoint; defaulted to 0 when the category comes back embedded
    *  in another payload (e.g. ``AppRead.categories``). */
   app_count?: number;
+  /** ``name`` is an official F-Droid category ID: F-Droid 2.0 shows it
+   *  with an icon in one of its Discover groups (else "Miscellaneous"). */
+  official?: boolean;
+  group?: string | null;
+  /** Localized display names / descriptions keyed by locale
+   *  (``en-US``, ``fr``) — the same texts the F-Droid index carries. */
+  names?: Record<string, string>;
+  descriptions?: Record<string, string>;
+};
+
+/** One entry of the official F-Droid category catalogue. */
+export type OfficialCategory = {
+  id: string;
+  group: string;
+  names: Record<string, string>;
+  descriptions: Record<string, string>;
+  /** A local category already uses this ID. */
+  in_use: boolean;
+};
+
+/** Shape F-Droid 2.0 reads from ``/…/etc/fdroid/additional_repos.json``. */
+export type AdditionalRepoEntry = {
+  name: string;
+  address: string;
+  mirrors: string[];
+  description: string;
+  certificate: string;
+  enabled: boolean;
 };
 
 export type AppSummary = {
@@ -1226,6 +1280,8 @@ export type AppSummary = {
    *  "follow the repo default"; ``0`` means "no cap for this app". */
   max_versions_override: number | null;
   last_published_at: string | null;
+  /** When the app first went live — the index ``added`` date. */
+  first_published_at?: string | null;
   created_at: string;
   updated_at: string;
   categories: Category[];
@@ -1268,6 +1324,9 @@ export type SbomRead = {
   cve_summary: Partial<Record<CveSeverity, number>>;
   cves: CveFinding[];
   sbom?: unknown;
+  /** Ready-to-apply ``KnownVuln`` reason when CRITICAL / HIGH findings
+   *  exist (never applied automatically). */
+  known_vuln_reason?: string | null;
 };
 
 export type Apk = {
@@ -1284,6 +1343,10 @@ export type Apk = {
   permissions: string[];
   native_code: string[];
   anti_features: string[];
+  /** ``{flag: reason}`` shown by F-Droid 2.0 under each anti-feature. */
+  anti_feature_reasons?: Record<string, string> | null;
+  /** Uploaded on the Beta channel — never auto-suggested. */
+  is_beta?: boolean;
   status: "uploaded" | "parsed" | "pending_review" | "published" | "rejected" | "deleted";
   rejection_reason: string | null;
   whats_new: Record<string, string> | null;
@@ -1645,7 +1708,7 @@ export type StatsPayload = {
     download_count: number;
   }[];
   downloads_by_day: { date: string; count: number }[];
-  categories: { id: string; name: string; app_count: number }[];
+  categories: { id: string; name: string; names?: Record<string, string>; app_count: number }[];
   scope: "public" | "admin";
   public_stats_enabled: boolean;
 };

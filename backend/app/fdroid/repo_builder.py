@@ -253,10 +253,12 @@ async def _build_one(
 
     # index-v2.json (plaintext) — written BEFORE entry.jar so the signed
     # entry (the client's entrypoint) only ever points at an index already
-    # on disk.
+    # on disk. ``webBaseUrl`` points F-Droid's "Share" action at our public
+    # app pages (``/apps/<package>``).
     v2_bytes = build_index_v2(
         repo_config=repo_config, apps=apps, mirrors=mirrors,
         file_meta=file_meta, timestamp_ms=timestamp_ms,
+        web_base_url=f"{settings.public_app_url.rstrip('/')}/apps",
     )
     await _write_bytes(
         storage,

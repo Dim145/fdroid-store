@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api, type StatsPayload } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { useCategoryLabel } from "@/lib/categories";
 import { cn, formatBytes, formatCount, formatDate } from "@/lib/utils";
 
 /* ============================================================================
@@ -577,6 +578,7 @@ function Leaderboard({ apps }: { apps: StatsPayload["top_apps"] }) {
 
 function CategoriesBreakdown({ categories }: { categories: StatsPayload["categories"] }) {
   const { t } = useTranslation();
+  const categoryLabel = useCategoryLabel();
   const reduce = useReducedMotion();
   const visible = categories.filter((c) => c.app_count > 0);
   if (visible.length === 0) return null;
@@ -606,7 +608,7 @@ function CategoriesBreakdown({ categories }: { categories: StatsPayload["categor
           return (
             <li key={c.id} className="flex items-baseline gap-4">
               <span className="w-28 shrink-0 truncate text-sm font-medium text-ink">
-                {c.name}
+                {categoryLabel(c)}
               </span>
               <div className="relative h-px flex-1 bg-outline-soft">
                 {/* The fill is a 2px band sitting on the hairline so it

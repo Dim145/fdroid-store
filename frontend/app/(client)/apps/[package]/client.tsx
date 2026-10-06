@@ -16,6 +16,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api, mediaUrl, type Apk, type AppDetail, type Screenshot } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { useCategoryLabel } from "@/lib/categories";
+import {
+  bitcoinLink,
+  isBetaVersion,
+  liberapayLink,
+  openCollectiveLink,
+} from "@/lib/fdroid-client";
 import { useRepoInfo } from "@/lib/repo-store";
 import { cn, formatBytes, formatCount, formatDate, pickLocalizedText } from "@/lib/utils";
 import { localeLabel } from "@/lib/locales";
@@ -83,7 +90,12 @@ export default function AppDetailClient() {
         : [],
     [app],
   );
-  const latest = published[0];
+  // What F-Droid installs by default: the newest version that isn't held
+  // back on the Beta channel (falls back to the newest one).
+  const latest =
+    published.find((a) => !isBetaVersion(a.version_code, app?.suggested_version_code)) ??
+    published[0];
+  const categoryLabel = useCategoryLabel();
   const screenshots = useMemo(
     () =>
       app ? [...app.screenshots].sort((a, b) => a.display_order - b.display_order) : [],
@@ -198,7 +210,7 @@ export default function AppDetailClient() {
                 <Badge variant="accent">{t("appCard.private")}</Badge>
               )}
               {app.categories.slice(0, 2).map((c) => (
-                <Badge key={c.id} variant="outline">{c.name}</Badge>
+                <Badge key={c.id} variant="outline">{categoryLabel(c)}</Badge>
               ))}
             </div>
             <h1 className="mt-3 text-3xl font-bold tracking-tight text-ink md:text-4xl">
@@ -223,7 +235,7 @@ export default function AppDetailClient() {
           </div>
 
           {/* Desktop: a direct ".apk" download is the only useful action since
-              the fdroidrepo:// scheme is a dead end without an Android device.
+              F-Droid deep links are a dead end without an Android device.
               The column is forced to the AppIcon's 140px height + items-center
               so the pill sits at the icon's vertical midpoint — centring on the
               row would drop it next to the stats line instead. */}
@@ -243,6 +255,7 @@ export default function AppDetailClient() {
           <InstallPill
             apkFileName={latest?.file_name}
             apkId={latest?.id}
+            packageName={app.package_name}
             size="lg"
             mode="deeplink"
           />
@@ -487,10 +500,13 @@ export default function AppDetailClient() {
                 {t("appDetail.supportDeveloper")}
               </div>
               <div className="flex flex-wrap gap-2">
+                {/* Liberapay / Open Collective / Bitcoin may be stored as bare
+                    IDs (the F-Droid form) or full URLs — build the link the
+                    same way the F-Droid client does. */}
                 {app.donate && <FundingChip label={t("appDetail.funding.donate")} href={app.donate} />}
-                {app.liberapay && <FundingChip label={t("appDetail.funding.liberapay")} href={app.liberapay} />}
-                {app.open_collective && <FundingChip label={t("appDetail.funding.openCollective")} href={app.open_collective} />}
-                {app.bitcoin && <FundingChip label={t("appDetail.funding.bitcoin")} href={app.bitcoin.startsWith("bitcoin:") ? app.bitcoin : `bitcoin:${app.bitcoin}`} />}
+                {app.liberapay && <FundingChip label={t("appDetail.funding.liberapay")} href={liberapayLink(app.liberapay)} />}
+                {app.open_collective && <FundingChip label={t("appDetail.funding.openCollective")} href={openCollectiveLink(app.open_collective)} />}
+                {app.bitcoin && <FundingChip label={t("appDetail.funding.bitcoin")} href={bitcoinLink(app.bitcoin)} />}
               </div>
             </div>
           )}
@@ -531,7 +547,10 @@ export default function AppDetailClient() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-lg font-semibold text-ink">v{apk.version_name}</span>
-                      {i === 0 && <Badge variant="primary">{t("appDetail.latest")}</Badge>}
+                      {apk.id === latest?.id && <Badge variant="primary">{t("appDetail.latest")}</Badge>}
+                      {isBetaVersion(apk.version_code, app.suggested_version_code) && (
+                        <Badge variant="accent" title={t("appDetail.betaHint")}>{t("appDetail.beta")}</Badge>
+                      )}
                       {repo.reproducibleBuildsEnabled && <ReproducibilityBadge apk={apk} />}
                     </div>
                     <div className="mt-0.5 text-xs text-ink-mute">
@@ -546,7 +565,9 @@ export default function AppDetailClient() {
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
                         <ShieldAlert className="h-3 w-3 text-accent" />
                         {apk.anti_features.map((flag) => (
-                          <Badge key={flag} variant="accent">{flag}</Badge>
+                          <Badge key={flag} variant="accent" title={apk.anti_feature_reasons?.[flag] || undefined}>
+                            {flag}
+                          </Badge>
                         ))}
                       </div>
                     )}

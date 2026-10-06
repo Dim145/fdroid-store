@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from app.fdroid.donations import funding_for
 from app.models.apk import Apk
 from app.models.app import App
 from app.models.repo_config import RepoConfig
@@ -30,7 +31,7 @@ def _ts_ms(value: datetime | None) -> int:
 
 def _serialize_app(app: App) -> dict[str, Any]:
     obj: dict[str, Any] = {
-        "added": _ts_ms(app.created_at),
+        "added": _ts_ms(app.first_published_at or app.created_at),
         "name": app.name,
         "packageName": app.package_name,
         "lastUpdated": _ts_ms(app.last_published_at or app.updated_at),
@@ -61,14 +62,17 @@ def _serialize_app(app: App) -> dict[str, Any]:
         obj["issueTracker"] = app.issue_tracker
     if app.translation:
         obj["translation"] = app.translation
-    if app.donate:
-        obj["donate"] = app.donate
-    if app.liberapay:
-        obj["liberapay"] = app.liberapay
-    if app.bitcoin:
-        obj["bitcoin"] = app.bitcoin
-    if app.open_collective:
-        obj["openCollective"] = app.open_collective
+    # v1 keeps ``donate`` as a single URL; the platform fields are bare IDs
+    # here too (the client builds the links) — see ``app.fdroid.donations``.
+    funding = funding_for(app)
+    if funding.donate:
+        obj["donate"] = funding.donate[0]
+    if funding.liberapay:
+        obj["liberapay"] = funding.liberapay
+    if funding.bitcoin:
+        obj["bitcoin"] = funding.bitcoin
+    if funding.open_collective:
+        obj["openCollective"] = funding.open_collective
     if app.icon_path:
         # F-Droid v1 clients expect just the basename of an icon stored under
         # ``<repo-url>/icons/<filename>``.

@@ -186,9 +186,10 @@
           <h2><span class="num">05</span>Categories</h2>
           <p><code>/admin/categories</code> is a small CRUD page. Categories are surfaced both in the F-Droid client (as the section list) and in the web UI's filter rail.</p>
           <ul>
-            <li>Drag to reorder &mdash; that order is the one the F-Droid client renders.</li>
-            <li>Translations are stored alongside the slug; the UI uses the active locale.</li>
-            <li>Deleting a category un-assigns it from any apps that used it &mdash; the apps survive.</li>
+            <li>Use the <strong>official F-Droid IDs</strong> (suggested while typing). F-Droid 2.0 gives each one an icon and a group on its Discover screen; any other name is shown with a generic icon under &laquo;&nbsp;Miscellaneous&nbsp;&raquo;. Tiles are badged <em>F-Droid</em> or <em>custom</em>.</li>
+            <li>Official IDs ship English + French names and descriptions in the index; the UI uses the active locale.</li>
+            <li><em>Merge</em> moves the apps of a custom category (e.g. the legacy <code>Games</code>, <code>Money</code>, <code>Time</code>) onto an official one and deletes it.</li>
+            <li>Deleting a category un-assigns it from any apps that used it &mdash; the apps survive. Renames, deletions and merges trigger a reindex.</li>
           </ul>
         </section>
 

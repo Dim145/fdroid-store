@@ -418,6 +418,9 @@ function RevealModal({
               <SnippetTab active={tab === "gitlabci"} onClick={() => setTab("gitlabci")}>GitLab CI</SnippetTab>
             </div>
             <CredentialBlock value={snippets[tab]} multiline />
+            <p className="mt-2 text-[11px] leading-relaxed text-ink-mute">
+              {t("myApps.edit.deployTokens.betaTip")}
+            </p>
           </div>
 
           <div className="mt-5 flex items-center justify-end border-t border-outline-soft pt-4">
@@ -645,7 +648,7 @@ function InstructionsModal({
             />
             <SpecRow
               label={t("myApps.edit.deployTokens.instructions.body_")}
-              value={`multipart/form-data — field name: file`}
+              value={`multipart/form-data — field name: file (+ optional beta=true)`}
             />
           </dl>
 
@@ -667,6 +670,9 @@ function InstructionsModal({
               <SnippetTab active={tab === "gitlabci"} onClick={() => setTab("gitlabci")}>GitLab CI</SnippetTab>
             </div>
             <CredentialBlock value={snippets[tab]} multiline />
+            <p className="mt-2 text-[11px] leading-relaxed text-ink-mute">
+              {t("myApps.edit.deployTokens.betaTip")}
+            </p>
           </div>
 
           <div className="mt-5 flex items-center justify-end border-t border-outline-soft pt-4">

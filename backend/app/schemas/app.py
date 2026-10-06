@@ -14,6 +14,13 @@ class CategoryRead(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    # Derived from ``app.fdroid.categories_catalog``: whether ``name`` is an
+    # official F-Droid ID (icon + Discover group in F-Droid 2.0), its group,
+    # and the localized texts emitted in the index (UI display too).
+    official: bool = False
+    group: str | None = None
+    names: dict[str, str] = Field(default_factory=dict)
+    descriptions: dict[str, str] = Field(default_factory=dict)
 
 
 class CategoryWithCount(CategoryRead):
@@ -34,6 +41,22 @@ class CategoryUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=255)
 
 
+class CategoryMerge(BaseModel):
+    """Body for ``POST /categories/{id}/merge``: move every app tagged with
+    the source category onto ``target_id``, then drop the source."""
+    target_id: uuid.UUID
+
+
+class OfficialCategoryRead(BaseModel):
+    """One entry of the official F-Droid catalogue, for the admin picker."""
+    id: str
+    group: str
+    names: dict[str, str]
+    descriptions: dict[str, str]
+    # True when a local category already uses this ID.
+    in_use: bool = False
+
+
 class ApkRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +73,10 @@ class ApkRead(BaseModel):
     permissions: list[str]
     native_code: list[str]
     anti_features: list[str] = Field(default_factory=list)
+    # ``{flag: reason}`` — optional free text shown by F-Droid 2.0.
+    anti_feature_reasons: dict[str, str] | None = None
+    # Uploaded on the Beta channel (never auto-suggested).
+    is_beta: bool = False
     status: ApkStatus
     rejection_reason: str | None
     # ``{locale: text}`` — empty dict and NULL both render as "no notes".
@@ -120,6 +147,9 @@ class SbomRead(BaseModel):
     cve_summary: dict[str, int] = Field(default_factory=dict)
     cves: list[CveFinding] = Field(default_factory=list)
     sbom: dict | None = None
+    # Ready-to-apply ``KnownVuln`` reason when CRITICAL / HIGH findings
+    # exist — the owner decides; we never flag a version automatically.
+    known_vuln_reason: str | None = None
 
 
 class ApkUpdate(BaseModel):
@@ -134,6 +164,12 @@ class ApkUpdate(BaseModel):
     whats_new: dict[str, str] | None = Field(default=None)
     # ``None`` = leave as-is. Empty list explicitly clears the flags.
     anti_features: list[str] | None = Field(default=None, max_length=20)
+    # ``{flag: reason}``. Sent → replaces the whole map (``{}``/null clears
+    # it); reasons for flags that aren't set are dropped.
+    anti_feature_reasons: dict[str, str] | None = Field(default=None, max_length=20)
+    # Move the version between the Beta channel and stable. In auto mode
+    # this re-derives the suggested version (clearing it = promotion).
+    is_beta: bool | None = None
 
 
 class ApkInspect(BaseModel):
@@ -373,6 +409,7 @@ class AppRead(BaseModel):
     # only admins can write via ``AppUpdate.max_versions_override``.
     max_versions_override: int | None = None
     last_published_at: datetime | None
+    first_published_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     categories: list[CategoryRead] = Field(default_factory=list)

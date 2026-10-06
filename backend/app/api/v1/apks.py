@@ -7,7 +7,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -39,6 +49,7 @@ from app.schemas.app import (
 )
 from app.services.audit import write_event
 from app.services.queue import enqueue_cve_scan, enqueue_reindex
+from app.services.suggested_version import recompute_auto
 from app.storage import get_storage
 
 router = APIRouter()
@@ -47,6 +58,9 @@ log = get_logger(__name__)
 # Loose BCP47: 2-3 letter primary subtag optionally followed by a region or
 # script subtag. Matches the shape used by the app localizations endpoint.
 _LOCALE_RE = re.compile(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,4})?$")
+# Shown inline by F-Droid under each anti-feature — keep it a sentence or a
+# short list, not an essay.
+_ANTI_FEATURE_REASON_MAX = 1000
 
 
 # --------------------------------------------------------------------------
@@ -148,8 +162,14 @@ async def attach_apk_to_app(
     tmp_path: Path,
     meta: ApkMetadata,
     uploader: User,
+    is_beta: bool = False,
 ) -> Apk:
-    """Validate + persist a parsed APK against an existing App."""
+    """Validate + persist a parsed APK against an existing App.
+
+    ``is_beta`` uploads a pre-release: it is published like any other APK
+    but never becomes the suggested version on its own, so F-Droid only
+    offers it to users who allowed beta updates for this app.
+    """
     if meta.package_name != app.package_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -244,6 +264,7 @@ async def attach_apk_to_app(
         status=initial_status,
         uploaded_by_id=uploader.id,
         published_at=datetime.now(UTC) if initial_status == ApkStatus.PUBLISHED else None,
+        is_beta=is_beta,
     )
     db.add(apk)
     if initial_status == ApkStatus.PUBLISHED:
@@ -261,14 +282,16 @@ async def attach_apk_to_app(
                     first_locked_at=datetime.now(UTC),
                 )
             )
-        # Auto-bump the suggested version only when the owner hasn't pinned
+        # Auto-track the suggested version only when the owner hasn't pinned
         # one. With a manual pin the F-Droid client keeps offering the chosen
-        # version even after a new (possibly regressed) upload.
-        if not app.suggested_version_is_manual:
-            app.suggested_version_code = max(app.suggested_version_code or 0, meta.version_code)
-            app.suggested_version_name = meta.version_name
+        # version even after a new (possibly regressed) upload; a beta upload
+        # is skipped the same way. The new row isn't in ``app.apks`` yet.
+        recompute_auto(app, [*app.apks, apk])
         app.status = AppStatus.PUBLISHED
-        app.last_published_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        app.last_published_at = now
+        if app.first_published_at is None:
+            app.first_published_at = now
 
     await db.flush()
     log.info(
@@ -740,9 +763,11 @@ from pydantic import BaseModel as _BaseModel, Field as _Field
 
 
 class _StagedAttachBody(_BaseModel):
-    """Body for the ``upload-staged`` endpoint. Just the redemption
-    token — every other field is derived from the staged APK itself."""
+    """Body for the ``upload-staged`` endpoint. The redemption token plus
+    the release channel — every other field is derived from the staged APK
+    itself."""
     staging_token: str = _Field(min_length=10, max_length=512)
+    beta: bool = False
 
 
 @router.post(
@@ -800,7 +825,7 @@ async def upload_apk_staged(
             )
         await _maybe_scan_upload(db, tmp_path=tmp_path)
         apk = await attach_apk_to_app(
-            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user, is_beta=body.beta
         )
         from app.services.apk_eviction import evict_oldest_if_needed
         await evict_oldest_if_needed(db, app=app, actor_id=user.id)
@@ -813,7 +838,7 @@ async def upload_apk_staged(
             target_id=apk.id,
             summary=(
                 f"uploaded (staged) {app.package_name} v{meta.version_name} "
-                f"({meta.version_code})"
+                f"({meta.version_code}){' as beta' if body.beta else ''}"
             ),
             payload={
                 "app_id": str(app.id),
@@ -822,6 +847,7 @@ async def upload_apk_staged(
                 "version_name": meta.version_name,
                 "size_bytes": meta.size_bytes,
                 "sha256": meta.sha256,
+                "beta": body.beta,
                 "credential": {"kind": "staging"},
             },
             request=request,
@@ -847,6 +873,7 @@ async def upload_apk(
     request: Request,
     user: Annotated[User, Depends(get_uploader_for_app)],
     file: UploadFile = File(...),
+    beta: bool = Form(False),
 ) -> ApkRead:
     """Upload a new APK for an existing app.
 
@@ -856,6 +883,9 @@ async def upload_apk(
     the management-permission check below because that check is
     enforced inside the auth dependency itself (the token *is* the
     per-app capability).
+
+    ``beta=true`` (multipart field) publishes a pre-release on the F-Droid
+    Beta channel — the "testing track" for CI nightlies.
     """
     app = (
         await db.execute(
@@ -889,7 +919,7 @@ async def upload_apk(
         meta = await parse_or_400(tmp_path)
         await _maybe_scan_upload(db, tmp_path=tmp_path)
         apk = await attach_apk_to_app(
-            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user, is_beta=beta
         )
         # Retention policy: trim down to the cap, if any. Runs AFTER
         # the new APK lands so the just-uploaded version stays even
@@ -911,7 +941,8 @@ async def upload_apk(
             target_id=apk.id,
             summary=(
                 f"uploaded {app.package_name} v{meta.version_name} "
-                f"({meta.version_code}) via {cred.get('kind', 'unknown')}"
+                f"({meta.version_code}){' as beta' if beta else ''} "
+                f"via {cred.get('kind', 'unknown')}"
             ),
             payload={
                 "app_id": str(app.id),
@@ -920,6 +951,7 @@ async def upload_apk(
                 "version_name": meta.version_name,
                 "size_bytes": meta.size_bytes,
                 "sha256": meta.sha256,
+                "beta": beta,
                 "credential": cred,
             },
             request=request,
@@ -936,10 +968,12 @@ async def update_apk(
     apk_id: uuid.UUID,
     payload: ApkUpdate,
     db: DbSession,
+    request: Request,
     user: Annotated[User, Depends(get_current_uploader)],
 ) -> ApkRead:
-    """Edit a previously-uploaded APK's mutable fields: the changelog and the
-    anti-feature flags surfaced to F-Droid clients.
+    """Edit a previously-uploaded APK's mutable fields: the changelog, the
+    anti-feature flags (+ their reasons) surfaced to F-Droid clients, and
+    the beta flag.
 
     Whitespace is normalized on save and "" maps to NULL so the index
     builder can cleanly omit the field instead of emitting an empty
@@ -947,7 +981,9 @@ async def update_apk(
     """
     apk = (
         await db.execute(
-            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
         )
     ).scalar_one_or_none()
     if apk is None:
@@ -997,6 +1033,65 @@ async def update_apk(
             seen.add(stripped)
             normalized.append(stripped)
         apk.anti_features = normalized
+    if "anti_feature_reasons" in payload.model_fields_set:
+        reasons: dict[str, str] = {}
+        for flag, text in (payload.anti_feature_reasons or {}).items():
+            flag, text = flag.strip(), (text or "").strip()
+            if not flag or not text:
+                continue
+            if len(text) > _ANTI_FEATURE_REASON_MAX:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"anti_feature_reasons[{flag}] exceeds {_ANTI_FEATURE_REASON_MAX} chars",
+                )
+            reasons[flag] = text
+        apk.anti_feature_reasons = reasons or None
+    # A reason only makes sense next to its flag — drop orphans so
+    # un-ticking a chip also clears its explanation.
+    if apk.anti_feature_reasons:
+        active = set(apk.anti_features or [])
+        kept = {f: r for f, r in apk.anti_feature_reasons.items() if f in active}
+        if kept != apk.anti_feature_reasons:
+            apk.anti_feature_reasons = kept or None
+    if (
+        "is_beta" in payload.model_fields_set
+        and payload.is_beta is not None
+        and payload.is_beta != apk.is_beta
+    ):
+        # Flipping the flag moves the suggested version in auto mode:
+        # marking the current suggestion as beta falls back to the previous
+        # stable APK, clearing it promotes this version. With a manual pin,
+        # promoting a newer published version moves the pin onto it —
+        # otherwise it would stay held back above the pinned one.
+        apk.is_beta = payload.is_beta
+        app = apk.app
+        if (
+            not apk.is_beta
+            and app.suggested_version_is_manual
+            and apk.status == ApkStatus.PUBLISHED
+            and apk.version_code > (app.suggested_version_code or 0)
+        ):
+            app.suggested_version_code = apk.version_code
+            app.suggested_version_name = apk.version_name
+        recompute_auto(app)
+        await write_event(
+            db,
+            action="apk.channel_changed",
+            actor=user,
+            target_type="apk",
+            target_id=apk.id,
+            summary=(
+                f"{apk.app.package_name} v{apk.version_name} ({apk.version_code}) "
+                f"marked as {'beta' if apk.is_beta else 'stable'}"
+            ),
+            payload={
+                "app_id": str(apk.app.id),
+                "version_code": apk.version_code,
+                "beta": apk.is_beta,
+                "suggested_version_code": apk.app.suggested_version_code,
+            },
+            request=request,
+        )
     await db.flush()
     await enqueue_reindex()
     return ApkRead.model_validate(apk)
@@ -1054,7 +1149,9 @@ async def delete_apk(
 ) -> None:
     apk = (
         await db.execute(
-            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
         )
     ).scalar_one_or_none()
     if apk is None:
@@ -1067,6 +1164,9 @@ async def delete_apk(
         await storage.delete(apk.storage_key)
     except Exception as exc:  # noqa: BLE001
         log.warning("storage delete failed", key=apk.storage_key, error=str(exc))
+    # Deleting the suggested version must not leave the index pointing at
+    # nothing (and holding every newer version back as Beta) in auto mode.
+    recompute_auto(apk.app, [a for a in apk.app.apks if a is not apk])
     await db.delete(apk)
     await db.flush()
     await enqueue_reindex()
@@ -1461,7 +1561,32 @@ async def get_sbom(
         cve_summary=sbom.cve_summary or {},
         cves=cves,
         sbom=None if summary else sbom.sbom_json,
+        known_vuln_reason=known_vuln_reason(cves),
     )
+
+
+_KNOWN_VULN_SEVERITIES = ("CRITICAL", "HIGH")
+_KNOWN_VULN_LISTED = 5
+
+
+def known_vuln_reason(cves: list[CveFinding]) -> str | None:
+    """Suggested ``KnownVuln`` reason built from the CRITICAL / HIGH
+    findings (``cves`` sorted most severe first), or ``None`` when there
+    are none. F-Droid 2.0 appends this text to the red "known security
+    vulnerability" banner, so it lists the CVEs and their fixed versions.
+    Only a suggestion: SBOM scans flag plenty of unreachable library code,
+    so the owner decides whether to apply it."""
+    serious = [c for c in cves if c.severity in _KNOWN_VULN_SEVERITIES]
+    if not serious:
+        return None
+    parts = []
+    for c in serious[:_KNOWN_VULN_LISTED]:
+        where = f" in {c.package_name}" if c.package_name else ""
+        fixed = f", fixed in {c.fixed_version}" if c.fixed_version else ""
+        parts.append(f"{c.cve_id} ({c.severity.lower()}){where}{fixed}")
+    if len(serious) > _KNOWN_VULN_LISTED:
+        parts.append(f"+{len(serious) - _KNOWN_VULN_LISTED} more")
+    return "; ".join(parts)[:_ANTI_FEATURE_REASON_MAX]
 
 
 @router.post("/{apk_id}/sbom/rescan", response_model=SbomRead)

@@ -28,6 +28,7 @@ from app.schemas.repo import RepoConfigRead, RepoConfigUpdate
 from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserRead
 from app.services.audit import write_event
 from app.services.queue import enqueue_reindex
+from app.services.suggested_version import recompute_auto
 from app.storage import get_storage
 
 router = APIRouter()
@@ -328,6 +329,8 @@ async def admin_update_app(
         app.status = payload.status
         if payload.status == AppStatus.PUBLISHED:
             app.last_published_at = datetime.now(UTC)
+            if app.first_published_at is None:
+                app.first_published_at = app.last_published_at
     # Retention override — admin-only. Reset flag wins over the value.
     # ``0`` means "no cap for this app" (sentinel pulled by
     # effective_max_versions) so we accept it as a real write target.
@@ -377,7 +380,9 @@ async def admin_publish_apk(
 ) -> dict:
     apk = (
         await db.execute(
-            select(Apk).options(selectinload(Apk.app)).where(Apk.id == apk_id)
+            select(Apk)
+            .options(selectinload(Apk.app).selectinload(App.apks))
+            .where(Apk.id == apk_id)
         )
     ).scalar_one_or_none()
     if apk is None:
@@ -402,12 +407,12 @@ async def admin_publish_apk(
                 first_locked_at=datetime.now(UTC),
             )
         )
-    if not apk.app.suggested_version_is_manual:
-        apk.app.suggested_version_code = max(
-            apk.app.suggested_version_code or 0, apk.version_code
-        )
-        apk.app.suggested_version_name = apk.version_name
-    apk.app.last_published_at = datetime.now(UTC)
+    # Auto mode only, and a beta upload never becomes the suggestion.
+    recompute_auto(apk.app)
+    now = datetime.now(UTC)
+    apk.app.last_published_at = now
+    if apk.app.first_published_at is None:
+        apk.app.first_published_at = now
     await db.flush()
     await enqueue_reindex()
     return {"status": "published"}
@@ -610,6 +615,50 @@ async def trigger_reindex(
     # enqueues elsewhere (upload, edit, …) keep the coalescing default.
     await enqueue_reindex(force=True)
     return {"queued": True}
+
+
+@router.get("/repo/additional-repos.json")
+async def additional_repos_json(
+    db: DbSession,
+    _: Annotated[User, Depends(get_current_admin)],
+) -> Response:
+    """Pre-install snippet for ROM / device-fleet builders.
+
+    F-Droid 2.0 only reads JSON (the old ``additional_repos.xml`` is gone)
+    from ``/{system_ext,product,vendor}/etc/fdroid/additional_repos.json``.
+    ``certificate`` is the hex-encoded DER certificate the client pins the
+    repo to. The format has no credentials field: on a private-mode repo
+    every device still needs an API key afterwards.
+    """
+    import json as _json
+    from pathlib import Path
+
+    from app.core.config import settings as _settings
+    from app.fdroid.keystore import KeystoreError, read_certificate_hex
+
+    config = (await db.execute(select(RepoConfig).limit(1))).scalar_one()
+    try:
+        certificate = await read_certificate_hex(
+            Path(_settings.keystore_path), _settings.keystore_password
+        )
+    except KeystoreError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Repository keystore unavailable: {exc}",
+        ) from exc
+    entry = {
+        "name": config.name,
+        "address": config.address,
+        "mirrors": config.mirrors,
+        "description": config.description or "",
+        "certificate": certificate,
+        "enabled": True,
+    }
+    return Response(
+        content=_json.dumps([entry], ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="additional_repos.json"'},
+    )
 
 
 @router.get("/jobs", response_model=dict)

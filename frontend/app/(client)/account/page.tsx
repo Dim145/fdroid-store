@@ -1064,6 +1064,10 @@ function NewKeyCelebration({
           <Credential label={t("account.apiKey.username")} value={username} mono />
           <Credential label={t("account.apiKey.encodedUrl")} value={authUrl} mono small />
           <p className="text-xs text-ink-mute">{t("account.apiKey.usernameNote")}</p>
+          {/* F-Droid only reads credentials when a repository is *added*:
+              re-adding a known repo is refused, and the Basic-auth editor
+              only shows for repos that already have a username. */}
+          <p className="text-xs text-ink-mute">{t("account.apiKey.replaceRepoNote")}</p>
         </div>
       </div>
     </div>

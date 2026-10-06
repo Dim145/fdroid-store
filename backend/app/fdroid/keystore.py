@@ -325,6 +325,26 @@ async def read_keystore_info(path: Path, keystore_password: str) -> KeystoreInfo
     return await asyncio.to_thread(_read_keystore_info_sync, path, keystore_password)
 
 
+def _read_certificate_hex_sync(path: Path, keystore_password: str) -> str:
+    if not path.exists():
+        raise KeystoreError("keystore not found")
+    try:
+        pwd_bytes = (keystore_password or "").encode("utf-8")
+        pfx = pkcs12.load_pkcs12(path.read_bytes(), pwd_bytes if pwd_bytes else None)
+    except (OSError, ValueError, TypeError) as exc:
+        raise KeystoreError(f"keystore parse failed — {exc}") from exc
+    if pfx.cert is None:
+        raise KeystoreError("keystore has no primary certificate entry")
+    return pfx.cert.certificate.public_bytes(serialization.Encoding.DER).hex()
+
+
+async def read_certificate_hex(path: Path, keystore_password: str) -> str:
+    """Hex-encoded DER certificate of the repo signing key — the
+    ``certificate`` value F-Droid stores (and pins) for a repository, e.g.
+    in ``additional_repos.json``. Its SHA-256 is the repo fingerprint."""
+    return await asyncio.to_thread(_read_certificate_hex_sync, path, keystore_password)
+
+
 async def delete_keystore(path: Path) -> None:
     """Remove the keystore. Caller is responsible for backups."""
     if path.exists():

@@ -88,6 +88,10 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
 
     def _l(key: str) -> list[str]:
         v = data.get(key)
+        if isinstance(v, dict):
+            # Current fdroiddata writes AntiFeatures as a map
+            # ``{Tracking: {en-US: reason}}`` — the flags are the keys.
+            return [str(k).strip() for k in v if str(k).strip()]
         if isinstance(v, list):
             return [str(item).strip() for item in v if str(item).strip()]
         if isinstance(v, str):
@@ -114,7 +118,8 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
         "source_code": _s("SourceCode"),
         "issue_tracker": _s("IssueTracker"),
         "translation": _s("Translation"),
-        "donate": _s("Donate"),
+        # ``Donate`` is a list in current fdroiddata; we keep the first URL.
+        "donate": _s("Donate") or next(iter(_l("Donate")), None),
         "liberapay": _s("Liberapay") or _s("LiberapayID"),
         "open_collective": _s("OpenCollective"),
         "bitcoin": _s("Bitcoin"),

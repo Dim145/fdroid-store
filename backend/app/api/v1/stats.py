@@ -32,6 +32,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbSession, get_current_user_optional
+from app.fdroid.categories_catalog import localized_names
 from app.models.apk import Apk, ApkStatus
 from app.models.app import App, AppVisibility, Category, app_categories_table
 from app.models.audit import DownloadEvent
@@ -206,7 +207,13 @@ async def get_stats(
         )
     ).all()
     categories = [
-        {"id": str(r.id), "name": r.name, "app_count": int(r.apps or 0)}
+        {
+            "id": str(r.id),
+            "name": r.name,
+            # Localized labels of official F-Droid IDs (same as the index).
+            "names": localized_names(r.name),
+            "app_count": int(r.apps or 0),
+        }
         for r in cat_rows
     ]
 

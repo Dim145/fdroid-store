@@ -5,11 +5,14 @@ create, with-github-source create, worker-driven release fetch). When
 the per-app count exceeds the effective cap, we evict the oldest APKs
 by ``version_code`` ascending until the count is back in range.
 
-Two safeguards:
+Three safeguards:
 
   * The suggested version (``App.suggested_version_code``) is never
     evicted — F-Droid clients rely on it to know which version to
     install. We skip past it and pull the next-oldest eligible row.
+  * Neither is the newest version: a beta upload sits above the
+    suggested one, so with a tight cap it would otherwise be evicted the
+    moment it lands.
   * ``0`` on the per-app override is a sentinel for "no cap on this
     app even if the repo default would impose one" — useful for a
     long-history library where the admin wants the global eviction
@@ -92,14 +95,20 @@ async def evict_oldest_if_needed(
     # skip it and look at the next candidate. We stop as soon as the
     # remaining count matches the cap.
     suggested_code = app.suggested_version_code
+    newest_code = rows[-1].version_code
     remaining = len(rows)
     for row in rows:
         if remaining <= cap:
             break
+        protected = None
         if suggested_code is not None and row.version_code == suggested_code:
-            # Protected — never evict the suggested version even if it's
-            # the oldest. Note the skip in the audit log so an admin can
-            # see why a particular app stays above the cap.
+            protected = "suggested_version"
+        elif row.version_code == newest_code:
+            protected = "newest_version"
+        if protected is not None:
+            # Protected — never evict the suggested nor the newest version
+            # even if it's the oldest. Note the skip in the audit log so an
+            # admin can see why a particular app stays above the cap.
             await write_event(
                 db,
                 action="apk.retention_skip",
@@ -108,14 +117,14 @@ async def evict_oldest_if_needed(
                 target_id=row.id,
                 summary=(
                     f"retention kept {app.package_name} v{row.version_name} "
-                    f"({row.version_code}) — suggested version"
+                    f"({row.version_code}) — {protected.replace('_', ' ')}"
                 ),
                 payload={
                     "app_id": str(app.id),
                     "package_name": app.package_name,
                     "version_code": row.version_code,
                     "version_name": row.version_name,
-                    "reason": "suggested_version",
+                    "reason": protected,
                     "cap": cap,
                 },
             )

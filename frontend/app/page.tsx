@@ -15,6 +15,7 @@ import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { api, type AppSummary, type Category } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
+import { useCategoryLabel } from "@/lib/categories";
 
 /* ============================================================================
  * Home — modern Android-app-store layout.
@@ -86,6 +87,7 @@ export default function Home() {
     () => categories.filter((c) => usedCategoryNames.has(c.name)),
     [categories, usedCategoryNames],
   );
+  const categoryLabel = useCategoryLabel();
 
   if (setupComplete === null) {
     return (
@@ -213,7 +215,7 @@ export default function Home() {
                     href={`/apps?category=${encodeURIComponent(c.name)}`}
                     className="surface surface-interactive group flex items-center justify-between gap-2 p-4"
                   >
-                    <span className="font-semibold text-ink">{c.name}</span>
+                    <span className="font-semibold text-ink">{categoryLabel(c)}</span>
                     <span className="font-mono text-xs text-ink-mute transition-colors group-hover:text-primary">
                       {count} →
                     </span>

@@ -39,6 +39,7 @@ from app.schemas.app import (
     LocalizationUpsert,
 )
 from app.services.queue import enqueue_reindex
+from app.services.suggested_version import recompute_auto
 
 router = APIRouter()
 
@@ -580,8 +581,11 @@ async def create_app_with_github_source(
         db.add(app)
         await db.flush()
 
+        # Same channel mapping as the cron import: a forge pre-release is a
+        # beta (offered to everyone anyway until a stable release exists).
         apk = await attach_apk_to_app(
-            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
+            db, app=app, tmp_path=tmp_path, meta=meta, uploader=user,
+            is_beta=asset.is_prerelease,
         )
         # Retention enforcement (no-op on a fresh app with one APK).
         from app.services.apk_eviction import evict_oldest_if_needed
@@ -1119,14 +1123,8 @@ async def _apply_suggested_version_override(
     """
     if version_code is None:
         app.suggested_version_is_manual = False
-        published = [a for a in app.apks if a.status == ApkStatus.PUBLISHED]
-        if published:
-            top = max(published, key=lambda a: a.version_code)
-            app.suggested_version_code = top.version_code
-            app.suggested_version_name = top.version_name
-        else:
-            app.suggested_version_code = None
-            app.suggested_version_name = None
+        # Auto-tracking skips beta uploads (see services.suggested_version).
+        recompute_auto(app)
         return
 
     target = next(
@@ -1143,6 +1141,9 @@ async def _apply_suggested_version_override(
     app.suggested_version_is_manual = True
     app.suggested_version_code = target.version_code
     app.suggested_version_name = target.version_name
+    # Recommending a beta to everyone is a promotion: drop the flag so it
+    # stays stable if the owner later switches back to auto-tracking.
+    target.is_beta = False
 
 
 @router.delete("/{app_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, response_class=Response)
