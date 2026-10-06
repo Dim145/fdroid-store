@@ -311,7 +311,7 @@ async def create_app_with_apk(
         # Retention enforcement — no-op on a fresh app with one APK,
         # but kept here so all attach paths share the same hook.
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
         if apk.status == ApkStatus.PUBLISHED:
             await enqueue_reindex()
 
@@ -432,7 +432,7 @@ async def create_app_with_staged_apk(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user,
         )
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
         if apk.status == ApkStatus.PUBLISHED:
             await enqueue_reindex()
 
@@ -614,7 +614,7 @@ async def create_app_with_github_source(
         )
         # Retention enforcement (no-op on a fresh app with one APK).
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
 
         # 4. Wire the persistent GithubSource so the cron can keep
         # importing future releases. Snapshot the just-imported tag so
@@ -848,7 +848,7 @@ async def create_app_with_proxy_source(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user
         )
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
 
         # ---- 5. Wire the persistent ApkProxySource ------------------
         # Snapshot the just-imported release so the cron sees it as
@@ -1307,7 +1307,7 @@ async def upsert_localization(
     fields must be non-null — an empty PUT means "delete me", so we ask the
     caller to use DELETE instead.
     """
-    if not _LOCALE_RE.match(locale):
+    if not _LOCALE_RE.fullmatch(locale):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Locale must look like 'en' or 'en-US' (BCP47).",
@@ -1354,7 +1354,7 @@ async def delete_localization(
     db: DbSession,
     user: Annotated[User, Depends(get_current_uploader)],
 ) -> None:
-    if not _LOCALE_RE.match(locale):
+    if not _LOCALE_RE.fullmatch(locale):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bad locale")
     app = await _require_owner_or_admin(db, app_id, user)
     target = next((loc for loc in app.localizations if loc.locale == locale), None)

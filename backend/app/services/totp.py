@@ -15,10 +15,12 @@ legacy local-password column). 10 codes per user; each is 8 chars
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import io
 import json
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -163,7 +165,9 @@ async def confirm_enrolment(
     if not _verify_totp_code(row.secret, code):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid code")
     codes = [_new_recovery_code() for _ in range(10)]
-    row.recovery_codes_hash = json.dumps([_bcrypt.hash(c) for c in codes])
+    # bcrypt is deliberately slow: off the event loop.
+    hashes = await asyncio.to_thread(lambda: [_bcrypt.hash(c) for c in codes])
+    row.recovery_codes_hash = json.dumps(hashes)
     row.confirmed_at = datetime.now(UTC)
     row.last_used_at = datetime.now(UTC)
     await db.flush()
@@ -226,23 +230,37 @@ async def verify_login(
 
     # Path 2: recovery code. Walk the stored hash list looking for a match,
     # burn the slot on hit. Codes are uppercase + dash in the canonical
-    # rendering; tolerate lowercase too.
-    canonical = code.upper().replace(" ", "")
-    try:
-        hashes: list[str] = json.loads(row.recovery_codes_hash or "[]")
-    except json.JSONDecodeError:
-        hashes = []
+    # rendering; tolerate lowercase and a missing dash. Anything else is not
+    # a recovery code: no bcrypt round (ten of them per attempt would let
+    # wrong TOTP codes stall the server).
+    match = _RECOVERY_RE.fullmatch(code.upper().replace(" ", ""))
+    if match is not None:
+        canonical = f"{match[1]}-{match[2]}"
+        try:
+            hashes: list[str] = json.loads(row.recovery_codes_hash or "[]")
+        except json.JSONDecodeError:
+            hashes = []
+        slot = await asyncio.to_thread(_find_recovery_slot, canonical, hashes)
+        if slot is not None:
+            hashes[slot] = ""  # burn slot
+            row.recovery_codes_hash = json.dumps(hashes)
+            row.last_used_at = datetime.now(UTC)
+            await clear_failures(failure_key)
+            return True
+    await register_failure(failure_key, _FAILURE_WINDOW_SECONDS)
+    return False
+
+
+_RECOVERY_RE = re.compile(r"([2-9A-HJ-NP-Z]{4})-?([2-9A-HJ-NP-Z]{4})")
+
+
+def _find_recovery_slot(canonical: str, hashes: list[str]) -> int | None:
     for i, h in enumerate(hashes):
         if not h:
             continue
         try:
             if _bcrypt.verify(canonical, h):
-                hashes[i] = ""  # burn slot
-                row.recovery_codes_hash = json.dumps(hashes)
-                row.last_used_at = datetime.now(UTC)
-                await clear_failures(failure_key)
-                return True
+                return i
         except Exception:  # noqa: BLE001
             continue
-    await register_failure(failure_key, _FAILURE_WINDOW_SECONDS)
-    return False
+    return None

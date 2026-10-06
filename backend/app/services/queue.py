@@ -80,12 +80,19 @@ async def _enqueue_reindex_now(*, force: bool) -> None:
 async def enqueue_cve_scan(apk_id: str | uuid.UUID) -> None:
     """Schedule a per-APK SBOM + CVE scan.
 
-    Dedupes within a minute via a bucketed job_id (similar pattern to
-    :func:`enqueue_reindex`): rapid bursts of enqueues collapse to a
-    single scan, but a manual re-scan a few minutes later still runs.
-    Arq's 24h ``keep_result`` would otherwise swallow any second
-    enqueue with the same id.
+    Like :func:`enqueue_reindex`, inside a request the job is queued once
+    the transaction has committed — the worker drops jobs whose APK row it
+    can't see yet. Dedupes within a minute via a bucketed job_id: rapid
+    bursts of enqueues collapse to a single scan, but a manual re-scan a few
+    minutes later still runs. Arq's 24h ``keep_result`` would otherwise
+    swallow any second enqueue with the same id.
     """
+    if run_after_commit(f"cve:{apk_id}", lambda: _enqueue_cve_scan_now(apk_id)):
+        return
+    await _enqueue_cve_scan_now(apk_id)
+
+
+async def _enqueue_cve_scan_now(apk_id: str | uuid.UUID) -> None:
     import time as _time
     import uuid as _uuid
 

@@ -382,7 +382,10 @@ async def oidc_callback(request: Request, db: DbSession):
     # at all (Defguard, some Keycloak setups) can disable the gate via
     # ``OIDC_REQUIRE_EMAIL_VERIFIED=false`` in .env — see the warning
     # logged at startup in services/oidc_service.py when the gate is off.
-    if settings.oidc_require_email_verified and not bool(userinfo.get("email_verified")):
+    # Strictly true: some IdPs send the claim as the *string* "false" from
+    # their userinfo endpoint, which bool() would accept.
+    verified = userinfo.get("email_verified")
+    if settings.oidc_require_email_verified and verified is not True and verified != "true":
         return _oidc_error("email_unverified")
 
     username = (
@@ -410,6 +413,9 @@ async def oidc_callback(request: Request, db: DbSession):
             invite_code=invite_code,
         )
     except AuthError as exc:
+        # Nothing the refused sign-in flushed (a half-created account when
+        # an invite race is lost) may be committed by get_db on the way out.
+        await db.rollback()
         # Bounce the user back to /login with a stable reason code. A raw
         # JSON 400 mid-OAuth-flow is technically correct but useless to
         # whoever just clicked "Continue with SSO" in the browser.

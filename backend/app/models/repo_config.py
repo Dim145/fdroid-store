@@ -57,8 +57,9 @@ class RepoConfig(Base, IdMixin, TimestampMixin):
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # JSON list of user UUIDs (as strings) for which a per-user private index
-    # has been built at ``repo/private/u_<id>/...``. Lets the rebuild clean up
-    # stale per-user indexes when their owner no longer has private apps.
+    # has been built at ``repo/private/u_<id>/...`` (active owners of private
+    # apps). Also the serving whitelist: a per-user index is only served to
+    # users listed here, so a stale one whose cleanup failed is never used.
     private_index_owner_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
 
     # Repo-wide default quotas. NULL = unlimited. A user's quota_* column

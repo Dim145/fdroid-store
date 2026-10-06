@@ -367,6 +367,8 @@ export type CurrentUser = {
   role: "user" | "uploader" | "admin";
   auth_provider: "local" | "oidc";
   is_active: boolean;
+  /** A local password exists — adding a passkey or TOTP re-asks for it. */
+  has_password?: boolean;
   last_login_at: string | null;
   created_at: string;
   show_nsfw: boolean;
@@ -783,7 +785,12 @@ export const api = {
   // ---------- TOTP ----------
   totp: {
     status: () => apiFetch<TotpStatus>("/api/v1/me/totp/status"),
-    setup: () => apiFetch<TotpSetup>("/api/v1/me/totp/setup", { method: "POST" }),
+    /** ``password``: the current one, required when the account has one. */
+    setup: (password?: string) =>
+      apiFetch<TotpSetup>("/api/v1/me/totp/setup", {
+        method: "POST",
+        body: JSON.stringify({ password: password || null }),
+      }),
     confirm: (code: string) =>
       apiFetch<{ recovery_codes: string[] }>("/api/v1/me/totp/confirm", {
         method: "POST",
@@ -836,10 +843,11 @@ export const api = {
   // ---------- WebAuthn / passkeys ----------
   webauthn: {
     list: () => apiFetch<{ items: WebAuthnCredentialSummary[] }>("/api/v1/me/webauthn/credentials"),
-    registerBegin: (label: string) =>
+    /** ``password``: the current one, required when the account has one. */
+    registerBegin: (label: string, password?: string) =>
       apiFetch<WebAuthnRegisterBegin>("/api/v1/me/webauthn/register/begin", {
         method: "POST",
-        body: JSON.stringify({ label }),
+        body: JSON.stringify({ label, password: password || null }),
       }),
     registerFinish: (challenge_token: string, credential: unknown) =>
       apiFetch<WebAuthnCredentialSummary>("/api/v1/me/webauthn/register/finish", {

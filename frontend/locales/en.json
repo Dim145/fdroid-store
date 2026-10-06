@@ -522,6 +522,10 @@
       "showRevoked_one": "Show {{count}} revoked session",
       "showRevoked_other": "Show {{count}} revoked sessions"
     },
+    "security": {
+      "confirmPasswordLabel": "Current password",
+      "confirmPasswordHint": "Required to add a new way to sign in."
+    },
     "totp": {
       "notEnrolledBody": "Add an authenticator app (Aegis, 1Password, …) as a second factor. You'll be asked for a 6-digit code on every sign-in.",
       "enable": "Enable two-factor",

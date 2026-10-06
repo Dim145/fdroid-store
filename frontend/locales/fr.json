@@ -522,6 +522,10 @@
       "showRevoked_one": "Afficher {{count}} session révoquée",
       "showRevoked_other": "Afficher {{count}} sessions révoquées"
     },
+    "security": {
+      "confirmPasswordLabel": "Mot de passe actuel",
+      "confirmPasswordHint": "Requis pour ajouter un nouveau moyen de connexion."
+    },
     "totp": {
       "notEnrolledBody": "Ajoute une application d'authentification (Aegis, 1Password, …) comme deuxième facteur. Un code à 6 chiffres te sera demandé à chaque connexion.",
       "enable": "Activer le 2FA",

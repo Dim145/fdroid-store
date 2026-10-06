@@ -20,6 +20,7 @@ from app.core.security import (
     parse_deploy_token,
     verify_api_key_secret,
     verify_deploy_token_secret,
+    verify_password,
 )
 from app.models.api_key import ApiKey
 from app.models.deploy_token import DeployToken
@@ -114,6 +115,24 @@ async def get_current_uploader(
             detail="Uploader role required",
         )
     return user
+
+
+def require_password_confirmation(user: User, password: str | None) -> None:
+    """Re-check the current password before adding a sign-in method.
+
+    A stolen access token (60 min) must not be enough to register a passkey
+    — a permanent passwordless login surviving a password change — or to
+    enrol a TOTP the owner doesn't have, locking them out. Accounts without
+    a local password (SSO-only) have nothing to confirm. 403, not 401: the
+    session itself is fine, and a 401 would make the SPA refresh it.
+    """
+    if user.hashed_password is None:
+        return
+    if not password or not verify_password(password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Confirm your current password to add a sign-in method",
+        )
 
 
 # --------------------------------------------------------------------------

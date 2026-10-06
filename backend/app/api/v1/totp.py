@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.api.deps import DbSession, get_current_user
+from app.api.deps import DbSession, get_current_user, require_password_confirmation
 from app.core.rate_limit import limiter
 from app.core.security import verify_password
 from app.models.repo_config import RepoConfig
@@ -28,6 +28,12 @@ class TotpSetupResponse(BaseModel):
     secret: str
     provisioning_uri: str
     qr_data_uri: str
+
+
+class TotpSetupRequest(BaseModel):
+    """Current password — required when the account has one."""
+
+    password: str | None = Field(default=None, max_length=256)
 
 
 class TotpConfirmRequest(BaseModel):
@@ -70,14 +76,18 @@ async def totp_status(
 
 
 @router.post("/setup", response_model=TotpSetupResponse)
+@limiter.limit("10/minute")
 async def totp_setup(
+    request: Request,
     db: DbSession,
     user: Annotated[User, Depends(get_current_user)],
+    payload: Annotated[TotpSetupRequest | None, Body()] = None,
 ) -> TotpSetupResponse:
     """Stage a new TOTP secret. Returns the QR + provisioning URI so the
     user can register the secret with their authenticator app. The
     enrolment isn't active until they POST a verification code to
     ``/confirm``."""
+    require_password_confirmation(user, payload.password if payload else None)
     repo = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
     issuer = (repo.name if repo else None) or "fdroid-store"
     payload = await begin_enrolment(db, user, issuer=issuer)

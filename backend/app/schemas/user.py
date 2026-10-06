@@ -21,6 +21,8 @@ class UserRead(BaseModel):
     role: UserRole
     auth_provider: AuthProvider
     is_active: bool
+    # Whether sensitive changes (new passkey, TOTP) must re-confirm it.
+    has_password: bool = False
     last_login_at: datetime | None
     created_at: datetime
     show_nsfw: bool = False

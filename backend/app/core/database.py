@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar
 
-from sqlalchemy.exc import DBAPIError, InterfaceError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -82,14 +81,13 @@ async def get_db() -> AsyncIterator[AsyncSession]:
     data was silently rolled back. Hooks queued with
     :func:`run_after_commit` run once the commit succeeded.
 
-    The admin Backup-Restore feature terminates every other PG session as
-    part of its work — the dependency's bound connection can be one of the
-    victims, so commit/rollback/close at cleanup time raise
-    ``InterfaceError: connection is closed``. Only that case is swallowed;
-    if the request handler itself raised, the exception still propagates
-    (FastAPI requires it — bare-except-swallow in a yield dependency breaks
-    response handling). pool_pre_ping refreshes the dead pool entries on the
-    next acquisition.
+    A commit that fails — including on a connection killed under us, e.g.
+    by the worker's Backup-Restore terminating every other PG session —
+    propagates: nothing was persisted, so the client must not get a
+    success. If the request handler itself raised, the exception still
+    propagates too (FastAPI requires it — bare-except-swallow in a yield
+    dependency breaks response handling). pool_pre_ping refreshes the dead
+    pool entries on the next acquisition.
     """
     session = SessionLocal()
     hooks: dict[str, AfterCommitHook] = {}
@@ -105,18 +103,7 @@ async def get_db() -> AsyncIterator[AsyncSession]:
             except Exception:
                 pass
             raise
-        try:
-            await session.commit()
-        except DBAPIError as exc:
-            if not (exc.connection_invalidated or isinstance(exc, InterfaceError)):
-                raise
-            # Connection killed mid-request (Backup-Restore): nothing was
-            # committed, so nothing must run after it.
-            hooks.clear()
-            try:
-                await session.rollback()
-            except Exception:
-                pass
+        await session.commit()
     finally:
         try:
             _after_commit_hooks.reset(token)

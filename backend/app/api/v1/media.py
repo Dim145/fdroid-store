@@ -320,7 +320,7 @@ async def upload_screenshots(
     Stored under ``<package>/<locale>/phoneScreenshots/<id>.png`` so the
     F-Droid client finds them at the path advertised in the index.
     """
-    if not _LOCALE_RE.match(locale):
+    if not _LOCALE_RE.fullmatch(locale):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid locale tag",

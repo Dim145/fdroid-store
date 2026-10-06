@@ -167,7 +167,7 @@ python3 -c <span class="c-str">'import secrets; print(secrets.token_urlsafe(64))
             <dt>PUBLIC_API_URL</dt>
             <dd>Backend public URL — what the browser SPA calls. Defaults to <code>PUBLIC_APP_URL</code>.</dd>
             <dt>ENVIRONMENT</dt>
-            <dd><code>development</code> or <code>production</code>. <code>production</code> disables Swagger and hardens cookie flags.</dd>
+            <dd><code>production</code> (default) or <code>development</code>. <code>production</code> refuses the shipped default credentials, disables Swagger and hardens cookie flags; use <code>development</code> only for local hacking.</dd>
             <dt>LOG_LEVEL</dt>
             <dd><code>DEBUG</code> · <code>INFO</code> · <code>WARNING</code>. <code>INFO</code> is the default and what we recommend.</dd>
           </dl>

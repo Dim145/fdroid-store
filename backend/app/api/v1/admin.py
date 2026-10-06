@@ -430,6 +430,11 @@ async def admin_publish_apk(
         apk.app.first_published_at = now
     await db.flush()
     await enqueue_reindex()
+    # Uploads that went through review were skipped by the SBOM/CVE scan
+    # while pending; scan them now that they ship.
+    from app.services.queue import enqueue_cve_scan
+
+    await enqueue_cve_scan(apk.id)
     return {"status": "published"}
 
 
