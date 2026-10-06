@@ -28,7 +28,7 @@ from app.api.deps import DbSession, get_current_user, get_current_user_optional,
 from app.core.logging import get_logger
 from app.core.uploads import normalize_image, read_capped
 from app.models.app import App, AppScreenshot, AppStatus, AppVisibility
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.services.queue import enqueue_reindex
 from app.storage import get_storage
 
@@ -411,8 +411,10 @@ async def list_screenshots(
         app.visibility == AppVisibility.PUBLIC and app.status == AppStatus.PUBLISHED
     )
     if not public_listable:
-        if user is None or (user.role != UserRole.ADMIN and app.owner_id != user.id):
-            # Mask existence to the unauthorised caller.
+        from app.services.app_permissions import can_manage_app
+
+        # Owner, co-maintainers and admins; existence masked for others.
+        if user is None or not await can_manage_app(db, user, app):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="App not found")
     return [
         {
