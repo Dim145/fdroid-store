@@ -25,6 +25,7 @@ from arq import Retry, cron
 from arq.connections import RedisSettings
 from redis.asyncio.lock import Lock
 from sqlalchemy import desc, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
@@ -91,7 +92,10 @@ async def rebuild_index(ctx: dict, force: bool = False) -> dict:
                 # Leave the work for the retry / next job.
                 await redis.set(REINDEX_DIRTY_KEY, "1")
                 log.exception("rebuild_index failed", error=str(exc))
-                raise
+                # arq only re-runs a job that raises Retry (bounded by
+                # max_tries); a plain exception would leave the index stale
+                # until some unrelated change enqueues the next build.
+                raise Retry(defer=30) from exc
         return {"ok": True}
     finally:
         keepalive.cancel()
@@ -158,25 +162,40 @@ async def scan_apks_periodic(ctx: dict, force: bool = False) -> dict:
                 continue
             if not local.exists():
                 continue
-            result = await scan_path(local)
             row = ApkScan(
                 apk_id=apk.id,
                 scanner="clamav",
                 scanned_at=datetime.now(UTC),
             )
-            if result.clean:
-                row.status = ApkScanStatus.CLEAN
-            elif result.signature:
-                row.status = ApkScanStatus.INFECTED
-                row.signatures = result.signature
-                infected += 1
-            else:
+            try:
+                result = await scan_path(local)
+            except Exception as exc:  # noqa: BLE001 — one APK must not sink the whole run
+                log.warning("periodic scan failed", apk_id=str(apk.id), error=str(exc))
                 row.status = ApkScanStatus.ERROR
-                row.error = result.error
-                errors += 1
+                row.error = f"scan failed: {exc}"[:1000]
+            else:
+                if result.clean:
+                    row.status = ApkScanStatus.CLEAN
+                elif result.signature:
+                    row.status = ApkScanStatus.INFECTED
+                    row.signatures = result.signature
+                else:
+                    row.status = ApkScanStatus.ERROR
+                    row.error = result.error
             db.add(row)
+            # One commit per APK: the verdicts already obtained survive a
+            # later failure (or a worker restart) in the middle of the run.
+            try:
+                await db.commit()
+            except SQLAlchemyError as exc:
+                await db.rollback()
+                log.warning("could not record scan", apk_id=str(apk.id), error=str(exc))
+                continue
             scanned += 1
-        await db.commit()
+            if row.status == ApkScanStatus.INFECTED:
+                infected += 1
+            elif row.status == ApkScanStatus.ERROR:
+                errors += 1
         log.info(
             "scan_apks_periodic complete",
             scanned=scanned,
@@ -208,17 +227,22 @@ async def scan_github_sources_periodic(ctx: dict) -> dict:
         log.info("scan_github_sources: nothing to do")
         return {"queued": 0}
 
+    # The job id carries the day: it dedupes a re-run of today's
+    # coordinator, while a fixed id would collide with yesterday's result
+    # (kept ``keep_result`` = 24h) and arq would silently drop the enqueue.
+    day = datetime.now(UTC).strftime("%Y%m%d")
     pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         queued = 0
         for s in sources:
             sid = str(s.id)
-            await pool.enqueue_job(
+            job = await pool.enqueue_job(
                 "fetch_github_source",
                 sid,
-                _job_id=f"fetch_github_source:{sid}",
+                _job_id=f"fetch_github_source:{sid}:{day}",
             )
-            queued += 1
+            if job is not None:
+                queued += 1
     finally:
         await pool.close()
     log.info("scan_github_sources queued", queued=queued)
@@ -396,7 +420,7 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
             # path so the worker can't grow an app unbounded by
             # cron-driven imports.
             from app.services.apk_eviction import evict_oldest_if_needed
-            await evict_oldest_if_needed(db, app=app, actor_id=owner.id)
+            await evict_oldest_if_needed(db, app=app, actor_id=owner.id, keep=apk.id)
 
             await write_event(
                 db,
@@ -510,3 +534,12 @@ class WorkerSettings:
     # page survives restarts and idle periods. 30s (the prior value) made
     # the history vanish almost immediately after every run.
     keep_result = 86400
+    # Refresh the health-check key every minute (arq's default is hourly,
+    # with a TTL of interval + 1 s): the compose healthcheck runs
+    # ``arq --check`` every 30 s and must see a dead worker within minutes.
+    health_check_interval = 60
+    # Pick at most one job per poll. With a bigger batch, arq's poll loop
+    # waits on the job semaphore whenever more jobs are queued than slots
+    # are free (the daily source fan-out) and neither refreshes the health
+    # key nor runs crons until the batch is started.
+    queue_read_limit = 1

@@ -138,17 +138,21 @@ async def scan_apk_proxy_sources_periodic(ctx: dict) -> dict:
         log.info("scan_apk_proxy_sources: nothing eligible")
         return {"queued": 0, "skipped_suspended": len(rows) - len(eligible)}
 
+    # Day-bucketed job id — see ``scan_github_sources_periodic``: a fixed
+    # id collides with yesterday's kept result and arq drops the enqueue.
+    day = now.strftime("%Y%m%d")
     pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         queued = 0
         for s in eligible:
             sid = str(s.id)
-            await pool.enqueue_job(
+            job = await pool.enqueue_job(
                 "fetch_apk_proxy_source",
                 sid,
-                _job_id=f"fetch_apk_proxy_source:{sid}",
+                _job_id=f"fetch_apk_proxy_source:{sid}:{day}",
             )
-            queued += 1
+            if job is not None:
+                queued += 1
     finally:
         await pool.close()
     log.info(
@@ -427,7 +431,7 @@ async def fetch_apk_proxy_source(ctx: dict, source_id: str) -> dict:
             src.suspended_until = None
 
             from app.services.apk_eviction import evict_oldest_if_needed
-            await evict_oldest_if_needed(db, app=src.app, actor_id=owner.id)
+            await evict_oldest_if_needed(db, app=src.app, actor_id=owner.id, keep=apk.id)
 
             await write_event(
                 db,

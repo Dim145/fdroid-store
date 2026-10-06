@@ -71,6 +71,14 @@ def parse_metadata_yaml(raw: str) -> dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid YAML: {exc}",
         ) from exc
+    except Exception as exc:
+        # The composer recurses per nesting level, so ``[[[[…`` within the
+        # 32 KiB cap raises RecursionError; constructors raise plain
+        # ValueError too (``2020-13-45`` as a date). Same 400 as bad syntax.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid YAML: nested too deeply or holds an invalid value",
+        ) from exc
     if not isinstance(data, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

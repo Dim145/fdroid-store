@@ -72,6 +72,14 @@ _SIGNATURES: tuple[Signature, ...] = (
 # the path tokens.
 _CLASS_TOKEN = re.compile(rb"[A-Za-z0-9_/$]+")
 
+# The DEX files are streamed, never inflated whole: a deflate bomb in a
+# ~400 KiB APK would otherwise cost >1 GiB of RAM. One dex tops out around
+# a few tens of MiB (64K-method limit); entries declaring more are skipped
+# and the inflated total is capped — the scan only suggests chips anyway.
+_DEX_MAX = 64 * 1024 * 1024
+_DEX_TOTAL_MAX = 256 * 1024 * 1024
+_CHUNK = 1024 * 1024
+
 
 @dataclass
 class Detection:
@@ -95,25 +103,60 @@ def scan_apk(path: str | Path) -> list[Detection]:
     detections: list[Detection] = []
     try:
         with zipfile.ZipFile(p) as zf:
-            dex_names = [n for n in zf.namelist() if n.startswith("classes") and n.endswith(".dex")]
+            dex_infos = [
+                i for i in zf.infolist()
+                if i.filename.startswith("classes") and i.filename.endswith(".dex")
+            ]
             # Pre-encode needles once.
             encoded = [(sig, sig.needle.encode("ascii")) for sig in _SIGNATURES]
-            for dex in dex_names:
+            budget = _DEX_TOTAL_MAX
+            for info in dex_infos:
+                if info.file_size > min(_DEX_MAX, budget):
+                    continue
+                # Charged up front: ``zipfile`` never inflates more than the
+                # declared size, and a dex that fails half-way still counts.
+                budget -= info.file_size
                 try:
-                    blob = zf.read(dex)
+                    _scan_dex(zf, info, encoded, detections)
                 except Exception:
                     continue
-                # ``blob.find`` over the raw DEX bytes catches the class
-                # paths regardless of how the string table is laid out —
-                # they appear verbatim in the type/method descriptors.
-                for sig, needle in encoded:
-                    if needle in blob:
-                        detections.append(
-                            Detection(flag=sig.flag, label=sig.label, location=dex)
-                        )
     except zipfile.BadZipFile:
         return []
     return detections
+
+
+def _scan_dex(
+    zf: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    encoded: list[tuple[Signature, bytes]],
+    detections: list[Detection],
+) -> None:
+    """Search one DEX for the needles in bounded chunks. ``zipfile`` stops
+    at the declared size (capped by the caller) and the loop stops at
+    ``_DEX_MAX`` regardless. Matching over the raw bytes catches the class
+    paths regardless of how the string table is laid out — they appear
+    verbatim in the type/method descriptors."""
+    overlap = max(len(needle) for _, needle in encoded) - 1
+    pending = list(encoded)
+    inflated = 0
+    tail = b""
+    with zf.open(info) as fh:
+        while pending and inflated < _DEX_MAX:
+            chunk = fh.read(_CHUNK)
+            if not chunk:
+                break
+            inflated += len(chunk)
+            window = tail + chunk
+            still: list[tuple[Signature, bytes]] = []
+            for sig, needle in pending:
+                if needle in window:
+                    detections.append(
+                        Detection(flag=sig.flag, label=sig.label, location=info.filename)
+                    )
+                else:
+                    still.append((sig, needle))
+            pending = still
+            tail = window[-overlap:]
 
 
 def summarise(detections: list[Detection]) -> dict[str, list[str]]:

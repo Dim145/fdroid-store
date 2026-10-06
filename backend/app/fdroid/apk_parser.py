@@ -15,6 +15,14 @@ signature. The downstream F-Droid client re-verifies at install time,
 and our cross-app signer-pin check catches the practical attack
 (same package name → must keep the same signer), so we accept that
 trade-off in exchange for shedding the apksigner dep on the API side.
+
+Untrusted input: androguard's ZIP backend (apkInspector) inflates whole
+entries with an unbounded ``zlib.decompress`` and ignores the declared
+size, so a ~400 KiB APK with a deflate-bomb manifest costs >1 GiB of RAM;
+and its v2/v3 signature lookup scans backwards one byte at a time, so
+trailing junk after the ZIP end record burns ~40 s of CPU per 200 MB.
+Every entry read goes through :class:`_BoundedZipEntry` and the file
+layout is checked before androguard sees it.
 """
 from __future__ import annotations
 
@@ -22,11 +30,34 @@ import asyncio
 import hashlib
 import os
 import re
+import struct
 import tempfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from androguard.core.apk import APK
+from apkInspector.headers import ZipEntry
+
+# Inflated-size ceilings. The manifest is a few hundred KiB even for huge
+# apps; anything else androguard reads (resources.arsc, icons, signature
+# files) gets a generous cap that still bounds a deflate bomb.
+_MANIFEST_MAX = 8 * 1024 * 1024
+_ENTRY_MAX = 64 * 1024 * 1024
+_ICON_MAX = 4 * 1024 * 1024
+_ENTRY_LIMITS = {"AndroidManifest.xml": _MANIFEST_MAX}
+
+# The ZIP end-of-central-directory record is 22 bytes plus a comment of at
+# most 64 KiB, so it always sits within this distance of the end of a
+# well-formed archive — which holds at most 65535 entries without ZIP64.
+_EOCD_SIG = b"PK\x05\x06"
+_EOCD_MIN = 22
+_EOCD_WINDOW = _EOCD_MIN + 0xFFFF
+_MAX_ENTRIES = 0xFFFF
+# Real APK Signing Blocks hold a handful of ID-value pairs (v2, v3, v3.1,
+# padding, source stamp…).
+_SIG_BLOCK_MAGIC = b"APK Sig Block 42"
+_SIG_BLOCK_MAX_PAIRS = 64
 
 
 @dataclass
@@ -51,6 +82,148 @@ class ApkMetadata:
 
 class ApkParseError(RuntimeError):
     """Raised when an APK file cannot be parsed."""
+
+
+class _BoundedZipEntry(ZipEntry):
+    """apkInspector's ``ZipEntry`` — androguard's ZIP backend — with a
+    ceiling on how much an entry may inflate to.
+
+    Mirrors ``apkInspector.extract.extract_file_based_on_header_info``
+    (sizes from the local header unless zero there, deflate for method 8,
+    the stored / deflate guesses for a bogus method) but never inflates
+    more than ``limit + 1`` bytes, whatever the headers claim.
+    """
+
+    def read(self, name: str, save: bool = False, *, limit: int | None = None) -> bytes:
+        cap = limit or _ENTRY_LIMITS.get(name, _ENTRY_MAX)
+        local = self.get_local_header_dict(name)
+        central = self.get_central_directory_entry_dict(name)
+        if local["compressed_size"] == 0 or local["uncompressed_size"] == 0:
+            compressed_size = central["compressed_size"]
+            uncompressed_size = central["uncompressed_size"]
+        else:
+            compressed_size = local["compressed_size"]
+            uncompressed_size = local["uncompressed_size"]
+        method = local["compression_method"]
+        data_offset = (
+            central["relative_offset_of_local_file_header"]
+            + 30
+            + local["file_name_length"]
+            + local["extra_field_length"]
+        )
+        if method == 0 or (method != 8 and compressed_size == uncompressed_size):
+            return self._read_stored(name, data_offset, uncompressed_size, cap)
+        self.zip.seek(data_offset)
+        inflater = zlib.decompressobj(-15)
+        data = inflater.decompress(self.zip.read(compressed_size), cap + 1)
+        if len(data) > cap:
+            raise ApkParseError(f"{name} inflates past {cap} bytes")
+        if method == 8:
+            if not inflater.eof:
+                raise ApkParseError(f"{name}: truncated deflate stream")
+            return data
+        if inflater.eof and not inflater.unused_data and not inflater.unconsumed_tail:
+            return data
+        # Bogus method that isn't clean deflate either: apkInspector falls
+        # back to reading the bytes as stored.
+        return self._read_stored(name, data_offset, uncompressed_size, cap)
+
+    def _read_stored(self, name: str, offset: int, size: int, cap: int) -> bytes:
+        # Stored bytes can't amplify (they are already in memory), but the
+        # per-entry ceiling still applies — a 100 MiB "manifest" isn't one.
+        if name in _ENTRY_LIMITS and size > cap:
+            raise ApkParseError(f"{name} is larger than {cap} bytes")
+        self.zip.seek(offset)
+        return self.zip.read(size)
+
+
+class _BoundedAPK(APK):
+    """androguard ``APK`` whose every entry read goes through
+    :class:`_BoundedZipEntry`. The swap happens in ``_apk_analysis`` — the
+    hook ``__init__`` runs right after indexing the ZIP and before reading
+    the first entry (the manifest)."""
+
+    def _apk_analysis(self) -> None:
+        z = self.zip
+        self.zip = _BoundedZipEntry(z.zip, z.eocd, z.central_directory, z.local_headers)
+        super()._apk_analysis()
+
+
+def _check_zip_layout(path: Path) -> None:
+    """Refuse ZIP layouts that make androguard burn CPU or memory before it
+    reads a single entry:
+
+    * the end-of-central-directory record must sit where the ZIP spec puts
+      it (within 22 B + 64 KiB of the end) — androguard's v2/v3 signature
+      lookup scans backwards from the end one byte at a time;
+    * at most 65535 entries (the most a non-ZIP64 archive — so any APK
+      Android installs — can hold); apkInspector builds ~1.4 KiB of Python
+      objects per entry, ~3 GiB for a 200 MB archive of empty entries;
+    * an APK Signing Block holds a handful of ID-value pairs — androguard
+      checks each pair against all the previous ones (quadratic).
+    """
+    size = path.stat().st_size
+    if size < _EOCD_MIN:
+        raise ApkParseError("Not a valid APK")
+    with path.open("rb") as fh:
+        fh.seek(max(0, size - _EOCD_WINDOW))
+        tail = fh.read()
+        # androguard probes offsets ``size - 22`` downwards, apkInspector
+        # takes the last signature anywhere in the file.
+        eocd = tail.rfind(_EOCD_SIG, 0, len(tail) - _EOCD_MIN + len(_EOCD_SIG))
+        if eocd == -1:
+            raise ApkParseError("Not a valid APK: no ZIP end record, or data after it")
+        last = tail.rfind(_EOCD_SIG)
+        if len(tail) - last >= 20:
+            _check_entry_count(fh, int.from_bytes(tail[last + 16:last + 20], "little"))
+        _check_signing_block(fh, size, int.from_bytes(tail[eocd + 16:eocd + 20], "little"))
+
+
+def _check_entry_count(fh, cd_offset: int) -> None:
+    """Walk the central directory the way apkInspector does (record after
+    record while the signature matches) and refuse past ``_MAX_ENTRIES``."""
+    fh.seek(cd_offset)
+    entries = 0
+    while True:
+        header = fh.read(46)
+        if len(header) < 46 or header[:4] != b"PK\x01\x02":
+            return
+        entries += 1
+        if entries > _MAX_ENTRIES:
+            raise ApkParseError(f"APK has more than {_MAX_ENTRIES} entries")
+        name_len, extra_len, comment_len = struct.unpack("<HHH", header[28:34])
+        fh.seek(name_len + extra_len + comment_len, os.SEEK_CUR)
+
+
+def _check_signing_block(fh, size: int, cd_offset: int) -> None:
+    """Count the ID-value pairs of the APK Signing Block that sits right
+    before the central directory, exactly as androguard walks them."""
+    if cd_offset < 24 or cd_offset > size:
+        return  # androguard gives up on its own
+    fh.seek(cd_offset - 24)
+    footer = fh.read(24)
+    if footer[8:] != _SIG_BLOCK_MAGIC:
+        return
+    block_size = int.from_bytes(footer[:8], "little")
+    block_start = cd_offset - block_size - 8
+    if block_start < 0:
+        return
+    fh.seek(block_start)
+    if int.from_bytes(fh.read(8), "little") != block_size:
+        return  # androguard raises BrokenAPKError on its own
+    end = cd_offset - 24
+    pairs = 0
+    while fh.tell() < end:
+        header = fh.read(12)
+        if len(header) < 12:
+            return
+        pairs += 1
+        if pairs > _SIG_BLOCK_MAX_PAIRS:
+            raise ApkParseError("APK Signing Block has too many entries")
+        pair_size = int.from_bytes(header[:8], "little")
+        if pair_size < 4:
+            return  # androguard reads to the end of the file and stops
+        fh.seek(pair_size - 4, os.SEEK_CUR)
 
 
 def _signer_cert_sha256(apk: APK) -> str:
@@ -177,15 +350,29 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
     if not os.path.isfile(safe_path):
         raise ApkParseError(f"APK not found at {safe_path}")
     p = Path(safe_path)
+    return await asyncio.to_thread(_parse_sync, p)
 
-    def _read() -> tuple[APK, str, int]:
-        apk = APK(str(p))
-        if not apk.is_valid_APK():
-            raise ApkParseError("Not a valid APK")
-        sha, size = _sha256_file(p)
-        return apk, sha, size
 
-    apk, sha, size = await asyncio.to_thread(_read)
+def _parse_sync(p: Path) -> ApkMetadata:
+    """The whole parse — layout checks, androguard, signer extraction
+    (a backwards scan of the file), icon lookup, manifest walk — as one
+    blocking call for a worker thread. Whatever androguard raises on a
+    malformed archive becomes an :class:`ApkParseError`, i.e. a 400 for the
+    upload endpoints instead of a 500."""
+    try:
+        return _extract_metadata(p)
+    except ApkParseError:
+        raise
+    except Exception as exc:
+        raise ApkParseError(f"Malformed APK ({type(exc).__name__}): {str(exc)[:200]}") from exc
+
+
+def _extract_metadata(p: Path) -> ApkMetadata:
+    _check_zip_layout(p)
+    apk = _BoundedAPK(str(p))
+    if not apk.is_valid_APK():
+        raise ApkParseError("Not a valid APK")
+    sha, size = _sha256_file(p)
 
     # Native ABIs are reflected by directories under lib/ in the APK. We list
     # them straight from the zip to avoid androguard API drift.
@@ -265,7 +452,8 @@ async def parse_apk(path: str | Path) -> ApkMetadata:
             ext = _RASTER_EXT.get(ext_name)
             if ext is None:
                 continue  # XML adaptive icons & friends — try next density
-            raw = apk.get_file(icon_name)
+            # An oversized / bomb icon just means no icon, not a failed parse.
+            raw = apk.zip.read(icon_name, limit=_ICON_MAX)
             if raw:
                 icon_data = raw
                 icon_ext = ext

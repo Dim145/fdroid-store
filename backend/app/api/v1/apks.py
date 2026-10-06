@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import tempfile
 import uuid
@@ -25,6 +26,7 @@ from app.api.deps import DbSession, get_current_user, get_current_uploader, get_
 from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
 from app.core.rate_limit import limiter
+from app.core.uploads import normalize_image
 from app.fdroid.apk_parser import ApkMetadata, ApkParseError, parse_apk
 from app.models.apk import Apk, ApkStatus, ReproducibilityStatus
 from app.models.apk_sbom import ApkCve, ApkSbom, ApkSbomStatus
@@ -227,14 +229,9 @@ async def attach_apk_to_app(
     # index always references a fresh hash for each version.
     if meta.icon_data and not app.icon_is_custom:
         try:
-            import io as _io
-            from PIL import Image as _Image
-            with _Image.open(_io.BytesIO(meta.icon_data)) as raw:
-                img = raw.convert("RGBA")
-                img.thumbnail((512, 512), _Image.LANCZOS)
-                buf = _io.BytesIO()
-                img.save(buf, format="PNG", optimize=True)
-                png_bytes = buf.getvalue()
+            # Same format allowlist + bomb guard as user-uploaded images:
+            # the icon bytes come out of an untrusted APK.
+            png_bytes = await normalize_image(meta.icon_data, (512, 512))
             icon_key = f"icons/{app.package_name}.png"
             await storage.put(icon_key, png_bytes, content_type="image/png")
             app.icon_path = icon_key
@@ -345,7 +342,7 @@ async def inspect_apk(
         try:
             from app.fdroid.anti_feature_scan import scan_apk, summarise
 
-            detected = summarise(scan_apk(tmp_path))
+            detected = summarise(await asyncio.to_thread(scan_apk, tmp_path))
         except Exception:  # noqa: BLE001
             detected = {}
         # Stage the bytes under ``staging/<sha256>.apk`` so the create
@@ -550,7 +547,7 @@ async def inspect_github(
         try:
             from app.fdroid.anti_feature_scan import scan_apk, summarise
 
-            detected = summarise(scan_apk(tmp_path))
+            detected = summarise(await asyncio.to_thread(scan_apk, tmp_path))
         except Exception:  # noqa: BLE001
             detected = {}
         return GithubApkInspect(
@@ -730,7 +727,7 @@ async def inspect_proxy_source(
         try:
             from app.fdroid.anti_feature_scan import scan_apk, summarise
 
-            detected = summarise(scan_apk(tmp_path))
+            detected = summarise(await asyncio.to_thread(scan_apk, tmp_path))
         except Exception:  # noqa: BLE001
             detected = {}
         return ProxyApkInspect(
@@ -828,7 +825,7 @@ async def upload_apk_staged(
             db, app=app, tmp_path=tmp_path, meta=meta, uploader=user, is_beta=body.beta
         )
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
         from app.services.audit import write_event
         await write_event(
             db,
@@ -926,7 +923,7 @@ async def upload_apk(
         # when it ends up being the oldest in the new set (e.g. a
         # backfill of an older versionCode).
         from app.services.apk_eviction import evict_oldest_if_needed
-        await evict_oldest_if_needed(db, app=app, actor_id=user.id)
+        await evict_oldest_if_needed(db, app=app, actor_id=user.id, keep=apk.id)
         # Audit trail. Includes the credential descriptor stashed by
         # ``get_uploader_for_app`` so a leaked deploy token's activity
         # is traceable to the token prefix even after the resulting
@@ -1002,7 +999,7 @@ async def update_apk(
             # is the same loose BCP47 we accept for app localizations.
             cleaned: dict[str, str] = {}
             for locale, text in payload.whats_new.items():
-                if not isinstance(locale, str) or not _LOCALE_RE.match(locale):
+                if not isinstance(locale, str) or not _LOCALE_RE.fullmatch(locale):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Invalid locale tag: {locale!r}",
@@ -1120,11 +1117,13 @@ async def issue_download_url(
     if apk is None or apk.status != ApkStatus.PUBLISHED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
     app = apk.app
-    # Same visibility rules as the F-Droid serve handler. Owners and admins
-    # always see their own / all apps; anyone else needs the app to be
-    # public + published.
-    if app.visibility == AppVisibility.PRIVATE:
-        if user.role != UserRole.ADMIN and app.owner_id != user.id:
+    # Same visibility rules as the F-Droid serve handler. Whoever manages
+    # the app (owner, co-maintainer, admin) always gets a URL; anyone else
+    # needs the app to be public + published.
+    if app.visibility == AppVisibility.PRIVATE or app.status != AppStatus.PUBLISHED:
+        from app.services.app_permissions import can_manage_app
+
+        if not await can_manage_app(db, user, app):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
 
     config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
@@ -1165,8 +1164,12 @@ async def delete_apk(
     except Exception as exc:  # noqa: BLE001
         log.warning("storage delete failed", key=apk.storage_key, error=str(exc))
     # Deleting the suggested version must not leave the index pointing at
-    # nothing (and holding every newer version back as Beta) in auto mode.
-    recompute_auto(apk.app, [a for a in apk.app.apks if a is not apk])
+    # nothing (and holding every newer version back as Beta). A manual pin
+    # on the deleted version goes with it: back to auto-tracking.
+    app = apk.app
+    if app.suggested_version_is_manual and app.suggested_version_code == apk.version_code:
+        app.suggested_version_is_manual = False
+    recompute_auto(app, [a for a in app.apks if a is not apk])
     await db.delete(apk)
     await db.flush()
     await enqueue_reindex()
@@ -1222,9 +1225,12 @@ def _extract_sha256_candidates(text: str) -> list[str]:
 async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
     """Fetch ``url`` and return ``(all_extracted_hashes, source_url)``. Reuses
     the SSRF guard from :mod:`github_releases` so an admin can't pivot
-    through the backend into the host's private network."""
+    through the backend into the host's private network — and connects
+    through the pinned transport, so the host can't rebind between that
+    check and the connection."""
     import httpx
 
+    from app.core.ssrf import is_blocked_public_ip, make_ssrf_client
     from app.services.github_releases import assert_fetch_url_safe
 
     try:
@@ -1234,27 +1240,36 @@ async def _fetch_reference_hashes(url: str) -> tuple[list[str], str]:
             status_code=400, detail=f"reference_url rejected: {exc}"
         ) from exc
 
+    # F-Droid verification JSONs are sub-kB; even with multiple
+    # timestamps embedded they don't exceed a few KB. 32 KiB is plenty,
+    # and only that much is read off the wire — a giant body isn't buffered.
+    max_body = 32_768
+    body = b""
     timeout = httpx.Timeout(10.0, connect=5.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+    async with make_ssrf_client(
+        is_blocked_public_ip, timeout=timeout, follow_redirects=False
+    ) as client:
         try:
-            res = await client.get(
+            async with client.stream(
+                "GET",
                 safe_url,
                 headers={"accept": "application/json, text/plain, */*;q=0.5"},
-            )
+            ) as res:
+                if res.status_code >= 400:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"reference_url returned HTTP {res.status_code}",
+                    )
+                async for chunk in res.aiter_bytes():
+                    body += chunk
+                    if len(body) >= max_body:
+                        break
         except httpx.HTTPError as exc:
             raise HTTPException(
                 status_code=400,
                 detail=f"could not fetch reference_url: {exc}",
             ) from exc
-    if res.status_code >= 400:
-        raise HTTPException(
-            status_code=400,
-            detail=f"reference_url returned HTTP {res.status_code}",
-        )
-    # F-Droid verification JSONs are sub-kB; even with multiple
-    # timestamps embedded they don't exceed a few KB. 32 KiB is plenty
-    # while still capping a hostile redirect into a giant body.
-    text = res.text[:32_768]
+    text = body[:max_body].decode("utf-8", errors="replace")
     hashes = _extract_sha256_candidates(text)
     if not hashes:
         raise HTTPException(
@@ -1299,10 +1314,17 @@ async def _apply_reproducibility(
     reference_candidates: list[str] | None = None,
     reference_url: str | None,
     notes: str | None,
+    compared: bool = False,
 ) -> Apk:
     """Shared write path used by both endpoints. Auto-decides the status
     from a hash comparison when a reference is present; falls back to
     the caller-supplied ``status_override`` for declarative paths.
+
+    VERIFIED is shown to everyone, so only an admin or an actual
+    comparison against a fetched reference (``compared=True``, the
+    verify-from-url path) may produce it. Anyone else can keep an existing
+    verdict (e.g. edit the notes) but not create one — neither by status
+    nor by pasting the APK's own, public, SHA-256 as the reference.
 
     ``reference_sha256`` is the single-hash path used by the manual
     ``POST /reproducibility`` endpoint. ``reference_candidates`` is the
@@ -1314,6 +1336,11 @@ async def _apply_reproducibility(
     matched (or the first candidate if none did, so the admin can see
     what they compared against).
     """
+    before = (
+        apk.reproducibility_status,
+        apk.reproducibility_reference_sha256,
+        apk.reproducibility_reference_url,
+    )
     candidates: list[str] = []
     if reference_candidates:
         for raw in reference_candidates:
@@ -1350,6 +1377,26 @@ async def _apply_reproducibility(
                 status_code=400, detail="reference_url must be http(s)://"
             )
         apk.reproducibility_reference_url = cleaned_url
+
+    after = (
+        apk.reproducibility_status,
+        apk.reproducibility_reference_sha256,
+        apk.reproducibility_reference_url,
+    )
+    if (
+        after[0] == ReproducibilityStatus.VERIFIED
+        and after != before
+        and not compared
+        and actor.role != UserRole.ADMIN
+    ):
+        # Nothing is persisted: the request's transaction rolls back.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Only an admin can mark an APK as verified by hand; use "
+                "verify-from-url to compare it against a published reference."
+            ),
+        )
 
     if notes is not None:
         apk.reproducibility_notes = (notes.strip() or None)
@@ -1388,7 +1435,8 @@ async def set_reproducibility(
     Body shape:
       * ``status`` — one of ``unknown``, ``not_attempted``, ``verified``,
         ``failed``. Optional when ``reference_sha256`` is provided
-        (auto-decide wins).
+        (auto-decide wins). Reaching ``verified`` here (by status or by a
+        matching hash) is admin-only; uploaders use verify-from-url.
       * ``reference_sha256`` — 64-char hex. When present, the handler
         compares it to ``Apk.sha256`` and sets ``verified`` / ``failed``
         accordingly.
@@ -1483,6 +1531,7 @@ async def verify_reproducibility_from_url(
         reference_candidates=ref_hashes,
         reference_url=ref_url,
         notes=payload.notes,
+        compared=True,
     )
     await db.flush()
     return ApkRead.model_validate(apk)
