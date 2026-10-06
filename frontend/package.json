@@ -59,6 +59,7 @@
     "dompurify": "^3.4.16",
     "markdown-it": "^14.3.1",
     "undici": "^7.29.1",
+    "source-map-js": "^1.2.2",
     "@babel/core": "^7.29.7",
     "brace-expansion": "^2.1.7",
     "sharp": "^0.35.5",
