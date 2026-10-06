@@ -348,8 +348,10 @@ async def fetch_github_source(ctx: dict, source_id: str) -> dict:
             }
 
         # ---- 2. Download the asset to a tmpfile ------------------------
+        config = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+        cap_bytes = (config.upload_max_apk_mb if config else 200) * 1024 * 1024
         try:
-            tmp_path = await download_asset(asset)
+            tmp_path = await download_asset(asset, max_bytes=cap_bytes)
         except GithubReleaseError as exc:
             await _mark_source_error(db, source, f"Download failed: {exc}")
             await db.commit()
@@ -474,6 +476,25 @@ async def shutdown(ctx: dict) -> None:
     log.info("arq worker shutting down")
 
 
+async def purge_stale_staging(ctx: dict) -> dict:
+    """Delete staged uploads (``/apks/inspect``) nobody redeemed: they
+    outlive their one-hour staging token otherwise and pile up in storage
+    without counting against any quota."""
+    from app.core.download_token import _STAGING_DEFAULT_TTL
+
+    storage = get_storage()
+    cutoff = datetime.now(UTC) - timedelta(seconds=_STAGING_DEFAULT_TTL + 600)
+    deleted = 0
+    for key, modified in await storage.list_prefix("staging/"):
+        if modified < cutoff:
+            try:
+                await storage.delete(key)
+                deleted += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("could not purge staged upload", key=key, error=str(exc))
+    return {"deleted": deleted}
+
+
 from app.workers.backup_tasks import (
     cleanup_expired_backups,
     run_backup_job,
@@ -498,6 +519,7 @@ class WorkerSettings:
         run_backup_job,
         run_restore_job,
         cleanup_expired_backups,
+        purge_stale_staging,
         # Per-APK SBOM + CVE scanning via trivy. Auto-enqueued when
         # an APK reaches PARSED; short-circuits when the feature is
         # disabled in RepoConfig.
@@ -519,6 +541,7 @@ class WorkerSettings:
         # hour later so dial-out bursts don't overlap on a slow uplink.
         cron(scan_apk_proxy_sources_periodic, hour={5}, minute={0}, run_at_startup=False),
         cron(cleanup_expired_backups, minute={30}, run_at_startup=False),
+        cron(purge_stale_staging, minute={45}, run_at_startup=False),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = startup

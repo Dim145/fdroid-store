@@ -94,6 +94,7 @@ async def run_setup_wizard(
 
     try:
         if payload.keystore_mode == "generate":
+            archived = None
             if keystore_path.exists():
                 # Archive the old keystore alongside the new one so an
                 # operator with shell access can recover the previous
@@ -102,15 +103,23 @@ async def run_setup_wizard(
                 backup = keystore_path.with_suffix(keystore_path.suffix + f".bak-{ts}")
                 try:
                     keystore_path.rename(backup)
+                    archived = backup
                 except OSError:
                     await delete_keystore(keystore_path)
-            info = await generate_keystore(
-                keystore_path,
-                keystore_password=keystore_password,
-                alias=alias,
-                key_password=key_password,
-                dname=payload.key_dname or settings.key_dname,
-            )
+            try:
+                info = await generate_keystore(
+                    keystore_path,
+                    keystore_password=keystore_password,
+                    alias=alias,
+                    key_password=key_password,
+                    dname=payload.key_dname or settings.key_dname,
+                )
+            except Exception:
+                # e.g. an invalid DN: put the previous signing key back
+                # rather than leave the repo without one.
+                if archived is not None and not keystore_path.exists():
+                    archived.rename(keystore_path)
+                raise
         elif payload.keystore_mode == "import":
             if not payload.keystore_b64:
                 raise HTTPException(

@@ -303,12 +303,14 @@ async def scan_apk_cve(ctx: dict, apk_id: str) -> dict[str, Any]:
             status=ApkSbomStatus.FAILED,
             error_message=str(exc)[:1000],
             scanned_at=datetime.now(UTC),
-            trivy_version=_trivy_version(),
+            trivy_version=await asyncio.to_thread(_trivy_version),
         )
         return {"ok": False, "error": str(exc)}
 
     findings = _extract_findings(sbom)
     summary = _summarise(findings)
+    # ``trivy --version`` can take seconds: not on the worker's event loop.
+    trivy_version = await asyncio.to_thread(_trivy_version)
 
     # Persist atomically: wipe old findings, set the new SBOM blob, then
     # insert the per-CVE rows.
@@ -321,7 +323,7 @@ async def scan_apk_cve(ctx: dict, apk_id: str) -> dict[str, Any]:
             db.add(existing)
         existing.status = ApkSbomStatus.DONE
         existing.scanned_at = datetime.now(UTC)
-        existing.trivy_version = _trivy_version()
+        existing.trivy_version = trivy_version
         existing.sbom_json = sbom
         existing.cve_summary = summary
         existing.error_message = None

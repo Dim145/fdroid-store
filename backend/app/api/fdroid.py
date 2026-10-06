@@ -703,16 +703,13 @@ async def _serve_apk(
         and app.owner_id is not None
         and api_key.user_id == app.owner_id
     )
-    # Signed-URL path — accept owner or admin. Ownership transfer
-    # between sign-time and click-time invalidates the URL
-    # (revalidation, not just signature check).
-    signed_match = (
-        signed_user is not None
-        and (
-            signed_user.role == UserRole.ADMIN
-            or (app.owner_id is not None and signed_user.id == app.owner_id)
-        )
-    )
+    # Signed-URL path — accept whoever manages the app (owner,
+    # co-maintainer, admin), the people ``apks.issue_download_url`` mints
+    # links for. Rights are re-checked at click time (revalidation, not
+    # just signature check): a removed co-maintainer's link stops working.
+    from app.services.app_permissions import can_manage_app
+
+    signed_match = signed_user is not None and await can_manage_app(db, signed_user, app)
     if app.visibility == AppVisibility.PRIVATE and not (owner_match or signed_match):
         return Response(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -720,8 +717,8 @@ async def _serve_apk(
         )
     if app.status != AppStatus.PUBLISHED and not (owner_match or signed_match):
         # Archived / rejected (taken down) or not yet live: the binaries go
-        # with the listing — except for the owner and admins, the people
-        # ``apks.issue_download_url`` still mints links for.
+        # with the listing — except for the owner's key and the people who
+        # manage the app (signed links from ``apks.issue_download_url``).
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APK not found")
 
     # Attribute the download. Precedence: API key (F-Droid Basic auth)

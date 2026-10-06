@@ -425,7 +425,7 @@ async def _stream_to_tempfile(resp: httpx.Response, cap: int) -> Path:
     return path
 
 
-async def download_asset(asset: ReleaseAsset) -> Path:
+async def download_asset(asset: ReleaseAsset, max_bytes: int | None = None) -> Path:
     """Stream the asset to a NamedTemporaryFile and return its path.
 
     The caller MUST unlink the returned path in a ``finally`` block.
@@ -441,6 +441,8 @@ async def download_asset(asset: ReleaseAsset) -> Path:
     it either.
     """
     HARD_CAP = 256 * 1024 * 1024
+    # The admin's APK size cap (upload_max_apk_mb) applies to imports too.
+    cap = min(HARD_CAP, max_bytes) if max_bytes else HARD_CAP
     MAX_REDIRECTS = 5
 
     # Validate the initial URL before we make any request — saves
@@ -498,7 +500,7 @@ async def download_asset(asset: ReleaseAsset) -> Path:
                     # do this inside the ``async with`` block because
                     # ``resp`` closes its body the moment the context
                     # manager exits.
-                    return await _stream_to_tempfile(resp, HARD_CAP)
+                    return await _stream_to_tempfile(resp, cap)
             raise GithubReleaseError(
                 f"Asset download exceeded {MAX_REDIRECTS} redirects"
             )
@@ -571,7 +573,15 @@ async def _github_find(
             asset_id=int(match["id"]),
             asset_name=str(match["name"]),
             asset_size=int(match.get("size") or 0),
-            asset_download_url=str(match["browser_download_url"]),
+            # With a token, download through the API asset URL: it lives on
+            # the forge API origin (so the token is attached there, and only
+            # there) and redirects to a short-lived CDN link. The
+            # browser_download_url is on github.com — a private repo's asset
+            # would 404 without the token.
+            asset_download_url=str(
+                match["url"] if token and isinstance(match.get("url"), str)
+                else match["browser_download_url"]
+            ),
             provider="github",
             auth_token=token,
             forge_url=api,

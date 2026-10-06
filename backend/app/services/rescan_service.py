@@ -47,8 +47,11 @@ async def _download_apk(storage_key: str) -> Path:
         stream = await storage.open_stream(storage_key)
         async for chunk in stream:
             tmp.write(chunk)
-    finally:
+    except BaseException:
         tmp.close()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    tmp.close()
     return tmp_path
 
 

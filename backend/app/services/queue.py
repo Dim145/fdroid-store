@@ -120,10 +120,15 @@ async def enqueue_clamav_scan() -> bool:
     try:
         pool = await create_pool(_redis_settings())
         try:
+            # Per-minute id: presses within a minute coalesce, but arq's 24h
+            # result retention can't swallow the next manual run (a fixed
+            # id silently dropped every press for a day after a scan).
+            import time as _time
+
             await pool.enqueue_job(
                 "scan_apks_periodic",
                 True,  # force
-                _job_id="scan_apks_manual",
+                _job_id=f"scan_apks_manual:{int(_time.time() // 60)}",
             )
             return True
         finally:

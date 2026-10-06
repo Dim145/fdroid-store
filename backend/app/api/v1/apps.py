@@ -548,7 +548,7 @@ async def create_app_with_github_source(
     )
 
     try:
-        tmp_path = await download_asset(asset)
+        tmp_path = await download_asset(asset, max_bytes=await _apk_size_cap_bytes(db))
     except GithubReleaseError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

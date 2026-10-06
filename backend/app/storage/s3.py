@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import BinaryIO
 
 import aioboto3
@@ -171,6 +172,15 @@ class S3Storage(Storage):
                         yield chunk
 
         return _gen()
+
+    async def list_prefix(self, prefix: str) -> list[tuple[str, datetime]]:
+        out: list[tuple[str, datetime]] = []
+        async with self._client() as s3:
+            paginator = s3.get_paginator("list_objects_v2")
+            async for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+                for obj in page.get("Contents") or []:
+                    out.append((obj["Key"], obj["LastModified"]))
+        return out
 
     async def delete(self, key: str) -> None:
         async with self._client() as s3:

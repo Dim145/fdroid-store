@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, get_current_user, get_current_uploader, get_uploader_for_app
+from app.core.database import run_after_commit
 from app.core.download_token import DEFAULT_TTL_SECONDS, sign_download_token
 from app.core.logging import get_logger
 from app.core.rate_limit import limiter
@@ -103,6 +104,12 @@ async def save_upload_to_temp(upload: UploadFile, *, max_bytes: int) -> Path:
             path.unlink(missing_ok=True)
         raise
     return path
+
+
+# Staging (``/apks/inspect``): at most this many staged APKs per user and
+# window — matches the staging token's lifetime.
+_STAGING_WINDOW = 3600
+_MAX_STAGED_PER_WINDOW = 20
 
 
 async def _apk_size_cap_bytes(db) -> int:
@@ -353,7 +360,15 @@ async def inspect_apk(
         staging_token: str | None = None
         try:
             from app.core.download_token import sign_staging_token
+            from app.core.one_time import bump_counter
 
+            # Staged bytes aren't billed to anyone until redeemed: past a
+            # burst, stop staging (the SPA falls back to re-uploading on
+            # confirm) instead of letting one account fill the storage.
+            # Unredeemed objects are purged by the worker after the token
+            # TTL (``purge_stale_staging``).
+            if await bump_counter(f"staging:{user.id}", _STAGING_WINDOW) > _MAX_STAGED_PER_WINDOW:
+                raise RuntimeError("staging quota for this hour reached")
             storage = get_storage()
             staging_key = f"staging/{meta.sha256}.apk"
             with tmp_path.open("rb") as fh:
@@ -449,6 +464,7 @@ async def _discard_staged_apk(content_hash: str) -> None:
 async def inspect_github(
     request: Request,
     payload: GithubInspectRequest,
+    db: DbSession,
     user: Annotated[User, Depends(get_current_uploader)],
 ) -> GithubApkInspect:
     """Resolve the latest matching release on a GitHub repo, download
@@ -526,7 +542,7 @@ async def inspect_github(
     import asyncio as _asyncio
 
     dl_result, repo_meta = await _asyncio.gather(
-        download_asset(asset),
+        download_asset(asset, max_bytes=await _apk_size_cap_bytes(db)),
         fetch_repo_metadata(
             repo, provider=provider, base_url=base_url, token=inspect_token
         ),
@@ -1158,11 +1174,17 @@ async def delete_apk(
     from app.services.app_permissions import assert_can_manage_app
     await assert_can_manage_app(db, user, apk.app)
 
-    storage = get_storage()
-    try:
-        await storage.delete(apk.storage_key)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("storage delete failed", key=apk.storage_key, error=str(exc))
+    storage_key = apk.storage_key
+
+    async def _delete_file() -> None:
+        try:
+            await get_storage().delete(storage_key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("storage delete failed", key=storage_key, error=str(exc))
+
+    # The file goes once the row deletion is committed: a request failing
+    # before that must not leave a published row without its file.
+    run_after_commit(f"delete-apk:{apk.id}", _delete_file)
     # Deleting the suggested version must not leave the index pointing at
     # nothing (and holding every newer version back as Beta). A manual pin
     # on the deleted version goes with it: back to auto-tracking.

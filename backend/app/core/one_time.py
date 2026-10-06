@@ -39,6 +39,21 @@ async def claim_once(key: str, ttl_seconds: int) -> bool:
         return True
 
 
+async def bump_counter(key: str, window_seconds: int) -> int:
+    """Count one event under ``key`` in a fixed window; returns the new
+    count (0 when redis is unreachable — callers treat it as "allowed")."""
+    try:
+        name = f"{_PREFIX}count:{key}"
+        async with _redis().pipeline(transaction=True) as pipe:
+            pipe.incr(name)
+            pipe.expire(name, window_seconds, nx=True)
+            count, _ = await pipe.execute()
+        return int(count)
+    except Exception as exc:
+        log.warning("event counter unavailable", error=str(exc))
+        return 0
+
+
 async def failures(key: str) -> int:
     try:
         raw = await _redis().get(f"{_PREFIX}fail:{key}")
