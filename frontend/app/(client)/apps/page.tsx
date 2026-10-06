@@ -67,6 +67,9 @@ function Browse() {
   }, [q, t]);
 
   useEffect(() => setActiveCategory(categoryParam), [categoryParam]);
+  // The header search navigates to /apps?q=… — keep the box (and the
+  // fetch keyed on it) in step when that happens while already here.
+  useEffect(() => setQ(queryParam), [queryParam]);
 
   const filtered = useMemo(() => {
     let list = apps;

@@ -33,11 +33,16 @@ import { cn, formatDate } from "@/lib/utils";
 export function GithubSourceSection({
   appId,
   onImported,
+  canEdit = true,
 }: {
   appId: string;
   /** Called when a fresh import has just landed so the parent can refresh
    *  its APK list. */
   onImported?: () => void;
+  /** Owner / admin. Saving or disconnecting the source is refused (403)
+   *  for co-maintainers — it changes WHAT gets published — so they only
+   *  get a read-only form and "Scan now". */
+  canEdit?: boolean;
 }) {
   const { t } = useTranslation();
   const [source, setSource] = useState<GithubSource | null>(null);
@@ -194,7 +199,7 @@ export function GithubSourceSection({
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!repo.trim()) return;
+    if (!canEdit || !repo.trim()) return;
     setSaving(true);
     try {
       // Three-way token semantics:
@@ -347,7 +352,14 @@ export function GithubSourceSection({
       )}
 
       <form onSubmit={onSave} className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-2">
+        {!canEdit && (
+          <p className="text-[11px] leading-relaxed text-ink-mute">
+            {t("myApps.edit.githubSource.ownerOnly")}
+          </p>
+        )}
+        {/* ``disabled`` on the fieldset greys out every control inside for
+            co-maintainers in one go. */}
+        <fieldset disabled={!canEdit} className="grid min-w-0 gap-3 md:grid-cols-2">
           {/* Provider picker — segmented pills. Selecting a non-GitHub
               provider reveals the base URL field below. */}
           <div className="space-y-1.5 md:col-span-2">
@@ -540,41 +552,47 @@ export function GithubSourceSection({
               onChange={(v) => { setEnabled(v); setDirty(true); }}
             />
           </div>
-        </div>
+        </fieldset>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-outline-soft pt-4">
-          <div className="flex flex-wrap items-center gap-2">
-            {source && (
-              <>
-                <Button
-                  type="button"
-                  variant="outlined"
-                  onClick={onScanNow}
-                  disabled={scanning || awaitingScan}
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", (scanning || awaitingScan) && "animate-spin")} />
-                  {awaitingScan
-                    ? t("myApps.edit.githubSource.scanRunning")
-                    : t("myApps.edit.githubSource.scanNow")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={onRemove}
-                  disabled={removing}
-                  className="text-danger hover:bg-danger-container"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  {t("myApps.edit.githubSource.remove")}
-                </Button>
-              </>
+        {(source || canEdit) && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-outline-soft pt-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {source && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outlined"
+                    onClick={onScanNow}
+                    disabled={scanning || awaitingScan}
+                  >
+                    <RefreshCw className={cn("h-3.5 w-3.5", (scanning || awaitingScan) && "animate-spin")} />
+                    {awaitingScan
+                      ? t("myApps.edit.githubSource.scanRunning")
+                      : t("myApps.edit.githubSource.scanNow")}
+                  </Button>
+                  {canEdit && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={onRemove}
+                      disabled={removing}
+                      className="text-danger hover:bg-danger-container"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {t("myApps.edit.githubSource.remove")}
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+            {canEdit && (
+              <Button type="submit" variant="filled" disabled={saving || !repo.trim()}>
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitBranch className="h-3.5 w-3.5" />}
+                {source ? t("myApps.edit.githubSource.update") : t("myApps.edit.githubSource.connect")}
+              </Button>
             )}
           </div>
-          <Button type="submit" variant="filled" disabled={saving || !repo.trim()}>
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitBranch className="h-3.5 w-3.5" />}
-            {source ? t("myApps.edit.githubSource.update") : t("myApps.edit.githubSource.connect")}
-          </Button>
-        </div>
+        )}
       </form>
     </div>
   );
@@ -672,26 +690,32 @@ function StatusBadge({ status, scanning }: { status: GithubSourceStatus; scannin
 
 
 /** Build the public URL pointing at a release tag for the source's
- *  forge. Returns null when we don't have enough info to construct
- *  one (e.g. Gitea / self-hosted GitLab with no ``base_url``). */
-function releaseTagUrl(source: GithubSource): string | null {
+ *  forge (the public instance when there's no ``base_url``, as on the
+ *  backend). Returns null without a tag, or when the host isn't an
+ *  http(s) URL. Also used by the New App page's resolved-release card. */
+export function releaseTagUrl(
+  source: Pick<GithubSource, "provider" | "base_url" | "repo" | "last_release_tag">,
+): string | null {
   if (!source.last_release_tag) return null;
   const tag = encodeURIComponent(source.last_release_tag);
   const repo = source.repo;
   const base = source.base_url?.replace(/\/$/, "");
+  let path: string;
+  let host: string;
   if (source.provider === "github") {
-    const host = base ?? "https://github.com";
-    return `${host}/${repo}/releases/tag/${tag}`;
+    host = base || "https://github.com";
+    path = `/releases/tag/${tag}`;
+  } else if (source.provider === "gitlab") {
+    host = base || "https://gitlab.com";
+    path = `/-/releases/${tag}`;
+  } else if (source.provider === "gitea") {
+    host = base || "https://codeberg.org";
+    path = `/releases/tag/${tag}`;
+  } else {
+    return null;
   }
-  if (source.provider === "gitlab") {
-    const host = base ?? "https://gitlab.com";
-    return `${host}/${repo}/-/releases/${tag}`;
-  }
-  if (source.provider === "gitea") {
-    const host = base ?? "https://codeberg.org";
-    return `${host}/${repo}/releases/tag/${tag}`;
-  }
-  return null;
+  if (!/^https?:\/\//i.test(host)) return null;
+  return `${host}/${repo}${path}`;
 }
 
 

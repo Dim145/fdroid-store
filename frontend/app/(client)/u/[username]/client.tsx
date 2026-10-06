@@ -173,9 +173,13 @@ export default function ProfileClient() {
           <div className="surface flex flex-col items-center gap-2 px-6 py-16 text-center">
             <Sparkles className="h-6 w-6 text-ink-mute" />
             <p className="text-ink-soft">
+              {/* Usernames are user-chosen (or come from the SSO provider):
+                  escape so one renders as text, never as Trans tags. */}
               <Trans
                 i18nKey="profile.noApps"
                 values={{ username: profile.username }}
+                tOptions={{ interpolation: { escapeValue: true } }}
+                shouldUnescape
                 components={{ code: <span className="font-mono" /> }}
               />
             </p>

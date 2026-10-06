@@ -59,6 +59,13 @@ type PendingShot = {
   error?: string;
 };
 
+/** Same ids, in any order. */
+function sameIds(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const wanted = new Set(a);
+  return b.every((id) => wanted.has(id));
+}
+
 function ManageAppInner() {
   const { t } = useTranslation();
   const { user: currentUser } = useAuth();
@@ -252,29 +259,55 @@ function ManageAppInner() {
     }
   }
 
-  async function load() {
+  // Server copy the listing form was last filled from. ``load`` runs after
+  // every side action (uploads, banners, polled imports…) and must not
+  // wipe what the user is typing, and ``save`` only sends what changed
+  // since — see ``hydrateForm``.
+  const listingBase = useRef<AppDetail | null>(null);
+
+  function hydrateForm(detail: AppDetail, refill: boolean) {
+    const prev = refill ? null : listingBase.current;
+    listingBase.current = detail;
+    // A field still showing what the server sent last time takes the new
+    // server value; one the user has edited since keeps the edit.
+    function sync<T>(
+      set: React.Dispatch<React.SetStateAction<T>>,
+      pick: (d: AppDetail) => T,
+      same: (a: T, b: T) => boolean = Object.is,
+    ) {
+      const now = pick(detail);
+      if (!prev) { set(now); return; }
+      const was = pick(prev);
+      set((cur) => (same(cur, was) ? now : cur));
+    }
+    sync(setName, (d) => d.name);
+    sync(setSummary, (d) => d.summary || "");
+    sync(setDescription, (d) => d.description || "");
+    sync(setLicense, (d) => d.license || "");
+    sync(setWebsite, (d) => d.website || "");
+    sync(setSourceCode, (d) => d.source_code || "");
+    sync(setIssueTracker, (d) => d.issue_tracker || "");
+    sync(setAuthorName, (d) => d.author_name || "");
+    sync(setAuthorEmail, (d) => d.author_email || "");
+    sync(setDonate, (d) => d.donate || "");
+    sync(setLiberapay, (d) => d.liberapay || "");
+    sync(setBitcoin, (d) => d.bitcoin || "");
+    sync(setOpenCollective, (d) => d.open_collective || "");
+    sync(setTranslation, (d) => d.translation || "");
+    sync(setVisibility, (d) => d.visibility);
+    sync(setSelectedCategoryIds, (d) => d.categories.map((c) => c.id), sameIds);
+  }
+
+  /** ``refill`` resets every listing field to the server copy (first load,
+   *  after saving the listing); otherwise only untouched fields follow. */
+  async function load({ refill = false }: { refill?: boolean } = {}) {
     try {
       // raw=true returns canonical en-US fields, not the localized overlay —
       // otherwise editing the Title field would prefill the user's preferred-
       // locale translation and saving would write it back into the default.
       const detail = await api.apps.get(id, { raw: true });
       setApp(detail);
-      setName(detail.name);
-      setSummary(detail.summary || "");
-      setDescription(detail.description || "");
-      setLicense(detail.license || "");
-      setWebsite(detail.website || "");
-      setSourceCode(detail.source_code || "");
-      setIssueTracker(detail.issue_tracker || "");
-      setAuthorName(detail.author_name || "");
-      setAuthorEmail(detail.author_email || "");
-      setDonate(detail.donate || "");
-      setLiberapay(detail.liberapay || "");
-      setBitcoin(detail.bitcoin || "");
-      setOpenCollective(detail.open_collective || "");
-      setTranslation(detail.translation || "");
-      setVisibility(detail.visibility);
-      setSelectedCategoryIds(detail.categories.map((c) => c.id));
+      hydrateForm(detail, refill);
       setScreenshots(
         [...detail.screenshots].sort((a, b) => a.display_order - b.display_order),
       );
@@ -282,7 +315,7 @@ function ManageAppInner() {
       setError(e instanceof Error ? e.message : t("myApps.edit.loadFailed"));
     }
   }
-  useEffect(() => { if (id) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+  useEffect(() => { if (id) load({ refill: true }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
   useEffect(() => {
     let cancelled = false;
     api.categories.list()
@@ -305,28 +338,38 @@ function ManageAppInner() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!app) return;
+    const base = listingBase.current ?? app;
+    // Only what changed since the form was filled goes out: ``undefined``
+    // (dropped from the JSON) leaves a field alone, ``null`` clears it. So
+    // a stale field can't overwrite a newer server value, and
+    // ``visibility`` — refused for co-maintainers — is only sent when it
+    // was actually flipped.
+    const edited = (value: string, was: string | null) =>
+      value === (was ?? "") ? undefined : value || null;
     setSaving(true);
     try {
       await api.apps.update(app.id, {
-        name,
-        summary: summary || undefined,
-        description: description || undefined,
-        license: license || undefined,
-        website: website || undefined,
-        source_code: sourceCode || undefined,
-        issue_tracker: issueTracker || undefined,
-        author_name: authorName || undefined,
-        author_email: authorEmail || undefined,
-        donate: donate || undefined,
-        liberapay: liberapay || undefined,
-        bitcoin: bitcoin || undefined,
-        open_collective: openCollective || undefined,
-        translation: translation || undefined,
-        visibility,
-        category_ids: selectedCategoryIds,
+        name: name !== base.name ? name : undefined,
+        summary: edited(summary, base.summary),
+        description: edited(description, base.description),
+        license: edited(license, base.license),
+        website: edited(website, base.website),
+        source_code: edited(sourceCode, base.source_code),
+        issue_tracker: edited(issueTracker, base.issue_tracker),
+        author_name: edited(authorName, base.author_name),
+        author_email: edited(authorEmail, base.author_email),
+        donate: edited(donate, base.donate),
+        liberapay: edited(liberapay, base.liberapay),
+        bitcoin: edited(bitcoin, base.bitcoin),
+        open_collective: edited(openCollective, base.open_collective),
+        translation: edited(translation, base.translation),
+        visibility: visibility !== base.visibility ? visibility : undefined,
+        category_ids: sameIds(selectedCategoryIds, base.categories.map((c) => c.id))
+          ? undefined
+          : selectedCategoryIds,
       });
       toast.success(t("myApps.edit.saved"));
-      await load();
+      await load({ refill: true });
     } catch (e) {
       toast.error(t("myApps.edit.saveFailed"), e instanceof Error ? e.message : undefined);
     } finally { setSaving(false); }
@@ -644,6 +687,10 @@ function ManageAppInner() {
 
   const published = [...app.apks].filter((a) => a.status === "published").sort((a, b) => b.version_code - a.version_code);
   const latest = published[0];
+  // Owner-only settings (visibility, the release sources): the API answers
+  // 403 to co-maintainers, so they get them read-only.
+  const isOwnerOrAdmin =
+    !!currentUser && (currentUser.role === "admin" || currentUser.id === app.owner_id);
 
   // Section roster — drives both the sidebar rail and the section
   // chrome. Order matches the visual flow; "permissions" only renders
@@ -707,7 +754,9 @@ function ManageAppInner() {
               id="vis"
               value={visibility}
               onChange={(e) => setVisibility(e.target.value as "public" | "private")}
-              className="h-12 w-full rounded-xl border border-outline bg-surface px-3 text-sm focus:border-primary focus:outline-none"
+              disabled={!isOwnerOrAdmin}
+              title={isOwnerOrAdmin ? undefined : t("myApps.edit.fields.visibilityOwnerOnly")}
+              className="h-12 w-full rounded-xl border border-outline bg-surface px-3 text-sm focus:border-primary focus:outline-none disabled:opacity-60"
             >
               <option value="public">{t("myApps.edit.fields.visibilityPublic")}</option>
               <option value="private">{t("myApps.edit.fields.visibilityPrivate")}</option>
@@ -1201,7 +1250,7 @@ function ManageAppInner() {
         title={t("myApps.edit.sections.githubSource")}
         subtitle={t("myApps.edit.sections.githubSourceSubtitle")}
       >
-        <GithubSourceSection appId={app.id} onImported={() => void load()} />
+        <GithubSourceSection appId={app.id} canEdit={isOwnerOrAdmin} onImported={() => void load()} />
       </Section>
 
       {/* ──── Proxy-driven sources (F-Droid mirror, Patreon, private registry, …) ──── */}
@@ -1211,7 +1260,7 @@ function ManageAppInner() {
         title={t("myApps.edit.sections.proxySources")}
         subtitle={t("myApps.edit.sections.proxySourcesSubtitle")}
       >
-        <ProxySourcesSection appId={app.id} onImported={() => void load()} />
+        <ProxySourcesSection appId={app.id} canEdit={isOwnerOrAdmin} onImported={() => void load()} />
       </Section>
 
       {/* ──── CI deploy tokens ──── */}
@@ -1459,12 +1508,16 @@ function RetentionBanner({ app }: { app: AppDetail }) {
         </div>
         {nextEvicted ? (
           <p className="mt-0.5">
+            {/* version_name comes from the APK manifest: escape it so it
+                renders as text instead of being parsed as Trans tags. */}
             <Trans
               i18nKey="myApps.edit.versions.retentionNextEvict"
               values={{
                 name: nextEvicted.version_name,
                 code: nextEvicted.version_code,
               }}
+              tOptions={{ interpolation: { escapeValue: true } }}
+              shouldUnescape
               components={{ b: <span className="font-mono text-ink" /> }}
             />
           </p>

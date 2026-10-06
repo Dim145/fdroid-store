@@ -22,6 +22,9 @@ type Draft = {
   /** True until the row has been persisted at least once. Drafts live only
    *  in this component's state — deleting one is a no-op for the server. */
   isDraft: boolean;
+  /** Typed into since the last save / hydration: a parent refetch must not
+   *  overwrite the row. */
+  edited: boolean;
   saving: boolean;
 };
 
@@ -54,25 +57,34 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
   const [customLocale, setCustomLocale] = useState("");
   const pickerRef = useRef<HTMLDivElement>(null);
 
-  // Hydrate from the parent on every fresh AppDetail load. Existing drafts
-  // (rows with ``isDraft=true``) are preserved across re-hydrations so a
-  // user mid-typing a new translation doesn't lose their work when the
-  // parent refetches.
+  // Hydrate from the parent on every fresh AppDetail load — which happens
+  // after any side action on the page (uploads, polled imports…), not just
+  // our own saves. Drafts (``isDraft``) and saved rows with unsaved edits
+  // (``edited``) are preserved so a user mid-typing doesn't lose their work
+  // when the parent refetches.
   useEffect(() => {
     setRows((prev) => {
-      const drafts = prev.filter((r) => r.isDraft);
-      const hydrated: Draft[] = localizations.map((l) => ({
-        locale: l.locale,
-        name: l.name ?? "",
-        summary: l.summary ?? "",
-        description: l.description ?? "",
-        video: l.video ?? "",
-        isDraft: false,
-        saving: false,
-      }));
-      // Drop drafts whose locale just landed from the server (would dup).
+      const local = new Map(prev.map((r) => [r.locale, r]));
+      const hydrated: Draft[] = localizations.map((l) => {
+        const mine = local.get(l.locale);
+        if (mine?.edited) return { ...mine, isDraft: false };
+        return {
+          locale: l.locale,
+          name: l.name ?? "",
+          summary: l.summary ?? "",
+          description: l.description ?? "",
+          video: l.video ?? "",
+          isDraft: false,
+          edited: false,
+          saving: mine?.saving ?? false,
+        };
+      });
+      // Unsaved rows the server doesn't know (yet) survive as drafts; a
+      // draft whose locale just landed from the server is dropped (would dup).
       const knownLocales = new Set(hydrated.map((r) => r.locale));
-      const survivingDrafts = drafts.filter((r) => !knownLocales.has(r.locale));
+      const survivingDrafts = prev
+        .filter((r) => (r.isDraft || r.edited) && !knownLocales.has(r.locale))
+        .map((r) => ({ ...r, isDraft: true }));
       return [...hydrated, ...survivingDrafts];
     });
   }, [localizations]);
@@ -111,6 +123,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
         description: "",
         video: "",
         isDraft: true,
+        edited: false,
         saving: false,
       },
     ]);
@@ -125,6 +138,11 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
 
   function updateRow(locale: string, patch: Partial<Draft>) {
     setRows((prev) => prev.map((r) => (r.locale === locale ? { ...r, ...patch } : r)));
+  }
+
+  /** A keystroke in one of the row's fields. */
+  function editRow(locale: string, patch: Partial<Draft>) {
+    updateRow(locale, { ...patch, edited: true });
   }
 
   async function saveRow(row: Draft) {
@@ -149,6 +167,19 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
         video: row.video.trim() || null,
       });
       toast.success(t("myApps.edit.translations.savedToast", { label: localeLabel(row.locale).label }));
+      // Saved: let the refetch below replace the row with the server copy —
+      // unless the user kept typing while the request was in flight.
+      setRows((prev) =>
+        prev.map((r) =>
+          r.locale === row.locale &&
+          r.name === row.name &&
+          r.summary === row.summary &&
+          r.description === row.description &&
+          r.video === row.video
+            ? { ...r, edited: false }
+            : r,
+        ),
+      );
       await onSaved();
     } catch (e) {
       toast.error(t("myApps.edit.translations.saveFailed"), e instanceof Error ? e.message : undefined);
@@ -167,6 +198,9 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
     try {
       await api.apps.deleteLocalization(appId, row.locale);
       toast.success(t("myApps.edit.translations.removedToast", { label: localeLabel(row.locale).label }));
+      // Gone server-side: drop it here too, or unsaved edits would keep it
+      // around as a draft after the refetch.
+      setRows((prev) => prev.filter((r) => r.locale !== row.locale));
       await onSaved();
     } catch (e) {
       toast.error(t("myApps.edit.translations.deleteFailed"), e instanceof Error ? e.message : undefined);
@@ -333,7 +367,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                       id={`loc-name-${row.locale}`}
                       value={row.name}
                       maxLength={255}
-                      onChange={(e) => updateRow(row.locale, { name: e.target.value })}
+                      onChange={(e) => editRow(row.locale, { name: e.target.value })}
                       placeholder={t("myApps.edit.translations.fields.titlePlaceholder")}
                     />
                   </FormField>
@@ -343,7 +377,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                       type="url"
                       value={row.video}
                       maxLength={512}
-                      onChange={(e) => updateRow(row.locale, { video: e.target.value })}
+                      onChange={(e) => editRow(row.locale, { video: e.target.value })}
                       placeholder="https://…"
                     />
                   </FormField>
@@ -352,7 +386,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                       id={`loc-summary-${row.locale}`}
                       value={row.summary}
                       maxLength={255}
-                      onChange={(e) => updateRow(row.locale, { summary: e.target.value })}
+                      onChange={(e) => editRow(row.locale, { summary: e.target.value })}
                       placeholder={t("myApps.edit.translations.fields.summaryPlaceholder")}
                     />
                   </FormField>
@@ -360,7 +394,7 @@ export function LocalizationsEditor({ appId, localizations, onSaved }: Props) {
                     <MarkdownEditor
                       id={`loc-desc-${row.locale}`}
                       value={row.description}
-                      onChange={(md) => updateRow(row.locale, { description: md })}
+                      onChange={(md) => editRow(row.locale, { description: md })}
                       minRows={5}
                       placeholder={t("myApps.edit.translations.fields.descriptionPlaceholder")}
                     />

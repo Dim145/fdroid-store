@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import { AuthGuard } from "@/components/auth-guard";
+import { releaseTagUrl } from "@/components/github-source-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +36,10 @@ function NewAppInner() {
   const [file, setFile] = useState<File | null>(null);
   const [inspect, setInspect] = useState<ApkInspect | null>(null);
   const [inspecting, setInspecting] = useState(false);
+  // Bumped per pick (and on mode switch): an inspection whose number is no
+  // longer current is stale, so a slow earlier upload can't land last and
+  // leave its staging token behind for the wrong file.
+  const inspectSeq = useRef(0);
 
   // ---------- GitHub path state ----------
   const [ghProvider, setGhProvider] = useState<GithubProvider>("github");
@@ -130,20 +135,23 @@ function NewAppInner() {
   }
 
   async function onPickFile(picked: File) {
+    const seq = ++inspectSeq.current;
     setError(null);
     setFile(picked);
     setInspect(null);
     setInspecting(true);
     try {
       const info = await api.apps.inspectApk(picked);
+      if (seq !== inspectSeq.current) return;
       setInspect(info);
       if (!packageName) setPackageName(info.package_name);
       if (!name && info.app_name) setName(info.app_name);
     } catch (e) {
+      if (seq !== inspectSeq.current) return;
       setError(e instanceof Error ? e.message : t("myApps.new.parseFailed"));
       setFile(null);
     } finally {
-      setInspecting(false);
+      if (seq === inspectSeq.current) setInspecting(false);
     }
   }
 
@@ -356,10 +364,14 @@ function NewAppInner() {
       setGhInspect(null);
       setPxInspect(null);
     } else if (next === "github") {
+      inspectSeq.current++;
+      setInspecting(false);
       setFile(null);
       setInspect(null);
       setPxInspect(null);
     } else {
+      inspectSeq.current++;
+      setInspecting(false);
       setFile(null);
       setInspect(null);
       setGhInspect(null);
@@ -554,7 +566,7 @@ function NewAppInner() {
 
           {mode === "apk" && (
             <div className="mt-5">
-              <label className="block">
+              <label className={cn("block", inspecting && "pointer-events-none opacity-60")}>
                 <div className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-outline px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary/5">
                   <div className="flex h-12 w-12 items-center justify-center rounded-pill bg-primary-container text-primary-on-container">
                     <Upload className="h-5 w-5" strokeWidth={2.2} />
@@ -575,6 +587,7 @@ function NewAppInner() {
                     const f = e.target.files?.[0];
                     if (f) onPickFile(f);
                   }}
+                  disabled={inspecting}
                   className="sr-only"
                 />
               </label>
@@ -745,7 +758,13 @@ function NewAppInner() {
                 </div>
               )}
 
-              {ghInspect && <GithubInspectCard inspect={ghInspect} />}
+              {ghInspect && (
+                <GithubInspectCard
+                  inspect={ghInspect}
+                  provider={ghProvider}
+                  baseUrl={ghBaseUrl.trim() || null}
+                />
+              )}
             </div>
           )}
 
@@ -1261,8 +1280,27 @@ function ApkInspectCard({ inspect }: { inspect: ApkInspect }) {
 }
 
 
-function GithubInspectCard({ inspect }: { inspect: GithubApkInspect }) {
+function GithubInspectCard({
+  inspect,
+  provider,
+  baseUrl,
+}: {
+  inspect: GithubApkInspect;
+  /** Forge + self-hosted base URL the inspection ran against (editing
+   *  either clears ``inspect``, so they always match it). */
+  provider: GithubProvider;
+  baseUrl: string | null;
+}) {
   const { t } = useTranslation();
+  // Same forge-aware link as the edit page's status banner — GitLab and
+  // Gitea / Forgejo sources don't live on github.com — with the tag
+  // URL-encoded.
+  const releaseHref = releaseTagUrl({
+    provider,
+    base_url: baseUrl,
+    repo: inspect.repo,
+    last_release_tag: inspect.release_tag,
+  });
   return (
     <div className="mt-5 space-y-4">
       {/* Release context — tag, asset name, prerelease flag. Sits above
@@ -1276,14 +1314,18 @@ function GithubInspectCard({ inspect }: { inspect: GithubApkInspect }) {
               {t("myApps.new.github.resolved")}
             </div>
             <div className="mt-1 flex flex-wrap items-baseline gap-2">
-              <a
-                href={`https://github.com/${inspect.repo}/releases/tag/${inspect.release_tag}`}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="font-mono text-sm text-ink hover:text-primary"
-              >
-                {inspect.repo}
-              </a>
+              {releaseHref ? (
+                <a
+                  href={releaseHref}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="font-mono text-sm text-ink hover:text-primary"
+                >
+                  {inspect.repo}
+                </a>
+              ) : (
+                <span className="font-mono text-sm text-ink">{inspect.repo}</span>
+              )}
               <span className="text-ink-mute">·</span>
               <span className="font-mono text-sm text-primary">{inspect.release_tag}</span>
               {inspect.release_is_prerelease && (

@@ -29,7 +29,12 @@ type AuthState = {
   loading: boolean;
   fetchMe: () => Promise<void>;
   login: (email: string, password: string) => Promise<LoginOutcome>;
-  finishMfaLogin: (mfaToken: string, code: string) => Promise<CurrentUser>;
+  /** TOTP step. Can still end on the ``enrollment`` branch: the code was
+   *  right but the role must also register a passkey first. */
+  finishMfaLogin: (
+    mfaToken: string,
+    code: string,
+  ) => Promise<Exclude<LoginOutcome, { kind: "mfa" }>>;
   signup: (payload: {
     email: string;
     username: string;
@@ -37,11 +42,16 @@ type AuthState = {
     full_name?: string;
     invite_code?: string;
   }) => Promise<CurrentUser>;
+  /** Adopt a freshly minted token pair (password, passkey, MFA, forced
+   *  enrolment, SSO): store it, hand the access token to the media SW and
+   *  resolve the user. Storing the tokens alone left the store anonymous,
+   *  so guarded pages bounced back to /login until a reload. */
+  acceptTokens: (access: string, refresh: string) => Promise<CurrentUser>;
   acceptOidcTokens: (access: string, refresh: string) => Promise<CurrentUser>;
-  logout: () => void;
+  logout: () => Promise<void>;
 };
 
-export const useAuth = create<AuthState>((set) => ({
+export const useAuth = create<AuthState>((set, get) => ({
   user: null,
   // We're only "loading" if there's a token worth resolving. With no token,
   // we already know we're anonymous — starting at `true` would otherwise
@@ -75,37 +85,34 @@ export const useAuth = create<AuthState>((set) => ({
       // token. No tokens are minted yet; that happens after enrolment.
       return { kind: "enrollment", enrollmentToken: res.enrollment_token };
     }
-    setTokens(res.access_token, res.refresh_token);
-    pushTokenToSW();
-    const me = await api.me();
-    set({ user: me, loading: false });
-    return { kind: "ok", user: me };
+    return { kind: "ok", user: await get().acceptTokens(res.access_token, res.refresh_token) };
   },
 
   async finishMfaLogin(mfaToken, code) {
-    const tokens = await api.loginMfa({ mfa_token: mfaToken, code });
-    setTokens(tokens.access_token, tokens.refresh_token);
-    pushTokenToSW();
-    const me = await api.me();
-    set({ user: me, loading: false });
-    return me;
+    const res = await api.loginMfa({ mfa_token: mfaToken, code });
+    if ("enrollment_required" in res) {
+      // Code accepted, but the force-passkey policy still applies and the
+      // account has none: same enrolment screen as after the password step.
+      return { kind: "enrollment", enrollmentToken: res.enrollment_token };
+    }
+    return { kind: "ok", user: await get().acceptTokens(res.access_token, res.refresh_token) };
   },
 
   async signup(payload) {
     const tokens = await api.signup(payload);
-    setTokens(tokens.access_token, tokens.refresh_token);
-    pushTokenToSW();
-    const me = await api.me();
-    set({ user: me, loading: false });
-    return me;
+    return get().acceptTokens(tokens.access_token, tokens.refresh_token);
   },
 
-  async acceptOidcTokens(access, refresh) {
+  async acceptTokens(access, refresh) {
     setTokens(access, refresh);
     pushTokenToSW();
     const me = await api.me();
     set({ user: me, loading: false });
     return me;
+  },
+
+  acceptOidcTokens(access, refresh) {
+    return get().acceptTokens(access, refresh);
   },
 
   async logout() {
@@ -128,6 +135,53 @@ export const useAuth = create<AuthState>((set) => ({
     set({ user: null, loading: false });
   },
 }));
+
+// ---------------------------------------------------------------------------
+// SSO hand-off
+// ---------------------------------------------------------------------------
+// Per-tab state carried across the identity-provider round-trip. The nonce
+// binds the one-time code the callback returns to the tab that started the
+// flow, so a crafted /auth/oidc-success link can't sign a victim into
+// someone else's account; ``next`` is where to land once signed in.
+const OIDC_NONCE_KEY = "fdroid.oidc.nonce";
+const OIDC_NEXT_KEY = "fdroid.oidc.next";
+
+/** URL to send the browser to for SSO, after stashing a fresh nonce and the
+ *  (already sanitised) ``next`` in sessionStorage. ``null`` when storage is
+ *  unavailable — the hand-off could never complete. */
+export function beginOidcLogin(
+  loginUrl: string,
+  opts: { next: string; invite?: string },
+): string | null {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const nonce = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  try {
+    window.sessionStorage.setItem(OIDC_NONCE_KEY, nonce);
+    window.sessionStorage.setItem(OIDC_NEXT_KEY, opts.next);
+  } catch {
+    return null;
+  }
+  const url = new URL(loginUrl, window.location.origin);
+  url.searchParams.set("bind", nonce);
+  if (opts.invite) url.searchParams.set("invite", opts.invite);
+  return url.toString();
+}
+
+/** Read and forget what ``beginOidcLogin`` stashed — single use either way. */
+export function takeOidcHandoff(): { nonce: string | null; next: string | null } {
+  try {
+    const nonce = window.sessionStorage.getItem(OIDC_NONCE_KEY);
+    const next = window.sessionStorage.getItem(OIDC_NEXT_KEY);
+    window.sessionStorage.removeItem(OIDC_NONCE_KEY);
+    window.sessionStorage.removeItem(OIDC_NEXT_KEY);
+    return { nonce, next };
+  } catch {
+    return { nonce: null, next: null };
+  }
+}
 
 // One-shot bootstrap on first client load: if tokens sit in localStorage,
 // resolve them to a user before any page reads from the store. Without this,

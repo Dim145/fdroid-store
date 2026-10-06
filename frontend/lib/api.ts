@@ -133,6 +133,10 @@ type FetchOptions = RequestInit & {
 // and clear tokens — logging the user out mid-session.
 let _refreshInflight: Promise<boolean> | null = null;
 
+/** Web Lock name serialising token refreshes across every tab of this
+ *  origin — see ``refreshAccessToken``. */
+const REFRESH_LOCK = "fdroid.auth.refresh";
+
 /** Cached upload cap fetched lazily from /setup/status. Throws an
  *  ``Error`` with a humane message when the file exceeds the limit
  *  so the user gets a clean inline error instead of waiting for the
@@ -162,43 +166,33 @@ async function _assertWithinUploadCap(file: File): Promise<void> {
 }
 
 
-async function refreshAccessToken(): Promise<boolean> {
+/** Tell the media Service Worker the stored token changed (rotated or
+ *  wiped) so private-app <img> fetches follow. The dynamic import dodges
+ *  a circular import between this module and media-sw. */
+async function _notifyTokenChange(): Promise<void> {
+  try {
+    const { pushTokenToSW } = await import("@/lib/media-sw");
+    pushTokenToSW();
+  } catch {
+    /* SW glue not available — non-fatal */
+  }
+}
+
+/** Trade the refresh token for a new pair after a 401. ``usedAccess`` is
+ *  the access token the failing request carried. Resolves to true when a
+ *  newer access token is now stored (worth retrying), false otherwise. */
+async function refreshAccessToken(usedAccess: string | null): Promise<boolean> {
   if (_refreshInflight) return _refreshInflight;
   _refreshInflight = (async () => {
-    const refresh = getRefreshToken();
-    if (!refresh) return false;
-    const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refresh_token: refresh }),
-    });
-    if (!res.ok) {
-      // Refresh failed: the refresh-token chain is dead (revoked,
-      // expired, family-revoked because somebody replayed it). Wipe
-      // the local copy AND notify any subscriber of the auth store
-      // so the UI flips to anonymous immediately rather than waiting
-      // for the next route change. The dynamic import dodges a
-      // circular import between this module and auth-store.
-      clearTokens();
-      try {
-        const { useAuth } = await import("@/lib/auth-store");
-        useAuth.setState({ user: null, loading: false });
-      } catch {
-        /* fail silently — wipe already happened */
-      }
-      return false;
-    }
-    const data = (await res.json()) as { access_token: string; refresh_token: string };
-    setTokens(data.access_token, data.refresh_token);
-    // Notify the media Service Worker of the rotated token so private-
-    // app <img> fetches keep working after a silent refresh.
-    try {
-      const { pushTokenToSW } = await import("@/lib/media-sw");
-      pushTokenToSW();
-    } catch {
-      /* SW glue not available — non-fatal */
-    }
-    return true;
+    // Refresh tokens are single-use and every tab reads the same pair
+    // from localStorage: two tabs refreshing at once would post the same
+    // token, and the backend's reuse detection then revokes the whole
+    // family — logging every tab out. A Web Lock makes the tabs take
+    // turns; where the API is missing (insecure context, old browser)
+    // only the in-tab de-dup above applies.
+    const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+    if (locks) return locks.request(REFRESH_LOCK, () => _refreshLocked(usedAccess));
+    return _refreshLocked(usedAccess);
   })();
   try {
     return await _refreshInflight;
@@ -207,10 +201,63 @@ async function refreshAccessToken(): Promise<boolean> {
   }
 }
 
-export async function apiFetch<T = unknown>(
-  path: string,
-  options: FetchOptions = {}
-): Promise<T> {
+async function _refreshLocked(usedAccess: string | null): Promise<boolean> {
+  const refresh = getRefreshToken();
+  if (!refresh) return false;
+  // Another tab (or an earlier refresh in this one) rotated the pair
+  // while we waited for the lock: retry with its tokens instead of
+  // posting the refresh token it already consumed.
+  const current = getAccessToken();
+  if (current && current !== usedAccess) return true;
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: refresh }),
+      // Every tab queues behind this call on the lock: don't let a stalled
+      // connection hold them all.
+      signal: typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(20_000) : undefined,
+    });
+  } catch {
+    // Offline / DNS / timed out: the pair may still be good — keep it and
+    // just fail this attempt.
+    return false;
+  }
+  if (res.status === 401 || res.status === 403) {
+    // The refresh-token chain is dead (revoked, expired, family-revoked
+    // because somebody replayed it). Wipe the local copy — unless a
+    // login / logout in another tab already replaced it — tell the media
+    // SW to drop its token, and notify any subscriber of the auth store so
+    // the UI flips to anonymous immediately rather than waiting for the
+    // next route change. The dynamic import dodges a circular import
+    // between this module and auth-store.
+    if (getRefreshToken() !== refresh) return !!getAccessToken();
+    clearTokens();
+    await _notifyTokenChange();
+    try {
+      const { useAuth } = await import("@/lib/auth-store");
+      useAuth.setState({ user: null, loading: false });
+    } catch {
+      /* fail silently — wipe already happened */
+    }
+    return false;
+  }
+  // 429 / 5xx: a hiccup, not a verdict on the session — keep the tokens.
+  if (!res.ok) return false;
+  const data = (await res.json()) as { access_token: string; refresh_token: string };
+  // A logout / login in another tab during the round-trip wins.
+  if (getRefreshToken() !== refresh) return !!getAccessToken();
+  setTokens(data.access_token, data.refresh_token);
+  // Notify the media Service Worker of the rotated token so private-
+  // app <img> fetches keep working after a silent refresh.
+  await _notifyTokenChange();
+  return true;
+}
+
+/** Shared transport of ``apiFetch`` / ``apiFetchRaw``: attaches the
+ *  bearer, and on a 401 refreshes the token once and replays the call. */
+async function _send(path: string, options: FetchOptions): Promise<Response> {
   const { anonymous, noRetry, headers, ...rest } = options;
   const finalHeaders = new Headers(headers || {});
   if (!finalHeaders.has("content-type") && rest.body && !(rest.body instanceof FormData)) {
@@ -219,44 +266,76 @@ export async function apiFetch<T = unknown>(
   // Refuse to attach the bearer to absolute / cross-origin URLs. The current
   // codebase never passes an absolute URL here, but if a future caller wires
   // a user-controlled URL into ``apiFetch`` (a "validate website" feature,
-  // say) we don't want the token leaking off-origin.
+  // say) we don't want the token leaking off-origin — the retry below
+  // included.
   const isAbsolute = /^https?:\/\//i.test(path);
+  let token: string | null = null;
   if (!anonymous && !isAbsolute) {
-    const token = getAccessToken();
+    token = getAccessToken();
     if (token) finalHeaders.set("authorization", `Bearer ${token}`);
   }
 
   const url = isAbsolute ? path : `${API_URL}${path}`;
   let res = await fetch(url, { ...rest, headers: finalHeaders });
 
-  if (res.status === 401 && !noRetry && !anonymous) {
-    const refreshed = await refreshAccessToken();
+  if (res.status === 401 && !noRetry && !anonymous && !isAbsolute) {
+    const refreshed = await refreshAccessToken(token);
     if (refreshed) {
       const t = getAccessToken();
       if (t) finalHeaders.set("authorization", `Bearer ${t}`);
       res = await fetch(url, { ...rest, headers: finalHeaders });
     }
   }
+  return res;
+}
 
-  if (res.status === 204) return undefined as T;
-
+/** Read a response body: parsed JSON when the server says so, else text. */
+async function _readBody(res: Response): Promise<unknown> {
   const text = await res.text();
-  let body: unknown = text;
   if (text && res.headers.get("content-type")?.includes("application/json")) {
     try {
-      body = JSON.parse(text);
+      return JSON.parse(text);
     } catch {
-      body = text;
+      return text;
     }
   }
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    if (body && typeof body === "object" && "detail" in body) {
-      detail = formatApiDetail((body as { detail: unknown }).detail) || detail;
-    }
-    throw new ApiError(res.status, detail, body);
+  return text;
+}
+
+async function _apiError(res: Response): Promise<ApiError> {
+  const body = await _readBody(res).catch(() => "");
+  let detail = `HTTP ${res.status}`;
+  if (body && typeof body === "object" && "detail" in body) {
+    detail = formatApiDetail((body as { detail: unknown }).detail) || detail;
   }
-  return body as T;
+  return new ApiError(res.status, detail, body);
+}
+
+export async function apiFetch<T = unknown>(
+  path: string,
+  options: FetchOptions = {}
+): Promise<T> {
+  const res = await _send(path, options);
+  if (res.status === 204) return undefined as T;
+  if (!res.ok) throw await _apiError(res);
+  return (await _readBody(res)) as T;
+}
+
+/** Raw-``Response`` sibling of ``apiFetch`` for file downloads (metadata
+ *  YAML, encrypted backups, the GDPR export): same bearer and 401 →
+ *  refresh → retry, but the caller reads the body itself. Throws
+ *  ``ApiError`` on non-2xx like ``apiFetch``. */
+export async function apiFetchRaw(path: string, options: FetchOptions = {}): Promise<Response> {
+  const res = await _send(path, options);
+  if (!res.ok) throw await _apiError(res);
+  return res;
+}
+
+/** ``filename="…"`` from a download's Content-Disposition, else ``fallback``
+ *  (the header can be stripped by a CDN). */
+function _attachmentName(res: Response, fallback: string): string {
+  const match = (res.headers.get("content-disposition") || "").match(/filename="([^"]+)"/);
+  return match?.[1] || fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +438,12 @@ export const api = {
     }),
   downloadHistory: () =>
     apiFetch<{ items: DownloadHistoryItem[] }>("/api/v1/me/downloads"),
+  /** GDPR export of everything stored about the caller, as a JSON file. */
+  exportMyData: async (fallbackName: string) => {
+    const res = await apiFetchRaw("/api/v1/me/export");
+    const filename = _attachmentName(res, fallbackName);
+    return { filename, blob: await res.blob() };
+  },
 
   /** Public-or-auth stats. Returns 401 when the repo is private +
    *  the caller is anonymous; the caller decides what to render. */
@@ -372,10 +457,30 @@ export const api = {
   },
 
   apps: {
-    list: (q?: string) =>
-      apiFetch<Array<AppSummary>>(`/api/v1/apps${q ? `?q=${encodeURIComponent(q)}` : ""}`, {
-        anonymous: !getAccessToken(),
-      }),
+    /** The whole catalogue (or every match for ``q``). The endpoint pages
+     *  (``limit`` ≤ 200), so walk ``offset`` until a short page — taking
+     *  only the first one silently dropped the oldest apps of a bigger
+     *  repo from the browse page, the category counts and the home page. */
+    list: async (q?: string) => {
+      const PAGE = 200;
+      const all: AppSummary[] = [];
+      const seen = new Set<string>();
+      // The page cap only guards against a server that ignores ``offset``.
+      for (let page = 0; page < 100; page++) {
+        const params = new URLSearchParams({ limit: String(PAGE), offset: String(page * PAGE) });
+        if (q) params.set("q", q);
+        const rows = await apiFetch<Array<AppSummary>>(`/api/v1/apps?${params}`, {
+          anonymous: !getAccessToken(),
+        });
+        // An app published mid-walk shifts the offsets by one: skip the
+        // repeat rather than listing it twice.
+        const fresh = rows.filter((a) => !seen.has(a.id));
+        for (const a of fresh) seen.add(a.id);
+        all.push(...fresh);
+        if (rows.length < PAGE || fresh.length === 0) break;
+      }
+      return all;
+    },
     get: (ref: string, opts: { raw?: boolean } = {}) =>
       apiFetch<AppDetail>(
         `/api/v1/apps/${encodeURIComponent(ref)}${opts.raw ? "?raw=true" : ""}`,
@@ -537,26 +642,9 @@ export const api = {
      *  caller can save it under the canonical ``<package>.yml`` name
      *  without having to derive it itself. */
     exportMetadataYaml: async (appId: string) => {
-      const token = getAccessToken();
-      if (!token) throw new ApiError(401, "Not authenticated");
-      const res = await fetch(`${API_URL}/api/v1/apps/${appId}/metadata.yml`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-          const body = await res.json();
-          if (body?.detail) detail = formatApiDetail(body.detail) || detail;
-        } catch {
-          /* non-JSON body */
-        }
-        throw new ApiError(res.status, detail);
-      }
-      const dispo = res.headers.get("content-disposition") || "";
-      const match = dispo.match(/filename="([^"]+)"/);
-      const filename = match?.[1] || `${appId}.yml`;
-      const blob = await res.blob();
-      return { filename, blob };
+      const res = await apiFetchRaw(`/api/v1/apps/${appId}/metadata.yml`);
+      const filename = _attachmentName(res, `${appId}.yml`);
+      return { filename, blob: await res.blob() };
     },
     myApps: () => apiFetch<Array<AppSummary>>("/api/v1/me/apps"),
     uploadIcon: (appId: string, file: File) => {
@@ -739,26 +827,9 @@ export const api = {
      *  the row consumed + nukes the file as soon as the response is
      *  delivered, so this is single-use per job. */
     download: async (id: string) => {
-      const token = getAccessToken();
-      if (!token) throw new ApiError(401, "Not authenticated");
-      const res = await fetch(`${API_URL}/api/v1/admin/backup/jobs/${id}/download`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-          const body = await res.json();
-          if (body?.detail) detail = formatApiDetail(body.detail) || detail;
-        } catch {
-          /* non-JSON body */
-        }
-        throw new ApiError(res.status, detail);
-      }
-      const dispo = res.headers.get("content-disposition") || "";
-      const match = dispo.match(/filename="([^"]+)"/);
-      const filename = match?.[1] || `fdroid-store-backup-${id}.tar.enc`;
-      const blob = await res.blob();
-      return { filename, blob };
+      const res = await apiFetchRaw(`/api/v1/admin/backup/jobs/${id}/download`);
+      const filename = _attachmentName(res, `fdroid-store-backup-${id}.tar.enc`);
+      return { filename, blob: await res.blob() };
     },
   },
 
@@ -816,11 +887,23 @@ export const api = {
   },
 
   // ---------- 2-step login ----------
+  /** ``EnrollmentRequired`` instead of tokens when the code was right but
+   *  the role must also use a passkey and none is registered yet. */
   loginMfa: (payload: { mfa_token: string; code: string }) =>
-    apiFetch<TokenPair>("/api/v1/auth/login/mfa", {
+    apiFetch<TokenPair | EnrollmentRequired>("/api/v1/auth/login/mfa", {
       method: "POST",
       anonymous: true,
       body: JSON.stringify(payload),
+    }),
+
+  /** Redeem the single-use code the SSO callback put in the
+   *  /auth/oidc-success fragment, with the nonce this tab generated
+   *  before leaving for the identity provider. */
+  oidcExchange: (code: string, nonce: string) =>
+    apiFetch<TokenPair>("/api/v1/auth/oidc/exchange", {
+      method: "POST",
+      anonymous: true,
+      body: JSON.stringify({ code, nonce }),
     }),
 
   // ---------- App-level collaborators ----------
@@ -1534,7 +1617,26 @@ export type DeployToken = {
 export type DeployTokenCreated = DeployToken & {
   full_token: string;
 };
-export type AppUpdatePayload = Partial<Omit<AppCreate, "package_name">> & {
+/** PATCH body: an omitted field is left alone; an optional text field sent
+ *  as ``null`` is cleared server-side. */
+export type AppUpdatePayload = {
+  name?: string;
+  summary?: string | null;
+  description?: string | null;
+  license?: string | null;
+  website?: string | null;
+  source_code?: string | null;
+  issue_tracker?: string | null;
+  author_name?: string | null;
+  author_email?: string | null;
+  donate?: string | null;
+  liberapay?: string | null;
+  bitcoin?: string | null;
+  open_collective?: string | null;
+  translation?: string | null;
+  /** Owner / admin only — the server refuses it from co-maintainers. */
+  visibility?: "public" | "private";
+  category_ids?: string[];
   /** Pin (number) or clear (null) the suggested version. Omit the field
    *  entirely to leave the current state alone. */
   suggested_version_code?: number | null;
@@ -1897,7 +1999,8 @@ export type AppCollaborator = {
   user_id: string;
   granted_at: string;
   username: string;
-  email: string;
+  /** Only returned to admins. */
+  email: string | null;
   full_name: string | null;
 };
 

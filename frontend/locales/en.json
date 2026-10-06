@@ -262,7 +262,7 @@
     "categoriesSubtitle": "Browse by interest",
     "seeAll": "See all",
     "emptyShelfTitle": "Nothing on the shelf yet.",
-    "emptyShelfBody": "Once an APK is published you'll see it featured here. Admin: head to <link>My apps → New release</link>.",
+    "emptyShelfBody": "Once an APK is published you'll see it featured here. Admin: head to <newReleaseLink>My apps → New release</newReleaseLink>.",
     "setupRequired": "Setup required",
     "setupNotReady": "The repo isn't ready yet.",
     "setupAdminCta": "An administrator needs to finish the wizard.",
@@ -363,7 +363,7 @@
     "nsfw": {
       "title": "This app is flagged as adult content.",
       "tagline": "NSFW content",
-      "body": "<bold>{{name}}</bold> is hidden from the catalogue by default. Confirm you want to see it for this session, or change your preference in <link>account settings</link>.",
+      "body": "<bold>{{name}}</bold> is hidden from the catalogue by default. Confirm you want to see it for this session, or change your preference in <settingsLink>account settings</settingsLink>.",
       "continue": "Continue",
       "backToCatalogue": "Back to catalogue"
     },
@@ -411,7 +411,24 @@
       "errors": {
         "default": "Sign-in failed",
         "invalid": "Invalid email or password"
+      },
+      "oidcErrors": {
+        "generic": "SSO sign-in failed. Please try again.",
+        "token_exchange_failed": "The identity provider's answer couldn't be verified. Please try again.",
+        "missing_claims": "The identity provider didn't share an account ID and email address.",
+        "email_unverified": "Your email address isn't verified by the identity provider.",
+        "signup_disabled": "Account creation is disabled on this repository.",
+        "signup_closed": "Signups are closed. Ask an administrator to create an account for you.",
+        "invite_required": "An invite code is required to create an account through SSO.",
+        "invite_invalid": "This invite code is invalid.",
+        "invite_used": "This invite code has already been used or has expired.",
+        "account_disabled": "This account is disabled.",
+        "identity_conflict": "This account is already linked to another SSO identity."
       }
+    },
+    "oidcSuccess": {
+      "finishing": "Finishing sign-in…",
+      "backToLogin": "Back to sign in"
     },
     "signup": {
       "heroEyebrow": "publish · sync · install",
@@ -899,6 +916,7 @@
         "visibility": "Visibility",
         "visibilityPublic": "Public",
         "visibilityPrivate": "Private",
+        "visibilityOwnerOnly": "Only the app owner (or an admin) can change the visibility.",
         "summary": "Summary",
         "description": "Description",
         "descriptionPlaceholder": "What does it do? Highlights, screenshots context, etc.",
@@ -1234,6 +1252,7 @@
         "scanFailed": "Could not start scan",
         "loadFailed": "Could not load source",
         "lostAccess": "Lost contact with the backend — refresh to try again.",
+        "ownerOnly": "Only the app owner (or an admin) can change or disconnect this source. You can still run a scan.",
         "lastScanned": "Last scanned {{date}}",
         "neverScanned": "Never scanned yet.",
         "statusIdle": "Pending first scan",
@@ -1261,6 +1280,7 @@
       },
       "proxySources": {
         "intro": "Each proxy publishes its own catalogue of providers (F-Droid mirror, Patreon, private artefact repo, …). One app can hold multiple sources as long as they point at the same package and signer.",
+        "ownerOnly": "Only the app owner (or an admin) can attach, scan, pause or detach external sources.",
         "add": "Add a source",
         "empty": "No proxy source attached. Click \"Add a source\" to wire one.",
         "noProxiesTitle": "No proxies available",

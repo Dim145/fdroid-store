@@ -32,8 +32,11 @@ export function AppIcon({
   mediaToken,
   shape = "rounded",
 }: Props) {
-  const [failed, setFailed] = useState(false);
   const url = mediaUrl(iconPath, { version, token: mediaToken });
+  // Remember WHICH url failed rather than a bare flag, so a new icon (custom
+  // upload, version bump, a recycled list row) gets its own attempt.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const failed = url !== null && failedUrl === url;
 
   // 22% radius matches Material You / Play Store app icon styling at any size.
   const radius =
@@ -83,7 +86,7 @@ export function AppIcon({
         height={size}
         loading="lazy"
         decoding="async"
-        onError={() => setFailed(true)}
+        onError={() => setFailedUrl(url)}
         // No ``bg-*`` here on purpose — see comment above on alpha
         // bleed-through. ``border-radius`` is kept for opaque legacy
         // rasters that would otherwise sit as a sharp square.

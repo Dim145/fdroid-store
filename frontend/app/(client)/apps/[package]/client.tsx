@@ -151,12 +151,18 @@ export default function AppDetailClient() {
             {t("appDetail.nsfw.title")}
           </h1>
           <p className="mx-auto max-w-md text-sm text-ink-soft">
+            {/* The app name is uploader-controlled: escape it so it renders
+                as text instead of being parsed as Trans tags. The link
+                placeholder isn't ``<link>`` — Trans parses that as the HTML
+                void element and drops the label. */}
             <Trans
               i18nKey="appDetail.nsfw.body"
               values={{ name: app.name }}
+              tOptions={{ interpolation: { escapeValue: true } }}
+              shouldUnescape
               components={{
                 bold: <span className="font-mono text-ink" />,
-                link: <Link href="/account" className="text-primary hover:underline" />,
+                settingsLink: <Link href="/account" className="text-primary hover:underline" />,
               }}
             />
           </p>

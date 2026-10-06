@@ -54,10 +54,15 @@ import { cn, formatDate } from "@/lib/utils";
 export function ProxySourcesSection({
   appId,
   onImported,
+  canEdit = true,
 }: {
   appId: string;
   /** Fired when a fresh import lands so the parent can reload the APK list. */
   onImported?: () => void;
+  /** Owner / admin. Every proxy-source mutation (attach, OAuth connect,
+   *  scan, pause, detach) is refused (403) for co-maintainers, who only
+   *  get the read-only list. */
+  canEdit?: boolean;
 }) {
   const { t } = useTranslation();
   const [sources, setSources] = useState<ApkProxySourceRead[]>([]);
@@ -154,23 +159,30 @@ export function ProxySourcesSection({
           <p className="text-sm leading-relaxed text-ink-soft">
             {t("myApps.edit.proxySources.intro")}
           </p>
+          {!canEdit && (
+            <p className="mt-1 text-[11px] leading-relaxed text-ink-mute">
+              {t("myApps.edit.proxySources.ownerOnly")}
+            </p>
+          )}
         </div>
-        <Button
-          type="button"
-          variant="filled"
-          size="sm"
-          onClick={() => setWizardOpen(true)}
-          disabled={proxies.length === 0}
-        >
-          <Plus className="h-3.5 w-3.5" />
-          {t("myApps.edit.proxySources.add")}
-        </Button>
+        {canEdit && (
+          <Button
+            type="button"
+            variant="filled"
+            size="sm"
+            onClick={() => setWizardOpen(true)}
+            disabled={proxies.length === 0}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("myApps.edit.proxySources.add")}
+          </Button>
+        )}
       </div>
 
       {/* No proxies registered at all → cannot add a source. We render a
           subdued notice with the admin path for the operator who hasn't
           set anything up yet — non-admins just see "ask your admin". */}
-      {proxies.length === 0 && (
+      {canEdit && proxies.length === 0 && (
         <NoProxiesNotice />
       )}
 
@@ -185,6 +197,7 @@ export function ProxySourcesSection({
                   source={src}
                   proxy={proxy}
                   appId={appId}
+                  canEdit={canEdit}
                   onChanged={load}
                 />
               </li>
@@ -192,7 +205,7 @@ export function ProxySourcesSection({
           })}
         </ul>
       ) : (
-        proxies.length > 0 && (
+        canEdit && proxies.length > 0 && (
           <div className="rounded-2xl border border-dashed border-outline-soft bg-surface-2/60 px-5 py-6 text-center">
             <Plug className="mx-auto mb-2 h-5 w-5 text-ink-mute" />
             <p className="text-sm text-ink-soft">
@@ -202,19 +215,22 @@ export function ProxySourcesSection({
         )
       )}
 
-      {/* Add-source wizard. Mounted always so the entrance animation works
-          even on the first click; ``open`` flips the sheet. */}
-      <AddSourceSheet
-        open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        appId={appId}
-        proxies={proxies}
-        existingProviders={new Set(sources.map((s) => `${s.proxy_id}:${s.provider}`))}
-        onCreated={async () => {
-          setWizardOpen(false);
-          await load();
-        }}
-      />
+      {/* Add-source wizard (owner / admin only). Mounted up front so the
+          entrance animation works even on the first click; ``open`` flips
+          the sheet. */}
+      {canEdit && (
+        <AddSourceSheet
+          open={wizardOpen}
+          onClose={() => setWizardOpen(false)}
+          appId={appId}
+          proxies={proxies}
+          existingProviders={new Set(sources.map((s) => `${s.proxy_id}:${s.provider}`))}
+          onCreated={async () => {
+            setWizardOpen(false);
+            await load();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -260,11 +276,14 @@ function SourceRow({
   source,
   proxy,
   appId,
+  canEdit,
   onChanged,
 }: {
   source: ApkProxySourceRead;
   proxy: ApkProxyPublicRead | undefined;
   appId: string;
+  /** False for co-maintainers: no action strip (scan / pause / detach). */
+  canEdit: boolean;
   onChanged: () => void | Promise<void>;
 }) {
   const { t } = useTranslation();
@@ -424,43 +443,45 @@ function SourceRow({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-outline-soft pt-2">
-          <Button
-            type="button"
-            variant="outlined"
-            size="sm"
-            onClick={onScan}
-            disabled={scanning || !source.enabled}
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", scanning && "animate-spin")} />
-            {scanning
-              ? t("myApps.edit.proxySources.scanRunning")
-              : t("myApps.edit.proxySources.scanNow")}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onToggleEnabled}
-            disabled={togglingEnabled}
-          >
-            <Power className="h-3.5 w-3.5" />
-            {source.enabled
-              ? t("myApps.edit.proxySources.disable")
-              : t("myApps.edit.proxySources.enable")}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onRemove}
-            disabled={removing}
-            className="ml-auto text-danger hover:bg-danger-container"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {t("myApps.edit.proxySources.remove")}
-          </Button>
-        </div>
+        {canEdit && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-outline-soft pt-2">
+            <Button
+              type="button"
+              variant="outlined"
+              size="sm"
+              onClick={onScan}
+              disabled={scanning || !source.enabled}
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", scanning && "animate-spin")} />
+              {scanning
+                ? t("myApps.edit.proxySources.scanRunning")
+                : t("myApps.edit.proxySources.scanNow")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onToggleEnabled}
+              disabled={togglingEnabled}
+            >
+              <Power className="h-3.5 w-3.5" />
+              {source.enabled
+                ? t("myApps.edit.proxySources.disable")
+                : t("myApps.edit.proxySources.enable")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onRemove}
+              disabled={removing}
+              className="ml-auto text-danger hover:bg-danger-container"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {t("myApps.edit.proxySources.remove")}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

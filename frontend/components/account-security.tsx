@@ -57,8 +57,11 @@ export function SessionsSection() {
     try {
       await api.sessions.revokeAll();
       toast.success(t("account.sessions.revokedAll"));
-      // Browser is now logged out at the next refresh; force a reload so
-      // the auth store catches up via /me failure.
+      // This browser's session is one of those revoked, but its access
+      // token stays valid until it expires — reloading with it still in
+      // storage would just sign straight back in. Drop it locally (store,
+      // localStorage, media SW) before leaving.
+      await useAuth.getState().logout();
       window.location.href = "/login";
     } catch (e) {
       toast.error(t("account.sessions.revokeFailed"), e instanceof Error ? e.message : undefined);

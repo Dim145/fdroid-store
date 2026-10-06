@@ -278,10 +278,12 @@ function EmptyShelf() {
         {t("home.emptyShelfTitle")}
       </div>
       <p className="max-w-md text-ink-soft">
+        {/* Not ``<link>``: Trans parses that as the HTML void element and
+            drops the label. */}
         <Trans
           i18nKey="home.emptyShelfBody"
           components={{
-            link: <Link href="/my-apps/new" className="text-primary underline underline-offset-4" />,
+            newReleaseLink: <Link href="/my-apps/new" className="text-primary underline underline-offset-4" />,
           }}
         />
       </p>

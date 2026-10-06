@@ -17,6 +17,28 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
 }
 
+/** Where to send the user after sign-in (``?next=``, or the target carried
+ *  across the SSO round-trip). Defence against open redirects: the cheap
+ *  ``startsWith`` checks missed several browser-tolerated bypasses (single
+ *  backslash, percent-encoded slash, tab/whitespace), so the value is
+ *  parsed with ``URL`` against our own origin and anything resolving
+ *  elsewhere falls back to ``/apps``. */
+export function safeNext(raw: string | null | undefined): string {
+  if (!raw || raw.length > 512) return "/apps";
+  if (typeof window === "undefined") return "/apps";
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.origin !== window.location.origin) return "/apps";
+    // ``/.//evil.com`` keeps our origin but normalises to the path
+    // ``//evil.com`` — protocol-relative, i.e. off-site, once it reaches
+    // the router.
+    if (/^\/[/\\]/.test(url.pathname)) return "/apps";
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return "/apps";
+  }
+}
+
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   try {
