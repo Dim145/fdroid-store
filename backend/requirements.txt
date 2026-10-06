@@ -247,7 +247,7 @@ pygments==2.21.0
     #   ipython
     #   ipython-pygments-lexers
     #   rich
-pyjwt==2.14.0
+pyjwt==2.15.1
     # via
     #   fdroid-store-backend (backend/pyproject.toml)
     #   redis
