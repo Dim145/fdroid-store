@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
-from urllib.parse import quote
+import re
+import secrets
+import uuid
+from datetime import UTC, datetime, timedelta
+from urllib.parse import quote, urlsplit
 
+import jwt as _jwt
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
-
 from app.api.deps import DbSession
+from app.core.client_ip import client_ip, hash_ip
 from app.core.config import settings
+from app.core.one_time import claim_once
 from app.core.rate_limit import limiter
 from app.core.security import create_mfa_challenge_token, decode_token
 from app.models.repo_config import RepoConfig
@@ -27,7 +35,6 @@ from app.schemas.auth import (
 )
 from app.services.auth_service import (
     AuthError,
-    authenticate_local,
     issue_tokens_for_user,
     link_or_create_oidc_user,
     refresh_tokens,
@@ -35,7 +42,11 @@ from app.services.auth_service import (
     verify_local_credentials,
 )
 from app.services.oidc_service import claim_indicates_admin, get_oauth
-from app.services.totp import is_enrolled, verify_login as totp_verify_login
+from app.services.totp import is_enrolled
+from app.services.totp import verify_login as totp_verify_login
+from app.services.webauthn import mint_enrollment_token
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,6 +54,32 @@ router = APIRouter()
 # Authlib already uses ``request.session`` for its own state, so we're just
 # tucking one extra value alongside it.
 _OIDC_INVITE_SESSION_KEY = "oidc_invite_code"
+# Hash of the nonce the SPA generated before starting SSO. The callback
+# binds the one-time exchange code to it, so only the browser that started
+# the flow can redeem it (a crafted link can't sign a victim into someone
+# else's account).
+_OIDC_BIND_SESSION_KEY = "oidc_bind"
+_OIDC_BIND_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+_OIDC_CODE_TYPE = "oidc_exchange"
+_OIDC_CODE_TTL = timedelta(minutes=2)
+
+
+def _oidc_error(code: str) -> RedirectResponse:
+    """Back to /login with a stable error code the SPA maps to a message —
+    never free text an attacker could make the login page display."""
+    return RedirectResponse(
+        url=f"{settings.public_app_url.rstrip('/')}/login?oidc_error={quote(code)}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}".lower() if parts.scheme and parts.netloc else ""
+
+
+def _nonce_hash(nonce: str) -> str:
+    return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
 
 
 @router.get("/methods", response_model=AuthMethodsInfo)
@@ -76,22 +113,10 @@ def _pair(access: str, refresh: str) -> TokenPair:
 
 
 def _request_meta(request: Request) -> tuple[str | None, str | None]:
-    """Extract (ip_hash, user_agent) for the session row.
-
-    The IP is read from ``X-Forwarded-For`` (first hop only) when present,
-    falling back to the socket peer. We hash it on the way in — the raw
-    address is never persisted.
-    """
-    import hashlib
-
-    fwd = request.headers.get("x-forwarded-for")
-    ip = fwd.split(",", 1)[0].strip() if fwd else (
-        request.client.host if request.client else None
-    )
-    ip_hash = hashlib.sha256(ip.encode("utf-8")).hexdigest() if ip else None
+    """(ip fingerprint, user agent) for the session row — the raw address
+    is never persisted."""
     ua = request.headers.get("user-agent")
-    ua = ua[:255] if ua else None
-    return ip_hash, ua
+    return hash_ip(client_ip(request)), (ua[:255] if ua else None)
 
 
 @router.post("/login")
@@ -105,9 +130,9 @@ async def login(request: Request, payload: LoginRequest, db: DbSession):
       * the user has confirmed TOTP enrolment, OR
       * the user is an admin and ``RepoConfig.require_admin_2fa`` is on.
 
-    The latter case yields a challenge even without TOTP enrolled — the
-    SPA detects the unenrolled state from /me/totp/status and routes the
-    user through enrolment instead of accepting the challenge.
+    An admin with no second factor at all under that policy gets an
+    ``EnrollmentRequired`` instead: registering a passkey completes the
+    login.
     """
     if not settings.local_auth_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local auth disabled")
@@ -130,20 +155,30 @@ async def login(request: Request, payload: LoginRequest, db: DbSession):
     from app.api.v1.webauthn import passkey_login_state
 
     pk_state = await passkey_login_state(db, user, repo)
-    if pk_state["action"] == "enrollment_required":
-        return EnrollmentRequired(enrollment_token=pk_state["token"])
     if pk_state["action"] == "mfa_passkey":
         return MfaChallenge(
             mfa_required=True,
             mfa_token=create_mfa_challenge_token(str(user.id)),
             method="webauthn",
         )
-    if enrolled or admin_must_mfa:
+    if enrolled:
+        # TOTP first, even when a passkey policy asks for an enrolment
+        # afterwards (/login/mfa hands it out): registering a passkey must
+        # not be reachable with the password alone once a second factor
+        # exists.
         return MfaChallenge(
             mfa_required=True,
             mfa_token=create_mfa_challenge_token(str(user.id)),
             method="totp",
         )
+    if pk_state["action"] == "enrollment_required":
+        return EnrollmentRequired(enrollment_token=pk_state["token"])
+    if admin_must_mfa:
+        # Admin without any second factor while the repo requires one:
+        # registering a passkey completes this login (first-login
+        # enrolment, as under the forced-passkey policy). A TOTP challenge
+        # here could never be answered and would lock the admin out.
+        return EnrollmentRequired(enrollment_token=mint_enrollment_token(str(user.id)))
 
     access, refresh = await issue_tokens_for_user(
         db, user, request_meta=_request_meta(request)
@@ -151,15 +186,17 @@ async def login(request: Request, payload: LoginRequest, db: DbSession):
     return _pair(access, refresh)
 
 
-@router.post("/login/mfa", response_model=TokenPair)
+@router.post("/login/mfa")
 @limiter.limit("10/minute")
 async def login_mfa(
     request: Request,
     payload: MfaVerifyRequest,
     db: DbSession,
-) -> TokenPair:
+) -> TokenPair | EnrollmentRequired:
     """Second step of the MFA login flow. Accepts the challenge token from
-    /auth/login plus a 6-digit TOTP or 8-char recovery code."""
+    /auth/login plus a 6-digit TOTP or 8-char recovery code. Returns an
+    ``EnrollmentRequired`` instead of tokens when the user's role must use a
+    passkey and none is registered yet."""
     try:
         claims = decode_token(payload.mfa_token)
     except Exception as exc:  # noqa: BLE001
@@ -189,6 +226,12 @@ async def login_mfa(
     ok = await totp_verify_login(db, user, code=payload.code)
     if not ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code")
+    from app.api.v1.webauthn import passkey_login_state
+
+    repo = (await db.execute(select(RepoConfig).limit(1))).scalar_one_or_none()
+    pk_state = await passkey_login_state(db, user, repo)
+    if pk_state["action"] == "enrollment_required":
+        return EnrollmentRequired(enrollment_token=pk_state["token"])
     access, refresh = await issue_tokens_for_user(
         db, user, request_meta=_request_meta(request)
     )
@@ -240,6 +283,7 @@ async def logout(request: Request, payload: RefreshRequest, db: DbSession) -> Re
     careless retry can't be turned into an enumeration oracle.
     """
     from jwt import InvalidTokenError as _JWTError
+
     from app.core.security import decode_token
     from app.services.auth_service import _revoke_refresh_chain
 
@@ -259,7 +303,7 @@ async def logout(request: Request, payload: RefreshRequest, db: DbSession) -> Re
 # OIDC
 # --------------------------------------------------------------------------
 @router.get("/oidc/login")
-async def oidc_login(request: Request, invite: str | None = None):
+async def oidc_login(request: Request, invite: str | None = None, bind: str | None = None):
     """Start the OIDC dance. An optional ``?invite=`` is stashed in the session
     so the callback can hand it to the user-creation step (the invite must
     survive the round-trip through the IdP, where we can't pass it directly).
@@ -274,11 +318,17 @@ async def oidc_login(request: Request, invite: str | None = None):
     oauth = get_oauth()
     if oauth is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OIDC disabled")
+    if not bind or not _OIDC_BIND_RE.fullmatch(bind):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Start the SSO sign-in from the login page",
+        )
+    request.session[_OIDC_BIND_SESSION_KEY] = _nonce_hash(bind)
     if invite:
-        expected = settings.public_app_url.rstrip("/")
-        referer = request.headers.get("referer") or ""
-        origin = request.headers.get("origin") or ""
-        if not (referer.startswith(expected) or origin == expected):
+        expected = _origin(settings.public_app_url)
+        referer = _origin(request.headers.get("referer") or "")
+        origin = _origin(request.headers.get("origin") or "")
+        if not expected or expected not in (referer, origin):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Invite codes must be supplied from within the app",
@@ -313,21 +363,15 @@ async def oidc_callback(request: Request, db: DbSession):
         # internal details) which would otherwise land in the user's
         # browser history + Referer header on the next click.
         logger.warning("OIDC token exchange failed", exc_info=exc)
-        return RedirectResponse(
-            url=(
-                f"{settings.public_app_url.rstrip('/')}/login"
-                f"?oidc_error=token_exchange_failed"
-            ),
-            status_code=status.HTTP_302_FOUND,
-        )
+        return _oidc_error("token_exchange_failed")
     userinfo = token.get("userinfo") or {}
     if not userinfo:
         userinfo = await oauth.oidc.userinfo(token=token)
 
     subject = userinfo.get("sub")
     email = userinfo.get("email")
-    if not subject or not email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OIDC missing sub/email")
+    if not isinstance(subject, str) or not isinstance(email, str) or not subject or not email:
+        return _oidc_error("missing_claims")
     # CRITICAL: refuse callbacks whose email isn't IdP-verified. Otherwise
     # any attacker who can register an unverified email at the IdP (or one
     # of its tenants, on a multi-tenant provider) could silently claim an
@@ -339,10 +383,7 @@ async def oidc_callback(request: Request, db: DbSession):
     # ``OIDC_REQUIRE_EMAIL_VERIFIED=false`` in .env — see the warning
     # logged at startup in services/oidc_service.py when the gate is off.
     if settings.oidc_require_email_verified and not bool(userinfo.get("email_verified")):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OIDC email is not marked verified by the identity provider",
-        )
+        return _oidc_error("email_unverified")
 
     username = (
         userinfo.get("preferred_username")
@@ -355,8 +396,11 @@ async def oidc_callback(request: Request, db: DbSession):
     # the user would just re-enter it on a retry).
     invite_code = request.session.pop(_OIDC_INVITE_SESSION_KEY, None)
 
+    bind_hash = request.session.pop(_OIDC_BIND_SESSION_KEY, None)
+    if not isinstance(bind_hash, str):
+        return _oidc_error("token_exchange_failed")
     try:
-        _, access, refresh_tok = await link_or_create_oidc_user(
+        user = await link_or_create_oidc_user(
             db,
             subject=subject,
             email=email,
@@ -364,25 +408,69 @@ async def oidc_callback(request: Request, db: DbSession):
             full_name=full_name,
             is_admin=claim_indicates_admin(userinfo),
             invite_code=invite_code,
-            request_meta=_request_meta(request),
         )
     except AuthError as exc:
-        # Bounce the user back to /login with the reason in a query param.
-        # A raw JSON 400 mid-OAuth-flow is technically correct but useless to
+        # Bounce the user back to /login with a stable reason code. A raw
+        # JSON 400 mid-OAuth-flow is technically correct but useless to
         # whoever just clicked "Continue with SSO" in the browser.
-        return RedirectResponse(
-            url=(
-                f"{settings.public_app_url.rstrip('/')}/login?oidc_error={quote(str(exc))}"
-            ),
-            status_code=status.HTTP_302_FOUND,
-        )
+        return _oidc_error(exc.code)
 
-    # Hand the tokens to the SPA via URL fragment (#) so they never reach our
-    # server logs as query strings.
+    # The SPA redeems this single-use code (with the nonce it kept) at
+    # /auth/oidc/exchange; tokens never travel in a URL.
+    now = datetime.now(UTC)
+    code = _jwt.encode(
+        {
+            "sub": str(user.id),
+            "type": _OIDC_CODE_TYPE,
+            "bind": bind_hash,
+            "jti": secrets.token_urlsafe(16),
+            "iat": int(now.timestamp()),
+            "exp": int((now + _OIDC_CODE_TTL).timestamp()),
+        },
+        settings.secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
     return RedirectResponse(
-        url=(
-            f"{settings.public_app_url.rstrip('/')}/auth/oidc-success"
-            f"#access_token={access}&refresh_token={refresh_tok}"
-        ),
+        url=f"{settings.public_app_url.rstrip('/')}/auth/oidc-success#code={code}",
         status_code=status.HTTP_302_FOUND,
     )
+
+
+class OidcExchangeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=4096)
+    nonce: str = Field(min_length=16, max_length=128)
+
+
+@router.post("/oidc/exchange", response_model=TokenPair)
+@limiter.limit("10/minute")
+async def oidc_exchange(
+    request: Request, payload: OidcExchangeRequest, db: DbSession
+) -> TokenPair:
+    """Second half of the SSO sign-in: trade the one-time code from the
+    callback (plus the nonce the SPA generated before leaving) for tokens."""
+    try:
+        claims = _jwt.decode(payload.code, settings.secret_key, algorithms=[settings.jwt_algorithm])
+    except _jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code") from exc
+    bind = claims.get("bind")
+    jti = claims.get("jti")
+    if (
+        claims.get("type") != _OIDC_CODE_TYPE
+        or not isinstance(bind, str)
+        or not isinstance(jti, str)
+        or not hmac.compare_digest(bind, _nonce_hash(payload.nonce))
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code")
+    try:
+        user_id = uuid.UUID(str(claims.get("sub")))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code") from exc
+    if not await claim_once(f"oidc-exchange:{jti}", int(_OIDC_CODE_TTL.total_seconds()) + 60):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Code already used")
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account unavailable")
+    access, refresh = await issue_tokens_for_user(
+        db, user, request_meta=_request_meta(request)
+    )
+    return _pair(access, refresh)

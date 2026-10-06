@@ -97,12 +97,15 @@ def mint_challenge_token(
     challenge: bytes,
     purpose: str,
     expires_minutes: int = 5,
+    *,
+    label: str | None = None,
 ) -> str:
     """Wrap a challenge in a short-lived JWT signed with the app secret.
 
     ``user_id`` may be the empty string for passwordless-assertion challenges
     (the user hasn't been identified yet at the /begin step). The verifier
-    handles both cases.
+    handles both cases. ``label`` carries the name picked for a credential
+    being registered from the begin step to the finish step.
     """
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
@@ -110,6 +113,39 @@ def mint_challenge_token(
         "challenge": _b64u(challenge),
         "purpose": purpose,
         "type": _TOKEN_TYPE,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=expires_minutes)).timestamp()),
+    }
+    if label:
+        payload["label"] = label
+    return _jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+
+
+def challenge_label(token: str) -> str | None:
+    """Label embedded by :func:`mint_challenge_token`. Call it only after
+    :func:`open_challenge_token` accepted the same token."""
+    try:
+        claims = _jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+    except Exception:  # noqa: BLE001
+        return None
+    label = claims.get("label")
+    return label if isinstance(label, str) else None
+
+
+def challenge_key(challenge: bytes) -> str:
+    """Single-use marker key for a challenge (see ``claim_once``)."""
+    return f"webauthn-challenge:{_b64u(challenge)}"
+
+
+def mint_enrollment_token(user_id: str, expires_minutes: int = 5) -> str:
+    """Token letting a password-authenticated user register their first
+    passkey when a policy requires one. Single-use: ``jti`` is claimed when
+    the enrolment completes."""
+    now = datetime.now(UTC)
+    payload = {
+        "sub": user_id,
+        "type": "webauthn_enrollment",
+        "jti": secrets.token_urlsafe(16),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=expires_minutes)).timestamp()),
     }

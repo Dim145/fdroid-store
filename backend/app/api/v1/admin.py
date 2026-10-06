@@ -61,9 +61,14 @@ async def create_user(
 ) -> UserRead:
     existing = (
         await db.execute(
-            select(User).where((User.email == payload.email) | (User.username == payload.username))
+            select(User.id)
+            .where(
+                (func.lower(User.email) == str(payload.email).lower())
+                | (User.username == payload.username)
+            )
+            .limit(1)
         )
-    ).scalar_one_or_none()
+    ).first()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email or username already exists")
     user = User(

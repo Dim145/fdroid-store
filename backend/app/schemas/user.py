@@ -12,7 +12,10 @@ class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    email: EmailStr
+    # Plain str on the way out: SSO and bootstrap addresses are stored as
+    # given (e.g. ``me@home.local``), and a response model that re-validates
+    # them would 500 on /me and every user list.
+    email: str
     username: str
     full_name: str | None
     role: UserRole

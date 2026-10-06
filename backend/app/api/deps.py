@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.core.database import get_db
 from app.core.security import (
@@ -123,10 +124,18 @@ async def _api_key_from_secret(secret: str, db: AsyncSession) -> ApiKey | None:
     if parts is None:
         return None
     prefix, secret_part = parts
-    api_key = (await db.execute(select(ApiKey).where(ApiKey.prefix == prefix))).scalar_one_or_none()
+    api_key = (
+        await db.execute(
+            select(ApiKey).options(joinedload(ApiKey.user)).where(ApiKey.prefix == prefix)
+        )
+    ).scalar_one_or_none()
     if api_key is None or not api_key.is_active:
         return None
     if not verify_api_key_secret(secret_part, api_key.hashed_secret):
+        return None
+    # Disabling an account must cut its F-Droid clients off too, not only
+    # its browser sessions.
+    if api_key.user is None or not api_key.user.is_active:
         return None
     # Rate-limit ``last_used_at`` writes to one per minute per key. F-Droid
     # clients can fire a handful of requests in quick succession while
@@ -224,9 +233,14 @@ async def _deploy_token_user_for_app(
     if token.created_by is None:
         # Token's creator was deleted — refuse rather than orphan-attribute.
         return None
-    return (
+    creator = (
         await db.execute(select(User).where(User.id == token.created_by))
     ).scalar_one_or_none()
+    # A disabled creator's CI token must stop uploading (an admin's would
+    # even auto-publish).
+    if creator is None or not creator.is_active:
+        return None
+    return creator
 
 
 async def get_uploader_for_app(

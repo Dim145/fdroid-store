@@ -16,10 +16,11 @@ legacy local-password column). 10 codes per user; each is 8 chars
 from __future__ import annotations
 
 import base64
+import hmac
 import io
 import json
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pyotp
 from pwdlib import PasswordHash
@@ -27,6 +28,7 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.one_time import claim_once, clear_failures, failures, register_failure
 from app.models.user import User
 from app.models.user_totp import UserTotp
 
@@ -124,6 +126,25 @@ def _verify_totp_code(secret: str, code: str) -> bool:
     return pyotp.TOTP(secret).verify(code.strip(), valid_window=1)
 
 
+def _matching_step(secret: str, code: str) -> int | None:
+    """Time-step (RFC 6238 counter) the code belongs to, within ±1 step of
+    now — the same window as :func:`_verify_totp_code`."""
+    totp = pyotp.TOTP(secret)
+    now = datetime.now(UTC)
+    for offset in (0, -1, 1):
+        at = now + timedelta(seconds=offset * totp.interval)
+        if hmac.compare_digest(totp.at(at), code):
+            return totp.timecode(at)
+    return None
+
+
+# Second-factor brute force: after this many wrong codes in the window,
+# every attempt is refused until the window expires. Only someone who
+# already passed the password step can reach it.
+_MAX_FAILURES = 10
+_FAILURE_WINDOW_SECONDS = 15 * 60
+
+
 async def confirm_enrolment(
     db: AsyncSession,
     user: User,
@@ -189,11 +210,19 @@ async def verify_login(
     code = (code or "").strip()
     if not code:
         return False
+    failure_key = f"totp:{user.id}"
+    if await failures(failure_key) >= _MAX_FAILURES:
+        return False
 
-    # Path 1: 6-digit TOTP. Cheap to verify; try this first.
-    if code.isdigit() and len(code) == 6 and _verify_totp_code(row.secret, code):
-        row.last_used_at = datetime.now(UTC)
-        return True
+    # Path 1: 6-digit TOTP. Cheap to verify; try this first. Each code is
+    # accepted once: a code phished or read over a shoulder can't be
+    # replayed while it is still inside the ±30 s window.
+    if code.isdigit() and len(code) == 6:
+        step = _matching_step(row.secret, code)
+        if step is not None and await claim_once(f"totp-step:{user.id}:{step}", 120):
+            row.last_used_at = datetime.now(UTC)
+            await clear_failures(failure_key)
+            return True
 
     # Path 2: recovery code. Walk the stored hash list looking for a match,
     # burn the slot on hit. Codes are uppercase + dash in the canonical
@@ -211,7 +240,9 @@ async def verify_login(
                 hashes[i] = ""  # burn slot
                 row.recovery_codes_hash = json.dumps(hashes)
                 row.last_used_at = datetime.now(UTC)
+                await clear_failures(failure_key)
                 return True
         except Exception:  # noqa: BLE001
             continue
+    await register_failure(failure_key, _FAILURE_WINDOW_SECONDS)
     return False

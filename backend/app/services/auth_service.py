@@ -1,11 +1,12 @@
 """Business logic for authentication: login, refresh, OIDC linking."""
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -23,7 +24,15 @@ from app.models.user import AuthProvider, User, UserRole
 
 
 class AuthError(Exception):
-    """Raised when an auth operation cannot complete (bad creds, disabled, ...)."""
+    """Raised when an auth operation cannot complete (bad creds, disabled, ...).
+
+    ``code`` is a stable identifier the SSO callback passes to the SPA
+    (``/login?oidc_error=<code>``) instead of the message text.
+    """
+
+    def __init__(self, message: str, code: str = "auth_failed") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 # Precomputed argon2 hash of a random string. Used in ``authenticate_local``
@@ -150,6 +159,13 @@ async def _revoke_refresh_chain(db: AsyncSession, jti: str) -> None:
         .where(RefreshToken.jti.in_(family), RefreshToken.revoked_at.is_(None))
         .values(revoked_at=now)
     )
+    from app.models.user_session import UserSession
+
+    await db.execute(
+        update(UserSession)
+        .where(UserSession.jti.in_(family), UserSession.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
 
 
 async def verify_local_credentials(
@@ -165,10 +181,12 @@ async def verify_local_credentials(
     if user is None or user.hashed_password is None:
         verify_password(password, _DUMMY_PASSWORD_HASH)
         raise AuthError("Invalid credentials")
-    if not user.is_active:
-        raise AuthError("Account disabled")
+    # Password first: "Account disabled" only for whoever knows it, so the
+    # message can't be used to probe which addresses have an account.
     if not verify_password(password, user.hashed_password):
         raise AuthError("Invalid credentials")
+    if not user.is_active:
+        raise AuthError("Account disabled")
     return user
 
 
@@ -203,10 +221,10 @@ async def authenticate_local(
         # an attacker would use to enumerate registered emails (CWE-208).
         verify_password(password, _DUMMY_PASSWORD_HASH)
         raise AuthError("Invalid credentials")
-    if not user.is_active:
-        raise AuthError("Account disabled")
     if not verify_password(password, user.hashed_password):
         raise AuthError("Invalid credentials")
+    if not user.is_active:
+        raise AuthError("Account disabled")
 
     user.last_login_at = datetime.now(UTC)
     access, refresh = await _issue_token_pair(db, user, request_meta=request_meta)
@@ -236,9 +254,11 @@ async def signup_local(
 
     existing = (
         await db.execute(
-            select(User).where((User.email == email) | (User.username == username))
+            select(User.id)
+            .where((func.lower(User.email) == email.lower()) | (User.username == username))
+            .limit(1)
         )
-    ).scalar_one_or_none()
+    ).first()
     if existing is not None:
         raise AuthError("Email or username already taken")
 
@@ -396,51 +416,116 @@ async def revoke_all_refresh_tokens(db: AsyncSession, user_id: uuid.UUID) -> Non
     )
 
 
+_USERNAME_STRIP = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _oidc_username(preferred: str | None, email: str) -> str:
+    """Username for a new SSO account, shaped like local signups
+    (``[A-Za-z0-9_.-]``, 3-64 chars): IdP claims are free text."""
+    for raw in (preferred, email.split("@")[0]):
+        cleaned = _USERNAME_STRIP.sub("", raw or "")[:60]
+        if len(cleaned) >= 3:
+            return cleaned
+    return "user"
+
+
+async def _owns_or_maintains_apps(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    from app.models.app import App
+    from app.models.app_collaborator import AppCollaborator
+
+    owned = (
+        await db.execute(select(App.id).where(App.owner_id == user_id).limit(1))
+    ).first()
+    if owned is not None:
+        return True
+    collab = (
+        await db.execute(
+            select(AppCollaborator.app_id).where(AppCollaborator.user_id == user_id).limit(1)
+        )
+    ).first()
+    return collab is not None
+
+
+async def _is_last_active_admin(db: AsyncSession, user: User) -> bool:
+    others = (
+        await db.execute(
+            select(func.count(User.id)).where(
+                User.id != user.id,
+                User.role == UserRole.ADMIN,
+                User.is_active.is_(True),
+            )
+        )
+    ).scalar_one()
+    return others == 0
+
+
 async def link_or_create_oidc_user(
     db: AsyncSession,
     *,
     subject: str,
     email: str,
-    username: str,
+    username: str | None,
     full_name: str | None,
     is_admin: bool,
     invite_code: str | None = None,
-    request_meta: tuple[str | None, str | None] | None = None,
-) -> tuple[User, str, str]:
+) -> User:
     """Find or create a user from an OIDC ID-token. ``subject`` is the IdP's sub claim.
 
     Existing users (matched by sub or by email) always log in regardless of
     the registration policy — closing signup must never lock current users
     out of their account. The policy only gates the new-user branch:
+      * ``ALLOW_SIGNUP=false`` → reject (the env master switch, as for local signup)
       * "closed" → reject
       * "invite" → require a valid invite code (consumed on success)
-      * "public" → free signup, as before
+      * "public" → free signup
+
+    The role follows the IdP only when ``OIDC_ADMIN_CLAIM`` is configured:
+    the claim grants admin, and removing it demotes an admin the claim
+    managed — never the last active admin, and never below uploader while
+    the account still owns or maintains apps. Without a configured claim
+    the role is whatever an admin set locally.
     """
     user = (
         await db.execute(select(User).where(User.oidc_subject == subject))
     ).scalar_one_or_none()
 
-    is_new_account = False
+    was_oidc_managed = user is not None
     invite: InviteCode | None = None
     if user is None:
         # No sub link yet — try to merge with a local account by email.
         user = (
-            await db.execute(select(User).where(User.email == email))
-        ).scalar_one_or_none()
+            await db.execute(
+                select(User).where(func.lower(User.email) == email.lower()).limit(1)
+            )
+        ).scalars().first()
         if user is not None:
+            if user.oidc_subject and user.oidc_subject != subject:
+                # Already bound to another identity: an e-mail match (a
+                # recycled address, a second IdP account) must not move the
+                # account over to a different one.
+                raise AuthError(
+                    "This account is linked to another SSO identity.",
+                    code="identity_conflict",
+                )
+            if not user.is_active:
+                raise AuthError("Account disabled", code="account_disabled")
             user.oidc_subject = subject
             user.auth_provider = AuthProvider.OIDC
         else:
             # Brand-new account — apply the registration policy.
+            if not settings.allow_signup:
+                raise AuthError("Signup is disabled", code="signup_disabled")
             policy = await _get_registration_policy(db)
             if policy == "closed":
                 raise AuthError(
-                    "Signup is closed on this repo. Ask an admin to create an account for you."
+                    "Signup is closed on this repo. Ask an admin to create an account for you.",
+                    code="signup_closed",
                 )
             if policy == "invite":
                 if not invite_code:
                     raise AuthError(
-                        "An invite code is required to create an account via SSO."
+                        "An invite code is required to create an account via SSO.",
+                        code="invite_required",
                     )
                 invite = (
                     await db.execute(
@@ -448,46 +533,63 @@ async def link_or_create_oidc_user(
                     )
                 ).scalar_one_or_none()
                 if invite is None:
-                    raise AuthError("Invalid invite code")
+                    raise AuthError("Invalid invite code", code="invite_invalid")
                 if not invite.is_usable:
                     raise AuthError(
-                        "Invite code has already been used or has expired"
+                        "Invite code has already been used or has expired", code="invite_used"
                     )
-            is_new_account = True
 
             # ensure username uniqueness; append digits if needed
-            base_username = username
+            base_username = _oidc_username(username, email)
             attempt = base_username
             i = 1
-            while (await db.execute(select(User).where(User.username == attempt))).scalar_one_or_none():
+            while (
+                await db.execute(select(User.id).where(User.username == attempt))
+            ).first() is not None:
                 attempt = f"{base_username}{i}"
                 i += 1
             user = User(
                 email=email,
                 username=attempt,
-                full_name=full_name,
+                full_name=(full_name or "").strip()[:255] or None,
                 auth_provider=AuthProvider.OIDC,
                 oidc_subject=subject,
                 role=UserRole.ADMIN if is_admin else UserRole.USER,
                 is_active=True,
             )
             db.add(user)
+            await db.flush()
+            if invite is not None:
+                # Conditional UPDATE, as in ``signup_local``: two SSO signups
+                # racing on one code can't both consume it.
+                result = await db.execute(
+                    update(InviteCode)
+                    .where(InviteCode.id == invite.id, InviteCode.used_at.is_(None))
+                    .values(used_at=datetime.now(UTC), used_by_user_id=user.id)
+                )
+                if result.rowcount == 0:
+                    raise AuthError(
+                        "Invite code has already been used or has expired", code="invite_used"
+                    )
 
+    if not user.is_active:
+        raise AuthError("Account disabled", code="account_disabled")
     user.last_login_at = datetime.now(UTC)
-    # OIDC promote/demote — mirror the IdP claim symmetrically. The previous
-    # promote-only behaviour let an admin user keep ``ADMIN`` indefinitely
-    # after the IdP removed them from the admin group. We only demote
-    # OIDC-managed accounts (``auth_provider == OIDC``) so a locally-created
-    # admin who happens to log in via OIDC doesn't lose their role just
-    # because the IdP claim isn't set for them.
-    if user.auth_provider == AuthProvider.OIDC:
-        user.role = UserRole.ADMIN if is_admin else UserRole.USER
-    elif is_admin and user.role != UserRole.ADMIN:
-        user.role = UserRole.ADMIN
+    if (settings.oidc_admin_claim or "").strip():
+        if is_admin and user.role != UserRole.ADMIN:
+            user.role = UserRole.ADMIN
+        elif (
+            not is_admin
+            and was_oidc_managed
+            and user.role == UserRole.ADMIN
+            and not await _is_last_active_admin(db, user)
+        ):
+            user.role = (
+                UserRole.UPLOADER
+                if await _owns_or_maintains_apps(db, user.id)
+                else UserRole.USER
+            )
     await db.flush()
-    if is_new_account and invite is not None:
-        invite.used_at = datetime.now(UTC)
-        invite.used_by_user_id = user.id
-        await db.flush()
-    access, refresh = await _issue_token_pair(db, user, request_meta=request_meta)
-    return user, access, refresh
+    return user
+
+

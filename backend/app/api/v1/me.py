@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid as uuid_module
 from datetime import UTC, datetime
 from typing import Annotated
@@ -380,8 +381,9 @@ async def revoke_all_my_sessions(
     db: DbSession,
 ) -> None:
     """Burn every session of the calling user. Equivalent to "log out
-    everywhere". The next request from any of those sessions will be
-    refused on its next refresh attempt."""
+    everywhere": refresh tokens are revoked and, like a password change,
+    every access token minted before now stops working immediately."""
+    user.password_changed_at = datetime.now(UTC)
     await revoke_all_refresh_tokens(db, user.id)
 
 
@@ -602,11 +604,10 @@ async def export_my_data(
     body = _json.dumps(payload, indent=2, ensure_ascii=False)
 
     date_slug = datetime.now(UTC).strftime("%Y-%m-%d")
-    # Username may contain dots that are awkward in filenames (e.g. on
-    # Windows), but anything Pydantic-validated is alphanumeric + dot + _;
-    # the worst case is a ``.`` after the username, which every modern OS
-    # handles fine.
-    filename = f"fdroid-store-export-{user.username}-{date_slug}.json"
+    # SSO usernames come from the IdP unvalidated; a non-latin-1 character
+    # in a header value makes Starlette raise (500), so keep it ASCII.
+    safe_username = re.sub(r"[^A-Za-z0-9._-]", "_", user.username)
+    filename = f"fdroid-store-export-{safe_username}-{date_slug}.json"
     return Response(
         content=body,
         media_type="application/json; charset=utf-8",
