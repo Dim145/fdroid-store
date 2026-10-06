@@ -515,10 +515,55 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.4.7 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.5.0 — pure bug fixes are omitted,
 this is the operator-relevant summary.
 
-### Unreleased — F-Droid 2.0 alignment
+### 1.5.0 — F-Droid 2.0 alignment, security review
+
+**Before upgrading** (deployment changes):
+
+- `POSTGRES_PASSWORD` is now **required** in `.env` (installs that relied
+  on the old default must set `POSTGRES_PASSWORD=changeme_postgres`).
+- `ENVIRONMENT` now defaults to `production`: the backend refuses to
+  start while a shipped `changeme_*` credential is still set, hides
+  `/api/docs` and marks the session cookie Secure. Set
+  `ENVIRONMENT=development` only for local hacking.
+- Behind a reverse proxy (BunkerWeb, Traefik, a CDN), set
+  `TRUSTED_PROXY_CIDRS` to its address so rate limits and audit logs see
+  the real client IP (otherwise every client shares one login bucket).
+- Request bodies are capped at `API_MAX_BODY_SIZE` (10m) except on the
+  upload routes (`UPLOAD_MAX_BODY_SIZE`, 2100m); the reverse proxy in
+  front needs a matching limit for large APKs.
+- Deploy the backend, worker and frontend images together (new SSO
+  sign-in hand-off), then trigger a reindex from `/admin/repo`.
+
+**Security review** (full repository):
+
+- Forge tokens are bound to their forge: the server-wide
+  `GITHUB/GITLAB/GITEA_TOKEN` could be sent to a host chosen by an
+  uploader.
+- Second factors: TOTP is asked before any forced passkey enrolment;
+  TOTP codes are single-use with a lockout; WebAuthn challenges are
+  single-use; adding a passkey or a TOTP re-asks for the password;
+  `require_admin_2fa` no longer locks out admins without a factor.
+- SSO: tokens no longer travel in the URL (one-time code bound to the
+  browser); local admins and uploaders are no longer demoted at SSO
+  login; `ALLOW_SIGNUP=false` applies to SSO auto-provisioning.
+- Disabled accounts: their API keys and CI deploy tokens are refused.
+- Private mode no longer leaks the catalogue through RSS feeds, media,
+  stats or category counts; API keys no longer reach the logs.
+- APK parsing is protected against zip bombs and runs off the event
+  loop; JSON bodies are size-capped; the APK source proxy's SSRF guard is
+  hardened.
+- Dependencies: Dependabot alerts closed (PyJWT, DOMPurify, markdown-it,
+  undici) plus Next.js 16.3.6, sharp, urllib3, multidict, mako; images
+  install from the lockfile (`npm ci`); GitHub Actions pinned by SHA.
+- Fixes: uploads over ~32 MB failed (nginx temp files on a 32 MB tmpfs);
+  a request answered before its data was committed (chained calls could
+  404); index rebuilds could be lost or run twice at once; apps with a CI
+  token could not be deleted; the catalogue only listed 50 apps.
+
+**F-Droid 2.0 alignment:**
 
 - **Fix: index-v2 broke as soon as an app had a donation URL.** `donate`
   was emitted as a string; F-Droid clients (1.16+ and 2.0) parse it as a
