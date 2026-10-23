@@ -45,7 +45,10 @@ dependencies = [
     # surface.
     "redis>=5.2,<6",
     "androguard>=4.1.3",
-    "Pillow>=12.2",
+    # 13.0 closes the 2026 batch of decoder/encoder advisories (JPEG and
+    # TIFF heap overflows, decompression-bomb bypasses, EPS Ghostscript
+    # argument injection). Uploaded icons/screenshots are decoded here.
+    "Pillow>=13.0",
     "aiofiles>=25.1",
     "aioboto3>=15.5",
     "email-validator>=2.3",
