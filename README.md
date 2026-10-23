@@ -515,8 +515,21 @@ fields (name, description, links, categories) without re-typing.
 
 ## Changelog
 
-Notable changes between 1.0.0 and 1.5.0 — pure bug fixes are omitted,
+Notable changes between 1.0.0 and 1.5.1 — pure bug fixes are omitted,
 this is the operator-relevant summary.
+
+### 1.5.1 — dependency security update
+
+- **Closes the 64 open Dependabot alerts**, 9 of them **critical**:
+  `Pillow` 12.3.0 → 13.0.0 (39 advisories, among them JPEG / TIFF heap
+  overflows, decompression-bomb bypasses and an EPS Ghostscript argument
+  injection; uploaded icons and screenshots go through its decoders),
+  `certifi` → 2026.10.23 (emSign root CAs with compromised intermediate
+  keys), `aiohttp` → 3.14.5, `next` 16.3.6 → 16.4.2, `dompurify` → 3.4.17
+  and `markdown-it` → 14.3.3; plus `zod` → 4.6.7 (dev-only, npm audit).
+- No configuration or schema change. Every image carries fixes: pull
+  `:1.5.1` and redeploy the backend, worker, frontend and, if you run it,
+  the APK source proxy.
 
 ### 1.5.0 — F-Droid 2.0 alignment, security review
 
